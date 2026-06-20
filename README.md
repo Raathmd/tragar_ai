@@ -1,104 +1,84 @@
 # Tragar AI
 
-An Elixir / [Ash Framework](https://ash-hq.org) + Phoenix application that
-integrates **Freshdesk** (customer support) with **Tragar's Dovetail system**
-— the FreightWare logistics API hosted at `tragar-db.dovetail.co.za`.
+An **on-premises AI system** for Tragar, built per the Master Document and
+Implementation Plan. One Mac mini runs everything — it pulls live facts from
+Tragar's source systems, hosts a small local AI model, and helps support agents
+answer customers. No cloud; data never leaves the building (POPIA). Elixir / Ash
++ Phoenix, Postgres, Oban — one runtime that survives loadshedding.
 
-It is the spiritual successor to the Rust/WASM `tragar_quote_dioxus` project,
-reusing the same Dovetail/FreightWare REST conventions (token auth via the
-`X-FreightWare` header, `request`/`response` envelopes) in an OTP application.
+## Architecture (the safe loop)
 
-## What it does
+```
+question → Core AI interprets → structured request
+         → Elixir VALIDATES (allowed? exists? permitted?)
+         → fetches the live fact (read-only)
+         → Core AI phrases → draft answer → agent reviews/edits → relays
+```
 
-- **Dovetail client** (`TragarAi.Dovetail.Client`) — quotes, waybills,
-  track-and-trace, base data, and POD images, with a cached session token
-  (`TragarAi.Dovetail.TokenStore`).
-- **Freshdesk client** (`TragarAi.Freshdesk.Client`) — tickets, contacts, and
-  companies over the Freshdesk REST API v2.
-- **Integration glue** (`TragarAi.Integration.Sync`) — pulls shipment/tracking
-  data from Dovetail, mirrors Freshdesk tickets locally, links the two, and can
-  raise Freshdesk tickets for shipment exceptions. Every operation is audited in
-  `sync_events`.
-- **Inbound webhooks** — `POST /webhooks/freshdesk` queues ticket payloads
-  (Oban) for off-request processing.
-- **Admin UI** — AshAdmin at `/admin` (dev only) to browse the mirrored data.
+The local model is **only** an interpreter and phraser — never the authority on
+a fact, never touching the source systems, never speaking to the customer
+directly. Elixir validates every model-proposed request before any lookup.
 
-## Architecture
+## Phase 1 — Support assist (this build)
 
-| Layer | Module(s) |
-|-------|-----------|
-| Dovetail HTTP | `TragarAi.Dovetail.Client`, `TragarAi.Dovetail.TokenStore` |
-| Freshdesk HTTP | `TragarAi.Freshdesk.Client` |
-| Logistics domain (Ash) | `TragarAi.Logistics`, `…Logistics.Shipment` |
-| Support domain (Ash) | `TragarAi.Support`, `…Support.Ticket` |
-| Integration domain (Ash) | `TragarAi.Integration`, `…Integration.SyncEvent` |
-| Orchestration | `TragarAi.Integration.Sync`, `…IngestTicketWorker` (Oban) |
-| Web | `TragarAiWeb.WebhookController`, AshAdmin |
+A LiveView agent console at **`/console`**: an agent enters a customer question
+(optionally a waybill / ticket / account), the system drafts an answer from live
+source-system facts, and the agent reviews, edits and relays it.
 
-All persisted state lives in Postgres via `AshPostgres`. The `Shipment` and
-`Ticket` resources are *caches/mirrors* of upstream data keyed by waybill number
-and Freshdesk id respectively; the `raw` column always retains the full payload.
+| Component | Module |
+|---|---|
+| Core AI (local model, Swift sidecar) | `TragarAi.CoreAI` (+ `…CoreAI.Stub`) |
+| Validate-before-act | `TragarAi.Assist.Validator` |
+| Safe loop orchestration | `TragarAi.Assist.Engine` |
+| Interaction history / audit | `TragarAi.Assist.Interaction` |
+| Connector behaviour + registry | `TragarAi.Connectors` (+ `…Connectors.Source`) |
+| Agent console | `TragarAiWeb.ConsoleLive` |
+
+### Source connectors (read-only)
+
+| Source | Live facts | Status |
+|---|---|---|
+| FreightWare (Dovetail) | load/consignment status, ETA, waybill, POD | **wired** |
+| Freshdesk | ticket context + customer | **wired** |
+| Vantage | planned route, ETA, distance | stub (access pending) |
+| Granite (WMS) | stock, pick/pack, receipts | stub (access pending) |
+| Pastel | invoice, balance, payment | stub (access pending) |
+| FleetIT | vehicle status / availability | stub (access pending) |
+
+A stubbed source returns `:not_available`, and the loop fails safe with a
+message the agent can replace.
+
+### Core AI modes
+
+`config :tragar_ai, TragarAi.CoreAI, mode: :stub | :http`.
+
+- `:stub` (default) — a deterministic rule/template interpreter+phraser runs
+  in-process, so the whole loop works today **without a model**.
+- `:http` — POST to the local sidecar at `CORE_AI_URL` (`/interpret`, `/phrase`).
+  Swap in the real local model with no other change.
 
 ## Setup
 
 ```bash
-# 1. Configure credentials
-cp .env.example .env   # then fill in Dovetail + Freshdesk values
-# load them into your shell (e.g. with direnv, or `set -a; source .env; set +a`)
-
-# 2. Install deps, create DB, run migrations
-mix setup
-
-# 3. Start the server
-mix phx.server
+mix setup          # deps, create DB, migrate, build assets
+mix phx.server     # http://localhost:4000
 ```
 
-- App: <http://localhost:4000>
-- Admin: <http://localhost:4000/admin> (dev only)
-- LiveDashboard: <http://localhost:4000/dev/dashboard>
+- Agent console: <http://localhost:4000/console>
+- Admin (dev): <http://localhost:4000/admin> · Dashboard: <http://localhost:4000/dev/dashboard>
 
-## Configuration
+Source credentials are read at runtime from env (see `.env.example`):
+FreightWare (`DOVETAIL_*`), Freshdesk (`FRESHDESK_*`), Core AI (`CORE_AI_MODE`,
+`CORE_AI_URL`).
 
-All external configuration is read at runtime in
-[`config/runtime.exs`](config/runtime.exs) from environment variables — see
-[`.env.example`](.env.example). Nothing secret is compiled in.
+## Roadmap (Implementation Plan)
 
-## Usage examples
+- **Phase 1 — Support assist** ✅ (this build): live facts, interpret & phrase.
+- **Phase 2 — Knowledge layer**: event-driven operating-state findings
+  (change-detection, dirty-and-reconcile via Oban, findings store).
+- **Phase 3 — Descriptive analytics**: gross margin & route scorecard (Nx /
+  Scholar), conversational retrieval over findings.
+- **Phase 4 — Predict & prescribe** (optional): sentiment, forecasting, HiGHS
+  optimisation.
 
-```elixir
-# Track a shipment from Dovetail and cache it locally
-{:ok, shipment} = TragarAi.Integration.Sync.track_shipment("WB1234567")
-
-# Mirror a Freshdesk ticket payload (also done automatically via the webhook)
-{:ok, ticket} = TragarAi.Integration.Sync.ingest_ticket(payload)
-
-# Raise a Freshdesk ticket for a shipment exception
-{:ok, ticket} = TragarAi.Integration.Sync.raise_ticket_for_shipment(shipment)
-
-# Direct client calls
-{:ok, rates} = TragarAi.Dovetail.Client.quick_quote(%{...})
-{:ok, tickets} = TragarAi.Freshdesk.Client.list_tickets(%{updated_since: "2026-01-01T00:00:00Z"})
-```
-
-## Freshdesk webhook
-
-Create a Freshdesk automation / webhook that POSTs ticket JSON to:
-
-```
-POST https://<your-host>/webhooks/freshdesk
-x-webhook-token: <FRESHDESK_WEBHOOK_SECRET>
-```
-
-(or pass `?token=<secret>`). The endpoint returns `202 Accepted` and processes
-the payload via an Oban job.
-
-## Status / next steps
-
-This is the project scaffold. Likely follow-ups once the precise integration
-flow is confirmed:
-
-- Tighten the waybill-number detection regex to Tragar's real format
-  (`TragarAi.Integration.Sync.scan_for_waybill/1`).
-- Add `AshOban` triggers for scheduled reconciliation instead of ad-hoc calls.
-- Map more FreightWare response fields onto `Shipment` columns as needed.
-- Put `/admin` behind real authentication before any non-dev deployment.
+See `REQUIREMENTS.md` for the full spec and the detailed analytics objectives.

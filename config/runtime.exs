@@ -36,6 +36,8 @@ config :tragar_ai, TragarAiWeb.Endpoint,
 if config_env() != :test do
   dovetail_env = System.get_env("DOVETAIL_ENV", "uat")
 
+  # FreightWare (source 1) — read-only live facts: load/consignment status, ETA,
+  # waybill lookup. Hosted on Tragar's Dovetail servers.
   config :tragar_ai, TragarAi.Dovetail.Client,
     env: dovetail_env,
     base_url:
@@ -47,35 +49,21 @@ if config_env() != :test do
     username: System.get_env("DOVETAIL_USERNAME"),
     password: System.get_env("DOVETAIL_PASSWORD"),
     station: System.get_env("DOVETAIL_STATION"),
-    # Image/POD viewer host used to rewrite POD links returned by FreightWare.
     pod_image_base:
       System.get_env("DOVETAIL_POD_IMAGE_BASE") ||
         "https://tragar-db.dovetail.co.za/FWO_UAT/views/viewImage.html"
 
-  # Gateway — trusted PARTNER bootstrap keys (e.g. the Freshdesk/Freddy
-  # integration key used to request access on customers' behalf). Presented as
-  # `Authorization: Bearer <key>`. Comma-separated. Customer (account-scoped) keys
-  # are issued at runtime and live in the database, not here.
-  config :tragar_ai, TragarAi.Gateway,
-    partner_api_keys:
-      (System.get_env("GATEWAY_PARTNER_API_KEYS") || System.get_env("GATEWAY_API_KEYS") || "")
-      |> String.split(",", trim: true)
-      |> Enum.map(&String.trim/1)
-
-  # Accounts/registration — base URL used to build magic-link activation URLs, and
-  # the from-address for notification emails.
-  config :tragar_ai, TragarAi.Accounts,
-    base_url: System.get_env("GATEWAY_BASE_URL") || "http://localhost:4000",
-    from_email: System.get_env("GATEWAY_FROM_EMAIL") || "no-reply@tragar.co.za"
-
-  # Freshdesk REST API v2 (optional — only needed if a tool writes back to a
-  # ticket). Auth is HTTP Basic with the API key as the username
-  # and any value (conventionally "X") as the password. See
-  # TragarAi.Freshdesk.Client.
+  # Freshdesk (source 6) — read-only ticket context + the customer a question is
+  # about. Auth is HTTP Basic with the API key as the username.
   config :tragar_ai, TragarAi.Freshdesk.Client,
-    # e.g. "tragar" for https://tragar.freshdesk.com
     domain: System.get_env("FRESHDESK_DOMAIN"),
     api_key: System.get_env("FRESHDESK_API_KEY")
+
+  # Core AI (the local model sidecar). Default stays :stub; set CORE_AI_MODE=http
+  # and CORE_AI_URL to use a running local model.
+  config :tragar_ai, TragarAi.CoreAI,
+    mode: String.to_atom(System.get_env("CORE_AI_MODE") || "stub"),
+    base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434"
 end
 
 if config_env() == :prod do

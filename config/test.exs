@@ -26,15 +26,10 @@ config :tragar_ai, TragarAi.Mailer, adapter: Swoosh.Adapters.Test
 # Run Oban inline + no plugins/queues during tests.
 config :tragar_ai, Oban, testing: :manual
 
-# A known partner API key so partner-scope auth can be exercised in tests.
-config :tragar_ai, TragarAi.Gateway, partner_api_keys: ["test-partner-key"]
+# Core AI runs in deterministic stub mode under test.
+config :tragar_ai, TragarAi.CoreAI, mode: :stub
 
-# Deterministic base URL for magic-link activation emails in tests.
-config :tragar_ai, TragarAi.Accounts,
-  base_url: "http://localhost:4002",
-  from_email: "no-reply@tragar.test"
-
-# Stub the external API clients. `req_options` routes every Req call through
+# Stub the external source clients. `req_options` routes every Req call through
 # Req.Test, where individual tests register expectations via stubs.
 config :tragar_ai, TragarAi.Dovetail.Client,
   env: "uat",
@@ -48,7 +43,6 @@ config :tragar_ai, TragarAi.Dovetail.Client,
 config :tragar_ai, TragarAi.Freshdesk.Client,
   domain: "tragar",
   api_key: "test-key",
-  webhook_secret: "test-secret",
   req_options: [plug: {Req.Test, TragarAi.Freshdesk.Client}]
 
 # Disable swoosh api client as it is only required for production adapters

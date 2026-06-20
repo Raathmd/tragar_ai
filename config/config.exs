@@ -14,9 +14,7 @@ config :tragar_ai,
 # Ash domains exposed by the application.
 config :tragar_ai,
   ash_domains: [
-    TragarAi.Accounts,
-    TragarAi.Logistics,
-    TragarAi.Gateway
+    TragarAi.Assist
   ]
 
 # Ash configuration
@@ -24,21 +22,25 @@ config :ash,
   include_embedded_source_by_default?: false,
   policies: [no_filter_static_forbidden_reads?: false]
 
-# Oban — background jobs (e.g. cache refresh / async audit). Kept lightweight;
-# the gateway itself serves AI tool calls synchronously.
+# Oban — durable job queue (resilience: interrupted jobs re-run on restart).
+# Phase 1 (support assist) answers from live facts and has no scheduled jobs
+# yet; the knowledge-layer reconcile jobs arrive in Phase 2.
 config :tragar_ai, Oban,
   engine: Oban.Engines.Basic,
   repo: TragarAi.Repo,
   queues: [default: 10],
   plugins: [
-    # Drop completed/failed jobs after a week.
-    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
-    # Refresh the shipment cache for all registered accounts every 15 minutes.
-    {Oban.Plugins.Cron,
-     crontab: [
-       {"*/15 * * * *", TragarAi.Logistics.SyncWorker}
-     ]}
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}
   ]
+
+# Core AI (the local model reached over local HTTP — the "Swift sidecar").
+# In :stub mode a deterministic rule/template interpreter+phraser runs in-process
+# so the full loop works without the model; switch to :http and point base_url at
+# the sidecar to use the real local model.
+config :tragar_ai, TragarAi.CoreAI,
+  mode: :stub,
+  base_url: "http://127.0.0.1:11434",
+  receive_timeout: 30_000
 
 # Configure the endpoint
 config :tragar_ai, TragarAiWeb.Endpoint,
