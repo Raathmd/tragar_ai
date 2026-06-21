@@ -20,6 +20,8 @@ defmodule TragarAi.Support.Ticket do
     attribute :priority, :string
     attribute :requester_email, :string
     attribute :account_reference, :string
+    attribute :waybill_reference, :string, description: "Waybill the ticket is about, if any."
+    attribute :received_at, :utc_datetime_usec, description: "When the ticket arrived (for FIFO)."
     attribute :updated_at_source, :string
 
     attribute :sources, {:array, :string}, default: []
@@ -44,6 +46,8 @@ defmodule TragarAi.Support.Ticket do
         :priority,
         :requester_email,
         :account_reference,
+        :waybill_reference,
+        :received_at,
         :updated_at_source,
         :sources,
         :source_data,

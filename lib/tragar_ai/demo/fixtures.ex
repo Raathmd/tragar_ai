@@ -132,16 +132,72 @@ defmodule TragarAi.Demo.Fixtures do
     }
   end
 
-  @doc "Freshdesk ticket context."
-  def ticket do
+  @doc "Freshdesk tickets — the support queue (id => ticket)."
+  def tickets do
     %{
-      "id" => "55",
-      "subject" => "Where is my delivery on waybill 4821?",
-      "status" => "Open",
-      "priority" => "High",
-      "requester_email" => "ap@acme.co.za"
+      "55" => %{
+        "id" => "55",
+        "subject" => "Where is my delivery on waybill 4821?",
+        "status" => "Open",
+        "priority" => "High",
+        "requester_email" => "ap@acme.co.za",
+        "account" => @account,
+        "waybill" => "4821",
+        "received_at" => ~U[2026-06-21 08:15:00Z]
+      },
+      "56" => %{
+        "id" => "56",
+        "subject" => "Please send the POD for waybill 4990",
+        "status" => "Open",
+        "priority" => "Medium",
+        "requester_email" => "ap@acme.co.za",
+        "account" => @account,
+        "waybill" => "4990",
+        "received_at" => ~U[2026-06-20 14:30:00Z]
+      },
+      "57" => %{
+        "id" => "57",
+        "subject" => "Can we add a pallet to quote 7012?",
+        "status" => "Pending",
+        "priority" => "Low",
+        "requester_email" => "buyer@acme.co.za",
+        "account" => @account,
+        "quote" => "7012",
+        "received_at" => ~U[2026-06-19 09:05:00Z]
+      },
+      "58" => %{
+        "id" => "58",
+        "subject" => "Query on invoice INV-55012",
+        "status" => "Open",
+        "priority" => "High",
+        "requester_email" => "ap@acme.co.za",
+        "account" => @account,
+        "received_at" => ~U[2026-06-18 16:45:00Z]
+      },
+      "59" => %{
+        "id" => "59",
+        "subject" => "Collection missed in Pretoria",
+        "status" => "Open",
+        "priority" => "Urgent",
+        "requester_email" => "ops@brewco.co.za",
+        "account" => "ACC2002",
+        "received_at" => ~U[2026-06-21 07:50:00Z]
+      },
+      "60" => %{
+        "id" => "60",
+        "subject" => "Change delivery address for waybill 4990",
+        "status" => "Resolved",
+        "priority" => "Low",
+        "requester_email" => "ap@acme.co.za",
+        "account" => @account,
+        "waybill" => "4990",
+        "received_at" => ~U[2026-06-17 11:20:00Z]
+      }
     }
   end
+
+  @doc "A single ticket (the loop's default), kept for the demo catalog."
+  def ticket, do: tickets()["55"]
 
   def service_types,
     do: ["Road Express", "Road Economy", "Overnight", "Same-day (metro)", "Abnormal load"]
@@ -252,23 +308,8 @@ defmodule TragarAi.Demo.Fixtures do
           "documentDate" => "2026-06-05",
           "dueDate" => "2026-07-05"
         }
-      },
-
-      # ── Ticket 55 — Freshdesk (about waybill 4821) ────────────────────────────
-      %{
-        entity_type: "ticket",
-        entity_key: "55",
-        source: "Freshdesk",
-        data: %{"status" => "Open", "subject" => "Where is my delivery on waybill 4821?"},
-        raw: %{
-          "id" => 55,
-          "subject" => "Where is my delivery on waybill 4821?",
-          "status" => 2,
-          "priority" => 3,
-          "requester" => "ap@acme.co.za",
-          "custom_fields" => %{"account" => @account, "waybill" => "4821"}
-        }
       }
+      # Tickets are seeded directly from `tickets/0` (the support queue).
     ]
   end
 end

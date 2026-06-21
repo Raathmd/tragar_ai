@@ -30,13 +30,14 @@ defmodule TragarAi.Demo do
   defp lookup(:customer_lookup, _), do: Fixtures.customer()
   defp lookup(:vehicle_status, _), do: Fixtures.vehicle()
   defp lookup(:invoice, _), do: Fixtures.invoice()
-  defp lookup(:ticket_context, _), do: Fixtures.ticket()
+  defp lookup(:ticket_context, e), do: Fixtures.tickets()[ticket_id(e)] || Fixtures.ticket()
   defp lookup(:service_types, _), do: %{"service_types" => Fixtures.service_types()}
   defp lookup(:stock, _), do: %{"item" => "Demo SKU", "on_hand" => 120, "location" => "JHB DC"}
   defp lookup(_, _), do: nil
 
   defp waybill(e), do: e[:waybill] || e["waybill"]
   defp quote_no(e), do: e[:quote] || e["quote"]
+  defp ticket_id(e), do: e[:ticket_id] || e["ticket_id"]
 
   @doc """
   What the demo can answer, grouped by the source system the question reaches
@@ -126,7 +127,7 @@ defmodule TragarAi.Demo do
     Enum.each(Fixtures.shipments(), fn {_wb, s} -> seed_shipment(s) end)
     seed_quote()
     seed_invoice()
-    seed_ticket()
+    seed_tickets()
     seed_ledger()
     :ok
   end
@@ -217,22 +218,42 @@ defmodule TragarAi.Demo do
       })
   end
 
-  defp seed_ticket do
-    t = Fixtures.ticket()
-    {sources, source_data} = provenance_for("ticket", t["id"])
+  defp seed_tickets do
+    Enum.each(Fixtures.tickets(), fn {_id, t} ->
+      raw = %{
+        "id" => t["id"],
+        "subject" => t["subject"],
+        "status" => t["status"],
+        "priority" => t["priority"],
+        "requester" => t["requester_email"],
+        "custom_fields" => %{"account" => t["account"], "waybill" => t["waybill"]}
+      }
 
-    {:ok, _} =
-      TragarAi.Support.upsert_ticket(%{
-        ticket_id: t["id"],
-        subject: t["subject"],
-        status: t["status"],
-        priority: t["priority"],
-        requester_email: t["requester_email"],
-        account_reference: Fixtures.account_reference(),
-        sources: sources,
-        source_data: source_data,
-        cached_at: DateTime.utc_now()
-      })
+      {:ok, _} =
+        TragarAi.Support.upsert_ticket(%{
+          ticket_id: t["id"],
+          subject: t["subject"],
+          status: t["status"],
+          priority: t["priority"],
+          requester_email: t["requester_email"],
+          account_reference: t["account"],
+          waybill_reference: t["waybill"],
+          received_at: t["received_at"],
+          sources: ["Freshdesk"],
+          source_data: %{"Freshdesk" => raw},
+          cached_at: DateTime.utc_now()
+        })
+
+      {:ok, _} =
+        TragarAi.Sources.put_source_record(%{
+          entity_type: "ticket",
+          entity_key: t["id"],
+          source: "Freshdesk",
+          data: %{"status" => t["status"], "subject" => t["subject"]},
+          raw: raw,
+          synced_at: DateTime.utc_now()
+        })
+    end)
   end
 
   # Write the cross-source SourceRecord ledger (shipment/quote/invoice/ticket).

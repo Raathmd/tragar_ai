@@ -50,11 +50,25 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "In transit"
     assert html =~ "FreightWare"
 
+    # Query mode shows details only; reveal the reply box (customer-email use case).
+    view |> element("button", "Draft customer reply") |> render_click()
+
     html =
       view
       |> form("form[phx-submit=relay]", %{final_answer: "It is in transit."})
       |> render_submit()
 
     assert html =~ "relayed"
+  end
+
+  test "selecting a ticket and drafting a reply enters reply mode", %{conn: conn} do
+    TragarAi.Demo.seed()
+    {:ok, view, _html} = live(conn, ~p"/console")
+
+    view |> element(~s|button[phx-value-id="55"]|) |> render_click()
+    html = view |> element("button", "Draft reply") |> render_click()
+
+    # Reply mode shows the relay form for the customer email.
+    assert html =~ "Relay to customer"
   end
 end
