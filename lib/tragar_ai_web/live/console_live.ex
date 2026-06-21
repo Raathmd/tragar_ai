@@ -496,6 +496,28 @@ defmodule TragarAiWeb.ConsoleLive do
           </li>
         </ol>
       </section>
+
+      <section
+        :if={@interaction && @interaction.tool_log not in [nil, []]}
+        class="rounded-lg border border-base-300 p-3"
+      >
+        <h3 class="text-xs font-medium uppercase tracking-wide text-base-content/60 mb-2">
+          Source & tool calls
+        </h3>
+        <ol class="space-y-2">
+          <li :for={c <- @interaction.tool_log} class="text-xs">
+            <div class="flex items-center gap-2">
+              <span class={"badge badge-xs " <> call_class(c["kind"], c["ok"])}>{c["kind"]}</span>
+              <code class="text-[12px]">{c["tool"]}({format_params(c["params"])})</code>
+              <span :if={c["ok"] == false} class="badge badge-xs badge-error">error</span>
+            </div>
+            <details class="mt-1">
+              <summary class="cursor-pointer text-base-content/50">data</summary>
+              <pre class="bg-base-200 rounded p-2 mt-1 overflow-x-auto">{call_data(c["result"])}</pre>
+            </details>
+          </li>
+        </ol>
+      </section>
     </main>
     """
   end
@@ -921,6 +943,22 @@ defmodule TragarAiWeb.ConsoleLive do
   defp trace_phrase(_, _), do: "—"
 
   defp humanize_error(err), do: err |> String.replace(":", ": ") |> String.replace("_", " ")
+
+  defp call_class("source", false), do: "badge-error"
+  defp call_class("source", _), do: "badge-info"
+  defp call_class(_ai, false), do: "badge-error"
+  defp call_class(_ai, _), do: "badge-primary"
+
+  defp format_params(params) when is_map(params) and map_size(params) > 0,
+    do: Enum.map_join(params, ", ", fn {k, v} -> "#{k}: #{format_value(v)}" end)
+
+  defp format_params(_), do: ""
+
+  defp format_value(v) when is_binary(v), do: v
+  defp format_value(v) when is_map(v) or is_list(v), do: "…"
+  defp format_value(v), do: to_string(v)
+
+  defp call_data(result), do: Jason.encode!(result, pretty: true)
 
   defp step_class(:ok), do: "badge-success"
   defp step_class(:fail), do: "badge-error"

@@ -18,6 +18,19 @@ defmodule TragarAi.DemoTest do
       assert i.draft_answer =~ "2026-06-22"
     end
 
+    test "records the AI and source tool calls (with data) in the log" do
+      {:ok, i} = Engine.answer("Where is load 4821?", %{demo: true})
+
+      tools = Enum.map(i.tool_log, & &1["tool"])
+      assert "CoreAI.interpret" in tools
+      assert "FreightWare.load_status" in tools
+      assert "CoreAI.phrase" in tools
+
+      source_call = Enum.find(i.tool_log, &(&1["kind"] == "source"))
+      assert source_call["params"]["waybill"] == "4821"
+      assert source_call["result"]["status"] == "In transit"
+    end
+
     test "proof of delivery comes from the fixture" do
       {:ok, i} = Engine.answer("Proof of delivery for 4990", %{demo: true})
 

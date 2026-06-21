@@ -24,6 +24,11 @@ defmodule TragarAi.Assist.Interaction do
     attribute :entities, :map, default: %{}
     attribute :facts, :map, default: %{}
     attribute :source, :string, description: "Source system that served the fact."
+
+    attribute :tool_log, {:array, :map},
+      default: [],
+      description: "Ordered AI + source/tool calls made for this question, with their data."
+
     attribute :draft_answer, :string
     attribute :final_answer, :string
 
@@ -48,6 +53,7 @@ defmodule TragarAi.Assist.Interaction do
         :entities,
         :facts,
         :source,
+        :tool_log,
         :draft_answer,
         :status,
         :error,

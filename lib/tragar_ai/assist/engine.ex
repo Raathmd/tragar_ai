@@ -7,10 +7,9 @@ defmodule TragarAi.Assist.Engine do
                → fetches the live fact (read-only)
                → Core AI phrases → draft answer → (agent reviews/edits/relays)
 
-  Every call is persisted as a `TragarAi.Assist.Interaction` so the console has
-  history and there is an audit trail. The agent always reviews before anything
-  reaches a customer; on any failure the draft is a safe fallback the agent can
-  replace.
+  Every call is persisted as a `TragarAi.Assist.Interaction` — including a
+  `tool_log` of each AI and source/tool call made (with params and returned
+  data) — so the console has history, a visible trace, and an audit trail.
   """
 
   alias TragarAi.Assist
@@ -21,67 +20,144 @@ defmodule TragarAi.Assist.Engine do
   require Logger
 
   @doc """
-  Run the loop for a question. `context` may carry `:agent` and `:entities`
-  (structured fields the agent supplied, e.g. `%{waybill: "4821"}`), which take
-  precedence over what the model extracted. Always returns `{:ok, interaction}`;
-  the interaction's `status` reflects the outcome (`:drafted` or `:failed`).
+  Run the loop for a question. `context` may carry `:agent`, `:entities`
+  (structured fields the agent supplied), and `:demo` (fetch from fixtures).
+  Always returns `{:ok, interaction}`.
   """
   @spec answer(String.t(), map()) :: {:ok, Ash.Resource.record()} | {:error, term()}
   def answer(question, context \\ %{}) when is_binary(question) do
     case CoreAI.interpret(question, context) do
       {:ok, request} ->
         entities = merge_entities(request.entities, context)
-        process(question, %{request | entities: entities}, context)
+
+        Logger.info(
+          "[assist] interpret #{inspect(question)} -> #{request.intent} #{inspect(entities)}"
+        )
+
+        log = [interpret_entry(question, request.intent, entities)]
+        process(question, %{request | entities: entities}, context, log)
 
       {:error, reason} ->
-        Logger.warning("CoreAI.interpret failed: #{inspect(reason)}")
+        Logger.warning("[assist] interpret failed: #{inspect(reason)}")
 
         fail(question, nil, %{}, context,
           error: "interpret_failed:#{inspect(reason)}",
-          draft: "I couldn't interpret that question automatically — please answer it manually."
+          draft: "I couldn't interpret that question automatically — please answer it manually.",
+          tool_log: [
+            ai_entry(
+              "CoreAI.interpret",
+              %{"question" => question},
+              %{"error" => inspect(reason)},
+              false
+            )
+          ]
         )
     end
   end
 
-  defp process(question, %{intent: intent, entities: entities}, context) do
+  defp process(question, %{intent: intent, entities: entities}, context, log) do
     case Validator.validate(%{intent: intent, entities: entities}) do
-      :ok -> fetch_and_phrase(question, intent, entities, context)
-      {:error, reason} -> fail(question, intent, entities, context, validation_failure(reason))
+      :ok ->
+        fetch_and_phrase(question, intent, entities, context, log)
+
+      {:error, reason} ->
+        fail(question, intent, entities, context, validation_failure(reason) ++ [tool_log: log])
     end
   end
 
-  defp fetch_and_phrase(question, intent, entities, context) do
-    case fetch_facts(intent, entities, context) do
+  defp fetch_and_phrase(question, intent, entities, context, log) do
+    source = source_name(intent)
+    result = fetch_facts(intent, entities, context)
+
+    Logger.info(
+      "[assist] source call #{source}.#{intent} #{inspect(entities)} -> #{summarise(result)}"
+    )
+
+    fetch_entry = fetch_entry(source, intent, entities, result)
+
+    case result do
       {:ok, facts} ->
         {:ok, draft} = CoreAI.phrase(intent, facts)
+        Logger.info("[assist] phrase #{intent} -> #{inspect(draft)}")
+
+        phrase_entry =
+          ai_entry("CoreAI.phrase", %{"intent" => to_string(intent)}, %{"answer" => draft}, true)
 
         create(%{
           question: question,
           intent: to_string(intent),
           entities: stringify(entities),
           facts: facts,
-          source: source_name(intent),
+          source: source,
+          tool_log: log ++ [fetch_entry, phrase_entry],
           draft_answer: draft,
           status: :drafted,
           agent: context[:agent]
         })
 
       {:error, reason} ->
-        fail(question, intent, entities, context, fetch_failure(reason, intent))
+        fail(
+          question,
+          intent,
+          entities,
+          context,
+          fetch_failure(reason, intent) ++ [tool_log: log ++ [fetch_entry]]
+        )
     end
   end
 
+  # In demo mode, fact-check against fixtures; otherwise the live adapters.
+  defp fetch_facts(intent, entities, %{demo: true}), do: TragarAi.Demo.fetch(intent, entities)
+  defp fetch_facts(intent, entities, _context), do: Adapters.fetch(intent, entities)
+
+  # ── tool_log entries ─────────────────────────────────────────────────────────
+
+  defp interpret_entry(question, intent, entities) do
+    ai_entry(
+      "CoreAI.interpret",
+      %{"question" => question},
+      %{"intent" => to_string(intent), "entities" => stringify(entities)},
+      true
+    )
+  end
+
+  defp ai_entry(tool, params, result, ok?),
+    do: %{"kind" => "ai", "tool" => tool, "params" => params, "result" => result, "ok" => ok?}
+
+  defp fetch_entry(source, intent, entities, {:ok, facts}),
+    do: %{
+      "kind" => "source",
+      "tool" => "#{source}.#{intent}",
+      "params" => stringify(entities),
+      "result" => facts,
+      "ok" => true
+    }
+
+  defp fetch_entry(source, intent, entities, {:error, reason}),
+    do: %{
+      "kind" => "source",
+      "tool" => "#{source}.#{intent}",
+      "params" => stringify(entities),
+      "result" => %{"error" => inspect(reason)},
+      "ok" => false
+    }
+
+  defp summarise({:ok, facts}) when is_map(facts), do: "#{map_size(facts)} fields"
+  defp summarise({:error, reason}), do: "error #{inspect(reason)}"
+  defp summarise(other), do: inspect(other)
+
   # ── Failure handling — always a usable, safe interaction ────────────────────
 
-  defp fail(question, intent, entities, context, error: error, draft: draft) do
+  defp fail(question, intent, entities, context, opts) do
     create(%{
       question: question,
       intent: intent && to_string(intent),
       entities: stringify(entities),
       source: intent && source_name(intent),
-      draft_answer: draft,
+      tool_log: opts[:tool_log] || [],
+      draft_answer: opts[:draft],
       status: :failed,
-      error: error,
+      error: opts[:error],
       agent: context[:agent]
     })
   end
@@ -123,10 +199,6 @@ defmodule TragarAi.Assist.Engine do
     ]
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
-
-  # In demo mode, fact-check against fixtures; otherwise the live adapters.
-  defp fetch_facts(intent, entities, %{demo: true}), do: TragarAi.Demo.fetch(intent, entities)
-  defp fetch_facts(intent, entities, _context), do: Adapters.fetch(intent, entities)
 
   defp create(attrs), do: Assist.create_interaction(attrs)
 
