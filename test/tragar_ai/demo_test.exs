@@ -3,7 +3,7 @@ defmodule TragarAi.DemoTest do
   use TragarAi.DataCase, async: false
 
   alias TragarAi.Assist.Engine
-  alias TragarAi.{Customers, Fleet, Sources}
+  alias TragarAi.{Customers, Finance, Fleet, Logistics, Sources, Support}
 
   describe "demo-mode assist loop (facts from fixtures)" do
     test "load_status: AI combines the facts into the draft" do
@@ -76,20 +76,36 @@ defmodule TragarAi.DemoTest do
   end
 
   describe "seed/0" do
-    test "writes harmonized customer & vehicle from the same fixtures" do
+    test "populates every entity, unified by account ACC1001 and waybill 4821" do
       :ok = TragarAi.Demo.seed()
 
+      # Customer & Vehicle — harmonized
       assert {:ok, customer} = Customers.get_customer("ACC1001")
       assert customer.name == "Acme Distributors"
       assert Enum.sort(customer.sources) == ["FreightWare", "Pastel"]
 
       assert {:ok, vehicle} = Fleet.get_vehicle("CA 123-456")
-      assert vehicle.description == "Volvo FH16 6x4 truck-tractor"
       assert vehicle.available == false
       assert Enum.sort(vehicle.sources) == ["FleetIT", "Pastel", "Vantage"]
 
-      assert {:ok, records} = Sources.source_records_for("vehicle", "CA 123-456")
-      assert length(records) == 3
+      # Shipments — 4821 carries FreightWare + Vantage + Granite
+      assert {:ok, shipment} = Logistics.get_shipment_by_waybill("4821")
+      assert shipment.account_reference == "ACC1001"
+      assert Enum.sort(shipment.sources) == ["FreightWare", "Granite", "Vantage"]
+
+      # Quote, Invoice (Pastel accounting), Ticket (about 4821) — all on ACC1001
+      assert {:ok, quote} = Logistics.get_quote_by_number("7012")
+      assert quote.account_reference == "ACC1001"
+      assert {:ok, invoice} = Finance.get_invoice("INV-55012")
+      assert invoice.account_reference == "ACC1001"
+      assert invoice.sources == ["Pastel"]
+      assert {:ok, ticket} = Support.get_ticket("55")
+      assert ticket.account_reference == "ACC1001"
+      assert ticket.subject =~ "4821"
+
+      # The cross-source ledger is in source_records
+      assert {:ok, recs} = Sources.source_records_for("shipment", "4821")
+      assert Enum.map(recs, & &1.source) |> Enum.sort() == ["FreightWare", "Granite", "Vantage"]
     end
   end
 end

@@ -115,10 +115,23 @@ defmodule TragarAi.Demo do
   end
 
   @doc """
-  Seed the harmonized Customer and Vehicle into the domain resources, each
-  assembled from multiple sources (demonstrates the no-override harmonization).
+  Seed every domain resource from the fixtures, unified by account ACC1001 and
+  waybill 4821, and write the cross-source `SourceRecord` ledger. After this the
+  AshAdmin tables (customers, vehicles, shipments, quotes, invoices, tickets and
+  source_records) mimic the live systems with one coherent thread.
   """
   def seed do
+    seed_customer()
+    seed_vehicle()
+    Enum.each(Fixtures.shipments(), fn {_wb, s} -> seed_shipment(s) end)
+    seed_quote()
+    seed_invoice()
+    seed_ticket()
+    seed_ledger()
+    :ok
+  end
+
+  defp seed_customer do
     c = Fixtures.customer()
 
     {:ok, _} =
@@ -129,9 +142,11 @@ defmodule TragarAi.Demo do
         c["account_reference"],
         "Pastel",
         %{email: c["email"], description: c["description"]},
-        raw: %{"terms" => "30 days"}
+        raw: %{"debtorCode" => c["account_reference"], "terms" => "30 days"}
       )
+  end
 
+  defp seed_vehicle do
     v = Fixtures.vehicle()
 
     {:ok, _} =
@@ -141,7 +156,107 @@ defmodule TragarAi.Demo do
 
     {:ok, _} =
       TragarAi.Fleet.contribute(v["registration"], "FleetIT", %{available: v["available"]})
+  end
 
-    :ok
+  defp seed_shipment(s) do
+    {sources, source_data} = provenance_for("shipment", s["waybill_number"])
+
+    {:ok, _} =
+      TragarAi.Logistics.upsert_shipment(%{
+        waybill_number: s["waybill_number"],
+        account_reference: s["account_reference"],
+        status: s["status"],
+        service_type: s["service_type"],
+        consignor: s["consignor"],
+        consignee: s["consignee"],
+        consignee_city: s["consignee_city"],
+        events: s["events"] || [],
+        pod: s["pod"],
+        sources: sources,
+        source_data: source_data,
+        cached_at: DateTime.utc_now()
+      })
+  end
+
+  defp seed_quote do
+    q = Fixtures.quotes()["7012"]
+    {sources, source_data} = provenance_for("quote", "7012")
+
+    {:ok, _} =
+      TragarAi.Logistics.upsert_quote(%{
+        quote_number: q["quote_number"],
+        account_reference: q["account_reference"],
+        status: q["status"],
+        service_type: q["service_type"],
+        consignor: q["consignor"],
+        consignee: q["consignee"],
+        charged_amount: q["charged_amount"],
+        items: q["items"] || [],
+        sundries: q["sundries"] || [],
+        sources: sources,
+        source_data: source_data,
+        cached_at: DateTime.utc_now()
+      })
+  end
+
+  defp seed_invoice do
+    i = Fixtures.invoice()
+    {sources, source_data} = provenance_for("invoice", i["invoice_number"])
+
+    {:ok, _} =
+      TragarAi.Finance.upsert_invoice(%{
+        invoice_number: i["invoice_number"],
+        account_reference: i["account_reference"],
+        amount: "R 70 330.00",
+        balance: i["balance"],
+        status: i["status"],
+        invoice_date: "2026-06-05",
+        sources: sources,
+        source_data: source_data,
+        cached_at: DateTime.utc_now()
+      })
+  end
+
+  defp seed_ticket do
+    t = Fixtures.ticket()
+    {sources, source_data} = provenance_for("ticket", t["id"])
+
+    {:ok, _} =
+      TragarAi.Support.upsert_ticket(%{
+        ticket_id: t["id"],
+        subject: t["subject"],
+        status: t["status"],
+        priority: t["priority"],
+        requester_email: t["requester_email"],
+        account_reference: Fixtures.account_reference(),
+        sources: sources,
+        source_data: source_data,
+        cached_at: DateTime.utc_now()
+      })
+  end
+
+  # Write the cross-source SourceRecord ledger (shipment/quote/invoice/ticket).
+  defp seed_ledger do
+    Enum.each(Fixtures.ledger(), fn e ->
+      {:ok, _} =
+        TragarAi.Sources.put_source_record(%{
+          entity_type: e.entity_type,
+          entity_key: e.entity_key,
+          source: e.source,
+          data: e.data,
+          raw: e.raw,
+          synced_at: DateTime.utc_now()
+        })
+    end)
+  end
+
+  # Derive an entity's sources list + source_data map from the ledger.
+  defp provenance_for(entity_type, key) do
+    entries =
+      Enum.filter(Fixtures.ledger(), &(&1.entity_type == entity_type and &1.entity_key == key))
+
+    sources = entries |> Enum.map(& &1.source) |> Enum.uniq()
+    source_data = Map.new(entries, fn e -> {e.source, e.raw} end)
+    {sources, source_data}
   end
 end

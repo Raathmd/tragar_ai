@@ -136,12 +136,139 @@ defmodule TragarAi.Demo.Fixtures do
   def ticket do
     %{
       "id" => "55",
-      "subject" => "Where is my delivery?",
+      "subject" => "Where is my delivery on waybill 4821?",
       "status" => "Open",
+      "priority" => "High",
       "requester_email" => "ap@acme.co.za"
     }
   end
 
   def service_types,
     do: ["Road Express", "Road Economy", "Overnight", "Same-day (metro)", "Abnormal load"]
+
+  @doc """
+  The cross-source provenance ledger — what **each source system** contributes to
+  each entity, with a source-shaped `raw` payload (mimics the real systems) and
+  the domain `data` pieces it owns. The whole thread is unified by account
+  ACC1001 and waybill 4821. `TragarAi.Demo.seed/0` writes these as `SourceRecord`s
+  and derives each domain record's `sources`/`source_data` from them.
+  """
+  def ledger do
+    [
+      # ── Shipment 4821 (in transit) — FreightWare + Vantage + Granite ──────────
+      %{
+        entity_type: "shipment",
+        entity_key: "4821",
+        source: "FreightWare",
+        data: %{
+          "status" => "In transit",
+          "service_type" => "Road Express",
+          "consignee" => "Acme Distributors"
+        },
+        raw: %{
+          "waybillNumber" => "4821",
+          "accountReference" => @account,
+          "statusCode" => "INT",
+          "statusDescription" => "In transit",
+          "serviceType" => "Road Express",
+          "consignorName" => "Tragar Johannesburg Depot",
+          "consigneeName" => "Acme Distributors",
+          "consigneeCity" => "Durban"
+        }
+      },
+      %{
+        entity_type: "shipment",
+        entity_key: "4821",
+        source: "Vantage",
+        data: %{"current_location" => "N3 near Mooi River Toll", "eta" => "2026-06-22 07:30"},
+        raw: routes()["4821"]
+      },
+      %{
+        entity_type: "shipment",
+        entity_key: "4821",
+        source: "Granite",
+        data: %{"dispatch_status" => "Picked & packed", "parcels" => 12},
+        raw: %{
+          "warehouse" => "JHB DC",
+          "pickStatus" => "Picked",
+          "packStatus" => "Packed",
+          "parcels" => 12,
+          "dispatchedAt" => "2026-06-21 08:55"
+        }
+      },
+
+      # ── Shipment 4990 (delivered) — FreightWare + Granite POD ─────────────────
+      %{
+        entity_type: "shipment",
+        entity_key: "4990",
+        source: "FreightWare",
+        data: %{"status" => "Delivered", "service_type" => "Road Economy"},
+        raw: %{
+          "waybillNumber" => "4990",
+          "accountReference" => @account,
+          "statusCode" => "DEL",
+          "statusDescription" => "Delivered",
+          "serviceType" => "Road Economy",
+          "consigneeName" => "Acme Distributors",
+          "consigneeCity" => "Cape Town"
+        }
+      },
+      %{
+        entity_type: "shipment",
+        entity_key: "4990",
+        source: "Granite",
+        data: %{"pod_receiver" => "M. Naidoo", "pod_date" => "2026-06-18 11:27"},
+        raw: %{
+          "PODReceiver" => "M. Naidoo",
+          "PODDate" => "2026-06-18 11:27",
+          "numberofParcels" => 8,
+          "PODImageURL" => "https://tragar-db.dovetail.co.za/FWO_UAT/views/viewImage.html?4990"
+        }
+      },
+
+      # ── Quote 7012 — FreightWare ──────────────────────────────────────────────
+      %{
+        entity_type: "quote",
+        entity_key: "7012",
+        source: "FreightWare",
+        data: %{"status" => "Accepted", "charged_amount" => "R 4 850.00"},
+        raw: quotes()["7012"]
+      },
+
+      # ── Invoice INV-55012 — Pastel (accounting) ───────────────────────────────
+      %{
+        entity_type: "invoice",
+        entity_key: "INV-55012",
+        source: "Pastel",
+        data: %{"status" => "Outstanding", "balance" => "R 48 230.00"},
+        raw: %{
+          "documentNumber" => "INV-55012",
+          "debtorCode" => @account,
+          "documentTotal" => "R 70 330.00",
+          "outstanding" => "R 48 230.00",
+          "terms" => "30 days",
+          "lastPayment" => "R 22 100.00 on 2026-05-28",
+          "ageing" => %{"current" => "R 26 100.00", "30days" => "R 22 130.00"},
+          "documentDate" => "2026-06-05",
+          "dueDate" => "2026-07-05"
+        }
+      },
+
+      # ── Ticket 55 — Freshdesk (about waybill 4821) ────────────────────────────
+      %{
+        entity_type: "ticket",
+        entity_key: "55",
+        source: "Freshdesk",
+        data: %{"status" => "Open", "subject" => "Where is my delivery on waybill 4821?"},
+        raw: %{
+          "id" => 55,
+          "subject" => "Where is my delivery on waybill 4821?",
+          "status" => 2,
+          "priority" => 3,
+          "requester" => "ap@acme.co.za",
+          "custom_fields" => %{"account" => @account, "waybill" => "4821"}
+        }
+      }
+    ]
+  end
 end
