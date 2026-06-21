@@ -61,7 +61,8 @@ defmodule TragarAi.Assist.Engine do
         fetch_and_phrase(question, intent, entities, context, log)
 
       {:error, reason} ->
-        fail(question, intent, entities, context, validation_failure(reason) ++ [tool_log: log])
+        # Intent/entity doesn't match Tragar — the AI prompts the user back.
+        clarify_fail(question, intent, entities, context, reason, log)
     end
   end
 
@@ -95,6 +96,10 @@ defmodule TragarAi.Assist.Engine do
           agent: context[:agent]
         })
 
+      {:error, reason} when reason in [:not_found, :missing_waybill] ->
+        # Reference isn't an entity in Tragar — prompt back for a valid one.
+        clarify_fail(question, intent, entities, context, reason, log ++ [fetch_entry])
+
       {:error, reason} ->
         fail(
           question,
@@ -105,6 +110,28 @@ defmodule TragarAi.Assist.Engine do
         )
     end
   end
+
+  # The AI asks the user for what it needs (logged as a CoreAI.clarify call).
+  defp clarify_fail(question, intent, entities, context, reason, log) do
+    {:ok, prompt} = CoreAI.clarify(reason)
+    Logger.info("[assist] clarify #{inspect(reason)} -> #{inspect(prompt)}")
+
+    entry =
+      ai_entry("CoreAI.clarify", %{"reason" => inspect(reason)}, %{"prompt" => prompt}, true)
+
+    fail(question, intent, entities, context,
+      error: error_code(reason),
+      draft: prompt,
+      tool_log: log ++ [entry]
+    )
+  end
+
+  defp error_code(:not_understood), do: "not_understood"
+  defp error_code(:not_found), do: "not_found"
+  defp error_code(:missing_waybill), do: "missing_waybill"
+  defp error_code({:missing_entities, missing}), do: "missing_entities:#{Enum.join(missing, ",")}"
+  defp error_code({:unknown_intent, intent}), do: "unknown_intent:#{intent}"
+  defp error_code(other), do: inspect(other)
 
   # In demo mode, fact-check against fixtures; otherwise the live adapters.
   defp fetch_facts(intent, entities, %{demo: true}), do: TragarAi.Demo.fetch(intent, entities)
@@ -162,34 +189,10 @@ defmodule TragarAi.Assist.Engine do
     })
   end
 
-  defp validation_failure(:not_understood),
-    do: [
-      error: "not_understood",
-      draft: "I couldn't tell what was being asked — please answer manually."
-    ]
-
-  defp validation_failure({:missing_entities, missing}),
-    do: [
-      error: "missing_entities:#{Enum.join(missing, ",")}",
-      draft: "I need #{Enum.join(missing, ", ")} to answer that — please provide it."
-    ]
-
-  defp validation_failure({:unknown_intent, intent}),
-    do: [error: "unknown_intent:#{intent}", draft: "That isn't something I can look up yet."]
-
   defp fetch_failure(:not_available, intent),
     do: [
       error: "not_available",
       draft: "The #{source_name(intent)} system isn't connected yet — please check it directly."
-    ]
-
-  defp fetch_failure(:missing_waybill, _),
-    do: [error: "missing_waybill", draft: "I need a waybill number to look that up."]
-
-  defp fetch_failure(:not_found, intent),
-    do: [
-      error: "not_found",
-      draft: "I couldn't find that in #{source_name(intent)} — please check the number."
     ]
 
   defp fetch_failure(reason, intent),

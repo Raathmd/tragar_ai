@@ -86,6 +86,16 @@ defmodule TragarAi.DemoTest do
       assert i.status == :failed
       assert i.error == "not_found"
     end
+
+    test "an unrecognized question gets an AI prompt-back, not a bare error" do
+      {:ok, i} = Engine.answer("What's the weather like?", %{demo: true})
+
+      assert i.status == :failed
+      assert i.error == "not_understood"
+      # The AI asks the user back with what Tragar can answer.
+      assert i.draft_answer =~ "I couldn't match that to anything in Tragar"
+      assert Enum.any?(i.tool_log, &(&1["tool"] == "CoreAI.clarify"))
+    end
   end
 
   describe "seed/0" do

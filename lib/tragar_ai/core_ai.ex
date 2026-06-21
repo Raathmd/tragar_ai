@@ -41,6 +41,13 @@ defmodule TragarAi.CoreAI do
     end
   end
 
+  @doc """
+  Generate a clarifying prompt-back when the request can't be matched to a Tragar
+  intent/entity — the AI asks the user for what it needs instead of erroring.
+  """
+  @spec clarify(term()) :: {:ok, String.t()}
+  def clarify(reason), do: {:ok, __MODULE__.Stub.clarify(reason)}
+
   @doc "Whether the real local model is reachable (always true in stub mode)."
   @spec available?() :: boolean()
   def available? do

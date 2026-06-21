@@ -74,6 +74,36 @@ defmodule TragarAi.CoreAI.Stub do
 
   defp contains?(q, terms), do: Enum.any?(terms, &String.contains?(q, &1))
 
+  # ── Clarify (prompt-back) ─────────────────────────────────────────────────────
+
+  @doc false
+  def clarify({:missing_entities, missing}) do
+    needs = missing |> Enum.map(&entity_hint/1) |> Enum.join(", ")
+    "I can look that up — I just need #{needs}. Could you add it?"
+  end
+
+  def clarify(:missing_waybill), do: "Which waybill should I check? For example, waybill 4821."
+
+  def clarify(:not_found),
+    do:
+      "I couldn't find that reference in Tragar. Please check the number, or tell me which " <>
+        "waybill, quote, invoice, account or ticket you mean."
+
+  def clarify(_other), do: capabilities_prompt()
+
+  defp capabilities_prompt do
+    "I couldn't match that to anything in Tragar. I can surface: a waybill (status, ETA, " <>
+      "proof of delivery), a quote, an invoice or account balance, a customer, a vehicle, or our " <>
+      "service types. What would you like, and for which reference (e.g. “waybill 4821” or " <>
+      "“account ACC1001”)?"
+  end
+
+  defp entity_hint(:account), do: "an account number (e.g. ACC1001)"
+  defp entity_hint(:waybill), do: "a waybill number (e.g. 4821)"
+  defp entity_hint(:quote), do: "a quote number (e.g. 7012)"
+  defp entity_hint(:ticket_id), do: "a ticket number (e.g. 55)"
+  defp entity_hint(other), do: to_string(other)
+
   # ── Phrasing ────────────────────────────────────────────────────────────────
 
   @doc false

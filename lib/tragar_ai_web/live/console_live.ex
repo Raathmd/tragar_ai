@@ -415,8 +415,11 @@ defmodule TragarAiWeb.ConsoleLive do
           </button>
         </div>
 
-        <div :if={@interaction.error} class="text-sm text-error">
-          Could not complete automatically: {@interaction.error}
+        <div
+          :if={@interaction.draft_answer && !@reply}
+          class={"rounded-md px-3 py-2 text-sm " <> answer_tone(@interaction)}
+        >
+          <span class="font-medium">Tragar AI:</span> {@interaction.draft_answer}
         </div>
 
         <%= if (fields = surfaced_fields(@interaction)) != [] do %>
@@ -462,7 +465,7 @@ defmodule TragarAiWeb.ConsoleLive do
             </div>
           </form>
         <% else %>
-          <div :if={@interaction.draft_answer} class="flex items-center gap-2">
+          <div :if={@interaction.status == :drafted} class="flex items-center gap-2">
             <button type="button" phx-click="draft_reply" class="btn btn-outline btn-sm">
               Draft customer reply
             </button>
@@ -943,6 +946,10 @@ defmodule TragarAiWeb.ConsoleLive do
   defp trace_phrase(_, _), do: "—"
 
   defp humanize_error(err), do: err |> String.replace(":", ": ") |> String.replace("_", " ")
+
+  # The AI message box tone: a failed interaction is the AI prompting back.
+  defp answer_tone(%{status: :failed}), do: "bg-warning/15 text-warning-content"
+  defp answer_tone(_), do: "bg-base-200"
 
   defp call_class("source", false), do: "badge-error"
   defp call_class("source", _), do: "badge-info"
