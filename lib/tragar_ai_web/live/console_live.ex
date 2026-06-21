@@ -69,8 +69,32 @@ defmodule TragarAiWeb.ConsoleLive do
 
     {:noreply,
      socket
-     |> assign(interaction: interaction, reply: false, demo: true, question: entry.question)
+     |> assign(
+       interaction: interaction,
+       reply: false,
+       demo: true,
+       question: entry.question,
+       waybill: entry.entities[:waybill] || "",
+       ticket_id: entry.entities[:ticket_id] || "",
+       account: entry.entities[:account] || ""
+     )
      |> load_history()}
+  end
+
+  # Editing the prompt or its fields drops the previous result so a stale answer
+  # never lingers; the user re-runs with Query (or Enter).
+  def handle_event("prompt_changed", params, socket) do
+    {:noreply,
+     assign(socket,
+       question: params["question"] || "",
+       waybill: params["waybill"] || "",
+       ticket_id: params["ticket_id"] || "",
+       account: params["account"] || "",
+       agent: params["agent"] || socket.assigns.agent,
+       demo: params["demo"] == "true",
+       interaction: nil,
+       reply: false
+     )}
   end
 
   # Reveal the reply composer for the customer-email use case.
@@ -330,7 +354,7 @@ defmodule TragarAiWeb.ConsoleLive do
   defp centre(assigns) do
     ~H"""
     <main class="space-y-4">
-      <form phx-submit="ask" class="space-y-3">
+      <form phx-submit="ask" phx-change="prompt_changed" class="space-y-3">
         <textarea
           name="question"
           rows="3"

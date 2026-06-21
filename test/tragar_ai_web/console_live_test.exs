@@ -73,6 +73,27 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "Outstanding"
   end
 
+  test "editing the prompt clears the previous result", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/console")
+
+    html =
+      view
+      |> form("form[phx-submit=ask]", %{question: "Where is load 4821?", demo: "true"})
+      |> render_submit()
+
+    # The result (and its AI-steps panel) is on screen.
+    assert html =~ "In transit"
+    assert html =~ "AI steps"
+
+    html =
+      view
+      |> form("form[phx-submit=ask]", %{question: "Where is load 4990?", demo: "true"})
+      |> render_change()
+
+    # Editing the prompt drops the previous result.
+    refute html =~ "AI steps"
+  end
+
   test "selecting a ticket and drafting a reply enters reply mode", %{conn: conn} do
     TragarAi.Demo.seed()
     {:ok, view, _html} = live(conn, ~p"/console")
