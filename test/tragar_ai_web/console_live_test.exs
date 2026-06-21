@@ -87,6 +87,22 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "Acme Distributors"
   end
 
+  test "an unrecognized query offers grounded, clickable suggestions", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/console")
+
+    html =
+      view
+      |> form("form[phx-submit=ask]", %{question: "What's the weather like?", demo: "true"})
+      |> render_submit()
+
+    assert html =~ "match that to anything in Tragar"
+    assert html =~ "Track a waybill"
+
+    # Clicking a suggestion runs that query and resolves it.
+    html = view |> element("button", "Track a waybill") |> render_click()
+    assert html =~ "In transit"
+  end
+
   test "a clarifying chat resolves the intent across turns", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 

@@ -67,6 +67,10 @@ defmodule TragarAiWeb.ConsoleLive do
   def handle_event("reset_chat", _params, socket),
     do: {:noreply, reset_chat_state(socket)}
 
+  # Run a suggested query the AI offered to help resolve the request.
+  def handle_event("suggest", %{"q" => q}, socket),
+    do: {:noreply, converse(socket, q, false)}
+
   # Reveal the reply composer for the customer-email use case.
   def handle_event("draft_reply", _params, socket), do: {:noreply, assign(socket, reply: true)}
 
@@ -326,6 +330,17 @@ defmodule TragarAiWeb.ConsoleLive do
               {if m.role == :user, do: "You", else: "Tragar AI"}
             </div>
             {m.text}
+            <div :if={m[:suggestions] not in [nil, []]} class="mt-2 flex flex-wrap gap-1">
+              <button
+                :for={s <- m.suggestions}
+                type="button"
+                phx-click="suggest"
+                phx-value-q={s.q}
+                class="btn btn-xs"
+              >
+                {s.label}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -790,12 +805,14 @@ defmodule TragarAiWeb.ConsoleLive do
       entities: Map.merge(base, atomize_entities(interaction.entities))
     }
 
-    messages =
-      socket.assigns.messages ++
-        [
-          %{role: :user, text: text},
-          %{role: :ai, text: interaction.draft_answer, resolved: resolved?}
-        ]
+    ai_message = %{
+      role: :ai,
+      text: interaction.draft_answer,
+      resolved: resolved?,
+      suggestions: if(resolved?, do: [], else: suggest(interaction))
+    }
+
+    messages = socket.assigns.messages ++ [%{role: :user, text: text}, ai_message]
 
     socket
     |> assign(
@@ -807,6 +824,41 @@ defmodule TragarAiWeb.ConsoleLive do
     )
     |> load_history()
   end
+
+  # Turn a failed interpretation into actionable next steps: queries the schema
+  # can answer, grounded in whatever entity the AI did extract.
+  defp suggest(%{entities: e}) when is_map(e) do
+    cond do
+      e["waybill"] ->
+        wb = e["waybill"]
+
+        [
+          %{label: "Where is #{wb}?", q: "Where is waybill #{wb}?"},
+          %{label: "ETA", q: "ETA for waybill #{wb}"},
+          %{label: "Proof of delivery", q: "Proof of delivery for #{wb}"}
+        ]
+
+      e["account"] ->
+        acc = e["account"]
+
+        [
+          %{label: "Account balance", q: "Balance on account #{acc}"},
+          %{label: "Who is the customer", q: "Who is the customer on #{acc}"}
+        ]
+
+      e["quote"] ->
+        [%{label: "Show the quote", q: "Show quote #{e["quote"]}"}]
+
+      true ->
+        [
+          %{label: "Track a waybill", q: "Where is waybill 4821?"},
+          %{label: "Account balance", q: "Balance on account ACC1001"},
+          %{label: "Service types", q: "What service types do you offer?"}
+        ]
+    end
+  end
+
+  defp suggest(_), do: []
 
   defp reset_chat_state(socket) do
     assign(socket,
