@@ -8,6 +8,7 @@ defmodule TragarAi.Adapters.FreightWare do
 
   @behaviour TragarAi.Adapters.Adapter
 
+  alias TragarAi.Customers.Cache, as: CustomerCache
   alias TragarAi.Freight
   alias TragarAi.Logistics.Cache
 
@@ -16,7 +17,16 @@ defmodule TragarAi.Adapters.FreightWare do
 
   @impl true
   def capabilities,
-    do: [:load_status, :eta, :pod, :waybill_lookup, :track, :quote_lookup, :service_types]
+    do: [
+      :load_status,
+      :eta,
+      :pod,
+      :waybill_lookup,
+      :track,
+      :quote_lookup,
+      :service_types,
+      :customer_lookup
+    ]
 
   @impl true
   def fetch(intent, params)
@@ -40,6 +50,12 @@ defmodule TragarAi.Adapters.FreightWare do
   def fetch(:quote_lookup, %{quote: quote}) when is_binary(quote) do
     Cache.quote(quote)
   end
+
+  def fetch(:customer_lookup, %{account: account}) when is_binary(account) do
+    CustomerCache.customer(account)
+  end
+
+  def fetch(:customer_lookup, _), do: {:error, :missing_account}
 
   def fetch(:service_types, _params) do
     with {:ok, types} <- Freight.service_types(), do: {:ok, %{"service_types" => types}}

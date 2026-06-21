@@ -17,6 +17,7 @@ defmodule TragarAi.Assist.Validator do
     waybill_lookup: [:waybill],
     track: [:waybill],
     quote_lookup: [:quote],
+    customer_lookup: [:account],
     service_types: [],
     route: [:waybill],
     invoice: [:account],

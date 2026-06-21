@@ -15,7 +15,11 @@ config :tragar_ai,
 config :tragar_ai,
   ash_domains: [
     TragarAi.Assist,
-    TragarAi.Logistics
+    TragarAi.Logistics,
+    TragarAi.Customers,
+    TragarAi.Support,
+    TragarAi.Finance,
+    TragarAi.Fleet
   ]
 
 # Ash configuration
