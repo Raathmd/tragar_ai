@@ -20,46 +20,44 @@ defmodule TragarAi.Customers do
     end
   end
 
+  @entity_type "customer"
+
   @doc """
-  Merge a source's contribution into the customer keyed by `account_reference`.
-
-  A customer exists across systems (FreightWare account, Pastel debtor, Freshdesk
-  contact, …). Each source contributes via this function: its name is unioned
-  into `sources`, its raw payload is stored under `source_data[source]`, and its
-  domain `fields` fill/refresh the record **without** clobbering existing values
-  with blanks or wiping other sources. Returns `{:ok, customer}`.
+  Record a source's contribution to the customer keyed by `account_reference`,
+  then re-harmonize. `fields` are the domain pieces this source provides;
+  `opts` may include `:raw` (raw payload) and `:external_id`. A customer exists
+  across systems (FreightWare account, Pastel debtor, Freshdesk contact, …) —
+  each is its own `SourceRecord` and none overrides another. Returns `{:ok, customer}`.
   """
-  def contribute(account_reference, source, payload, fields \\ %{}) do
-    existing =
-      case get_customer(account_reference) do
-        {:ok, %{} = c} -> c
-        _ -> nil
-      end
-
-    attrs =
-      existing
-      |> domain_fields()
-      |> Map.merge(drop_blanks(fields))
-      |> Map.merge(%{
-        account_reference: account_reference,
-        sources: Enum.uniq(sources_of(existing) ++ [source]),
-        source_data: Map.put(source_data_of(existing), source, payload),
-        cached_at: DateTime.utc_now()
+  def contribute(account_reference, source, fields, opts \\ []) do
+    {:ok, _} =
+      TragarAi.Sources.put_source_record(%{
+        entity_type: @entity_type,
+        entity_key: account_reference,
+        source: source,
+        external_id: opts[:external_id],
+        data: stringify(fields),
+        raw: opts[:raw] || %{},
+        synced_at: DateTime.utc_now()
       })
 
-    upsert_customer(attrs)
+    reproject(account_reference)
   end
 
-  defp domain_fields(nil), do: %{}
+  defp reproject(account_reference) do
+    {:ok, records} = TragarAi.Sources.source_records_for(@entity_type, account_reference)
+    %{fields: f, sources: sources} = TragarAi.Harmonize.project(records)
 
-  defp domain_fields(c),
-    do: drop_blanks(%{name: c.name, email: c.email, description: c.description})
+    upsert_customer(%{
+      account_reference: account_reference,
+      name: f["name"],
+      email: f["email"],
+      description: f["description"],
+      sources: sources,
+      cached_at: DateTime.utc_now()
+    })
+  end
 
-  defp sources_of(nil), do: []
-  defp sources_of(c), do: c.sources || []
-  defp source_data_of(nil), do: %{}
-  defp source_data_of(c), do: c.source_data || %{}
-
-  defp drop_blanks(map),
-    do: for({k, v} <- map, not is_nil(v) and v != "", into: %{}, do: {k, v})
+  defp stringify(map),
+    do: for({k, v} <- map, into: %{}, do: {to_string(k), v})
 end

@@ -38,4 +38,20 @@ defmodule TragarAi.Adapters do
       adapter -> adapter.fetch(intent, params)
     end
   end
+
+  @doc """
+  Fan out across capabilities and collect each adapter's contribution. Lets a
+  domain entity "reach into any source capability" — every adapter that can
+  serve one of `capabilities` is asked, and the successful slices are returned as
+  `[{source_name, slice}]`. Unavailable/erroring sources are skipped.
+  """
+  @spec gather([atom()], map()) :: [{String.t(), map()}]
+  def gather(capabilities, params) do
+    for cap <- capabilities,
+        adapter = adapter_for(cap),
+        not is_nil(adapter),
+        {:ok, slice} <- [adapter.fetch(cap, params)] do
+      {adapter.name(), slice}
+    end
+  end
 end

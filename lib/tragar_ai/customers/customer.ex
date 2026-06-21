@@ -19,8 +19,10 @@ defmodule TragarAi.Customers.Customer do
     attribute :email, :string
     attribute :description, :string
 
-    attribute :sources, {:array, :string}, default: []
-    attribute :source_data, :map, default: %{}
+    attribute :sources, {:array, :string},
+      default: [],
+      description: "Source systems contributing to this customer (derived from source records)."
+
     attribute :cached_at, :utc_datetime_usec
 
     timestamps()
@@ -28,6 +30,13 @@ defmodule TragarAi.Customers.Customer do
 
   identities do
     identity :unique_account, [:account_reference]
+  end
+
+  relationships do
+    has_many :source_records, TragarAi.Sources.SourceRecord do
+      no_attributes? true
+      filter expr(entity_type == "customer" and entity_key == parent(account_reference))
+    end
   end
 
   actions do
@@ -40,7 +49,6 @@ defmodule TragarAi.Customers.Customer do
         :email,
         :description,
         :sources,
-        :source_data,
         :cached_at
       ]
 

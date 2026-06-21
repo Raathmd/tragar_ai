@@ -5,7 +5,7 @@ defmodule TragarAi.Adapters.Vantage do
   @impl true
   def name, do: "Vantage"
   @impl true
-  def capabilities, do: [:route]
+  def capabilities, do: [:route, :vehicle_tracking]
   @impl true
   def fetch(_intent, _params), do: {:error, :not_available}
 end

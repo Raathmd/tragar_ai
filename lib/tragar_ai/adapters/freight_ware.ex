@@ -25,7 +25,8 @@ defmodule TragarAi.Adapters.FreightWare do
       :track,
       :quote_lookup,
       :service_types,
-      :customer_lookup
+      :customer_lookup,
+      :vehicle_assignment
     ]
 
   @impl true

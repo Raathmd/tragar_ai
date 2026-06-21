@@ -19,8 +19,10 @@ defmodule TragarAi.Fleet.Vehicle do
     attribute :available, :boolean
     attribute :description, :string
 
-    attribute :sources, {:array, :string}, default: []
-    attribute :source_data, :map, default: %{}
+    attribute :sources, {:array, :string},
+      default: [],
+      description: "Source systems contributing to this vehicle (derived from source records)."
+
     attribute :cached_at, :utc_datetime_usec
 
     timestamps()
@@ -28,6 +30,13 @@ defmodule TragarAi.Fleet.Vehicle do
 
   identities do
     identity :unique_registration, [:registration]
+  end
+
+  relationships do
+    has_many :source_records, TragarAi.Sources.SourceRecord do
+      no_attributes? true
+      filter expr(entity_type == "vehicle" and entity_key == parent(registration))
+    end
   end
 
   actions do
@@ -40,7 +49,6 @@ defmodule TragarAi.Fleet.Vehicle do
         :available,
         :description,
         :sources,
-        :source_data,
         :cached_at
       ]
 

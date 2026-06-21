@@ -34,12 +34,14 @@ defmodule TragarAi.Customers.Cache do
     with {:ok, accounts} <- Freight.accounts(),
          account when is_map(account) <-
            Enum.find(accounts, &(&1["account_reference"] == account_reference)) do
-      # Contribute FreightWare's slice; merges with any other source already present.
+      # Contribute FreightWare's slice; harmonizes with any other source present.
       {:ok, customer} =
-        Customers.contribute(account_reference, @source, account, %{
-          name: account["account_name"],
-          description: account["account_description"]
-        })
+        Customers.contribute(
+          account_reference,
+          @source,
+          %{name: account["account_name"], description: account["account_description"]},
+          raw: account
+        )
 
       {:ok, domain(customer)}
     else

@@ -5,7 +5,7 @@ defmodule TragarAi.Adapters.Pastel do
   @impl true
   def name, do: "Pastel"
   @impl true
-  def capabilities, do: [:invoice]
+  def capabilities, do: [:invoice, :vehicle_asset]
   @impl true
   def fetch(_intent, _params), do: {:error, :not_available}
 end

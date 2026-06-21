@@ -4,6 +4,8 @@ defmodule TragarAi.DomainResourcesTest do
 
   alias TragarAi.Adapters
   alias TragarAi.Customers
+  alias TragarAi.Fleet
+  alias TragarAi.Sources
   alias TragarAi.Support
 
   setup do
@@ -79,28 +81,54 @@ defmodule TragarAi.DomainResourcesTest do
                Adapters.fetch(:customer_lookup, %{account: "ACC9"})
     end
 
-    test "a customer accumulates across sources (FreightWare + Pastel), not overwrite" do
+    test "a customer is harmonized across sources; each is its own SourceRecord, no overrides" do
       # FreightWare contributes name.
       assert {:ok, _} = Customers.Cache.customer("ACC9")
 
-      # Pastel later contributes its slice (e.g. billing email) for the same account.
+      # Pastel contributes its slice: a billing email (new field) AND a name
+      # (already owned by FreightWare — must NOT override).
       assert {:ok, _} =
                Customers.contribute(
                  "ACC9",
                  "Pastel",
-                 %{"debtorCode" => "ACC9", "terms" => "30 days"},
-                 %{
-                   email: "billing@acme.test"
-                 }
+                 %{email: "billing@acme.test", name: "ACME (Pty) Ltd"},
+                 raw: %{"debtorCode" => "ACC9", "terms" => "30 days"}
                )
 
       assert {:ok, customer} = Customers.get_customer("ACC9")
-      # kept from FreightWare
+      # kept from FreightWare (higher priority)
       assert customer.name == "Acme Ltd"
       # added by Pastel
       assert customer.email == "billing@acme.test"
       assert Enum.sort(customer.sources) == ["FreightWare", "Pastel"]
-      assert Map.keys(customer.source_data) |> Enum.sort() == ["FreightWare", "Pastel"]
+
+      # Each source is its own related record.
+      assert {:ok, records} = Sources.source_records_for("customer", "ACC9")
+      assert Enum.map(records, & &1.source) |> Enum.sort() == ["FreightWare", "Pastel"]
+    end
+  end
+
+  describe "Vehicle (cross-source via SourceRecord)" do
+    test "a vehicle is assembled from each source's pieces with no overrides" do
+      # Pastel: the asset description. Vantage: live status. FleetIT: availability + a
+      # status it does NOT own (Vantage has higher priority for status).
+      assert {:ok, _} = Fleet.contribute("CA12345", "Pastel", %{description: "Volvo FH16"})
+      assert {:ok, _} = Fleet.contribute("CA12345", "Vantage", %{status: "moving"})
+
+      assert {:ok, _} =
+               Fleet.contribute("CA12345", "FleetIT", %{available: true, status: "in service"})
+
+      assert {:ok, vehicle} = Fleet.get_vehicle("CA12345")
+      # Pastel's piece
+      assert vehicle.description == "Volvo FH16"
+      # Vantage owns status (higher priority than FleetIT)
+      assert vehicle.status == "moving"
+      # FleetIT's piece
+      assert vehicle.available == true
+      assert Enum.sort(vehicle.sources) == ["FleetIT", "Pastel", "Vantage"]
+
+      assert {:ok, records} = Sources.source_records_for("vehicle", "CA12345")
+      assert length(records) == 3
     end
   end
 end
