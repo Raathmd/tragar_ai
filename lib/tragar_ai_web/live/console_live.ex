@@ -53,6 +53,23 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
+  def handle_event("run_sample", %{"idx" => idx}, socket) do
+    entry = Enum.at(TragarAi.Demo.catalog(), String.to_integer(idx))
+    {:ok, interaction} = Engine.answer(entry.question, %{demo: true, entities: entry.entities})
+
+    {:noreply,
+     socket
+     |> assign(
+       interaction: interaction,
+       demo: true,
+       question: entry.question,
+       waybill: entry.entities[:waybill] || "",
+       ticket_id: entry.entities[:ticket_id] || "",
+       account: entry.entities[:account] || ""
+     )
+     |> load_history()}
+  end
+
   def handle_event("seed_demo", _params, socket) do
     :ok = TragarAi.Demo.seed()
 
@@ -89,7 +106,7 @@ defmodule TragarAiWeb.ConsoleLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="mx-auto max-w-3xl p-6 space-y-8">
+    <div id="console" phx-hook=".DragDrop" class="mx-auto max-w-3xl p-6 space-y-8">
       <header>
         <h1 class="text-2xl font-semibold">Tragar · Support Assist</h1>
         <p class="text-sm text-base-content/70">
@@ -101,6 +118,7 @@ defmodule TragarAiWeb.ConsoleLive do
         <textarea
           name="question"
           rows="3"
+          data-drop
           class="textarea textarea-bordered w-full"
           placeholder="e.g. Where is load 4821?"
         >{@question}</textarea>
@@ -135,16 +153,45 @@ defmodule TragarAiWeb.ConsoleLive do
             Load demo data
           </button>
         </div>
-        <p :if={@demo} class="text-xs text-base-content/60">
-          Try: “Where is load 4821?” · “Proof of delivery for 4990” · “What service types?” ·
-          “Is a truck available?” · account ACC1001 → balance · quote 7012 · ticket 55.
-        </p>
       </form>
+
+      <section :if={@demo} class="rounded-lg border border-base-300 p-4 space-y-3">
+        <div>
+          <h2 class="text-base font-medium">Demo data — what you can ask</h2>
+          <p class="text-xs text-base-content/60">
+            Each source system below holds fixture data. Click a prompt to run it (the answer
+            surfaces from that source), or drag it into the question box.
+          </p>
+        </div>
+
+        <% catalog = TragarAi.Demo.catalog() %>
+        <% sources = catalog |> Enum.map(& &1.source) |> Enum.uniq() %>
+        <div :for={source <- sources} class="space-y-1">
+          <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">
+            {source}
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <%= for {e, i} <- Enum.with_index(catalog), e.source == source do %>
+              <button
+                type="button"
+                phx-click="run_sample"
+                phx-value-idx={i}
+                draggable="true"
+                data-snippet={e.question}
+                class="cursor-pointer rounded-md border border-base-300 bg-base-100 px-2.5 py-1.5 text-left hover:border-primary"
+                title="Click to run, or drag into the question box"
+              >
+                <span class="block text-sm">{e.question}</span>
+                <span class="block text-[11px] text-base-content/50">{e.surfaces}</span>
+              </button>
+            <% end %>
+          </div>
+        </div>
+      </section>
 
       <section
         :if={@interaction}
         id="resource-panel"
-        phx-hook=".Composer"
         class="rounded-lg border border-base-300 p-4 space-y-4"
       >
         <div class="flex items-center gap-2 text-sm">
@@ -171,6 +218,7 @@ defmodule TragarAiWeb.ConsoleLive do
                 type="button"
                 draggable="true"
                 data-snippet={f.snippet}
+                data-insert
                 class="cursor-grab active:cursor-grabbing rounded-md border border-base-300 bg-base-200 px-2.5 py-1.5 text-left hover:border-primary"
                 title="Drag into the reply, or click to insert"
               >
@@ -189,6 +237,7 @@ defmodule TragarAiWeb.ConsoleLive do
           <textarea
             name="final_answer"
             rows="6"
+            data-drop
             class="textarea textarea-bordered w-full"
             placeholder="Drag fields above into here, or type your reply…"
           >{@interaction.draft_answer}</textarea>
@@ -202,50 +251,6 @@ defmodule TragarAiWeb.ConsoleLive do
           <summary class="cursor-pointer">Raw source payload</summary>
           <pre class="bg-base-200 rounded p-3 mt-2 overflow-x-auto">{facts_text(@interaction.facts)}</pre>
         </details>
-
-        <script :type={Phoenix.LiveView.ColocatedHook} name=".Composer">
-          export default {
-            mounted() { this.bind() },
-            updated() { this.bind() },
-            bind() {
-              const el = this.el
-              const textarea = () => el.querySelector("textarea[name=final_answer]")
-
-              el.addEventListener("dragstart", (e) => {
-                const chip = e.target.closest("[data-snippet]")
-                if (chip) e.dataTransfer.setData("text/plain", chip.getAttribute("data-snippet"))
-              })
-
-              el.addEventListener("click", (e) => {
-                const chip = e.target.closest("[data-snippet]")
-                const ta = textarea()
-                if (chip && ta) this.insert(ta, chip.getAttribute("data-snippet"))
-              })
-
-              const ta = textarea()
-              if (ta && !ta.dataset.dropBound) {
-                ta.dataset.dropBound = "1"
-                ta.addEventListener("dragover", (e) => e.preventDefault())
-                ta.addEventListener("drop", (e) => {
-                  e.preventDefault()
-                  this.insert(ta, e.dataTransfer.getData("text/plain"))
-                })
-              }
-            },
-            insert(ta, text) {
-              if (!text) return
-              const start = ta.selectionStart ?? ta.value.length
-              const before = ta.value.slice(0, start)
-              const after = ta.value.slice(start)
-              const prefix = before && !before.endsWith("\n") ? "\n" : ""
-              const piece = prefix + text
-              ta.value = before + piece + after
-              ta.focus()
-              const pos = (before + piece).length
-              ta.setSelectionRange(pos, pos)
-            }
-          }
-        </script>
       </section>
 
       <section>
@@ -258,6 +263,50 @@ defmodule TragarAiWeb.ConsoleLive do
           <li :if={@history == []} class="py-2 text-base-content/60">No interactions yet.</li>
         </ul>
       </section>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".DragDrop">
+        export default {
+          mounted() { this.bind() },
+          updated() { this.bind() },
+          bind() {
+            const el = this.el
+            if (!el.dataset.ddBound) {
+              el.dataset.ddBound = "1"
+              el.addEventListener("dragstart", (e) => {
+                const chip = e.target.closest("[data-snippet]")
+                if (chip) e.dataTransfer.setData("text/plain", chip.getAttribute("data-snippet"))
+              })
+              el.addEventListener("click", (e) => {
+                const chip = e.target.closest("[data-snippet][data-insert]")
+                if (!chip) return
+                const ta = el.querySelector("textarea[name=final_answer]")
+                if (ta) this.insert(ta, chip.getAttribute("data-snippet"))
+              })
+            }
+            el.querySelectorAll("textarea[data-drop]").forEach((ta) => {
+              if (ta.dataset.dropBound) return
+              ta.dataset.dropBound = "1"
+              ta.addEventListener("dragover", (e) => e.preventDefault())
+              ta.addEventListener("drop", (e) => {
+                e.preventDefault()
+                this.insert(ta, e.dataTransfer.getData("text/plain"))
+              })
+            })
+          },
+          insert(ta, text) {
+            if (!text) return
+            const start = ta.selectionStart ?? ta.value.length
+            const before = ta.value.slice(0, start)
+            const after = ta.value.slice(start)
+            const prefix = before && !before.endsWith("\n") ? "\n" : ""
+            const piece = prefix + text
+            ta.value = before + piece + after
+            ta.focus()
+            const pos = (before + piece).length
+            ta.setSelectionRange(pos, pos)
+          }
+        }
+      </script>
     </div>
     """
   end

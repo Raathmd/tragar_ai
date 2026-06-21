@@ -34,6 +34,24 @@ defmodule TragarAi.DemoTest do
       assert i.draft_answer =~ "not currently available"
     end
 
+    test "route comes from Vantage telematics" do
+      {:ok, i} =
+        Engine.answer("Show the route for load 4821", %{demo: true, entities: %{waybill: "4821"}})
+
+      assert i.intent == "route"
+      assert i.source == "Vantage"
+      assert i.facts["current_location"] == "N3 near Mooi River Toll"
+      assert i.draft_answer =~ "Mooi River"
+      assert i.draft_answer =~ "212 km to go"
+    end
+
+    test "every catalog prompt runs and drafts an answer" do
+      for {entry, _i} <- Enum.with_index(TragarAi.Demo.catalog()) do
+        {:ok, i} = Engine.answer(entry.question, %{demo: true, entities: entry.entities})
+        assert i.status == :drafted, "expected #{entry.question} to draft, got #{i.error}"
+      end
+    end
+
     test "service types list is phrased" do
       {:ok, i} = Engine.answer("What service types do you offer?", %{demo: true})
 

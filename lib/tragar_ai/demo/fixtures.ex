@@ -63,6 +63,23 @@ defmodule TragarAi.Demo.Fixtures do
     }
   end
 
+  @doc "Vantage telematics route/position, keyed by waybill."
+  def routes do
+    %{
+      "4821" => %{
+        "waybill_number" => "4821",
+        "vehicle" => "CA 123-456",
+        "route" => "N3 Johannesburg → Durban via Harrismith",
+        "distance" => 568,
+        "distance_remaining" => 212,
+        "current_location" => "N3 near Mooi River Toll",
+        "next_stop" => "Durban depot",
+        "speed" => "92 km/h",
+        "eta" => "2026-06-22 07:30"
+      }
+    }
+  end
+
   @doc "Quotes keyed by quote number."
   def quotes do
     %{
@@ -102,13 +119,15 @@ defmodule TragarAi.Demo.Fixtures do
     }
   end
 
-  @doc "Outstanding invoice for the demo account (Pastel)."
+  @doc "Outstanding invoice / debtor position for the demo account (Pastel)."
   def invoice do
     %{
       "invoice_number" => "INV-55012",
       "account_reference" => @account,
       "status" => "Outstanding",
       "balance" => "R 48 230.00",
+      "terms" => "30 days",
+      "last_payment" => "R 22 100.00 on 2026-05-28",
       "due_date" => "2026-07-05"
     }
   end

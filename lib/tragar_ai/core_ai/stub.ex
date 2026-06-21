@@ -103,8 +103,16 @@ defmodule TragarAi.CoreAI.Stub do
   end
 
   def phrase(:route, f, _) do
-    "Planned route for #{get(f, "waybill_number")}: #{get(f, "route") || "not available"}" <>
-      if(get(f, "distance"), do: " (#{get(f, "distance")} km).", else: ".")
+    "Load #{get(f, "waybill_number")} is on #{get(f, "route") || "an unplanned route"}" <>
+      if(get(f, "current_location"),
+        do: ", currently near #{get(f, "current_location")}",
+        else: ""
+      ) <>
+      if(get(f, "distance_remaining"),
+        do: " with #{get(f, "distance_remaining")} km to go",
+        else: ""
+      ) <>
+      if(get(f, "eta"), do: " (ETA #{get(f, "eta")}).", else: ".")
   end
 
   def phrase(:stock, f, _), do: generic("Stock", f)
