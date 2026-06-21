@@ -1,8 +1,8 @@
 defmodule TragarAi.Logistics.Quote do
   @moduledoc """
-  Cached FreightWare quote — header fields plus items and sundries. Promoted
-  columns for querying/AshAdmin; `raw` keeps the full normalized quote. Upserted
-  by `TragarAi.Logistics.Cache`.
+  A quote in **Tragar's** domain — source-agnostic, with `sources` + `source_data`
+  provenance. Populated read-through by `TragarAi.Logistics.Cache` (FreightWare
+  today).
   """
 
   use Ash.Resource,
@@ -21,16 +21,19 @@ defmodule TragarAi.Logistics.Quote do
     attribute :quote_number, :string, allow_nil?: false
     attribute :quote_obj, :string
     attribute :account_reference, :string
-    attribute :service_type, :string
+    attribute :status, :string
     attribute :status_code, :string
-    attribute :status_description, :string
-    attribute :consignor_name, :string
-    attribute :consignee_name, :string
+    attribute :service_type, :string
+    attribute :consignor, :string
+    attribute :consignee, :string
     attribute :charged_amount, :string
 
     attribute :items, {:array, :map}, default: []
     attribute :sundries, {:array, :map}, default: []
-    attribute :raw, :map, default: %{}, description: "Full normalized quote."
+
+    attribute :sources, {:array, :string}, default: []
+    attribute :source_data, :map, default: %{}
+
     attribute :cached_at, :utc_datetime_usec
 
     timestamps()
@@ -53,15 +56,16 @@ defmodule TragarAi.Logistics.Quote do
         :quote_number,
         :quote_obj,
         :account_reference,
-        :service_type,
+        :status,
         :status_code,
-        :status_description,
-        :consignor_name,
-        :consignee_name,
+        :service_type,
+        :consignor,
+        :consignee,
         :charged_amount,
         :items,
         :sundries,
-        :raw,
+        :sources,
+        :source_data,
         :cached_at
       ]
 

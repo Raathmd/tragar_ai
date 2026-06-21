@@ -1,10 +1,7 @@
-defmodule TragarAi.Connectors.Freshdesk do
-  @moduledoc """
-  Freshdesk read-only connector — ticket context and the customer a question is
-  about. Wraps `TragarAi.Freshdesk.Client`.
-  """
+defmodule TragarAi.Adapters.Freshdesk do
+  @moduledoc "Freshdesk adapter — ticket context + the customer a question is about."
 
-  @behaviour TragarAi.Connectors.Source
+  @behaviour TragarAi.Adapters.Adapter
 
   alias TragarAi.Freshdesk.Client
 
@@ -12,19 +9,17 @@ defmodule TragarAi.Connectors.Freshdesk do
   def name, do: "Freshdesk"
 
   @impl true
-  def intents, do: [:ticket_context]
+  def capabilities, do: [:ticket_context]
 
   @impl true
   def fetch(:ticket_context, %{ticket_id: id}) when not is_nil(id) do
-    with {:ok, ticket} <- Client.get_ticket(id) do
-      {:ok, ticket_facts(ticket)}
-    end
+    with {:ok, ticket} <- Client.get_ticket(id), do: {:ok, to_domain(ticket)}
   end
 
   def fetch(:ticket_context, _), do: {:error, :missing_ticket_id}
   def fetch(intent, _), do: {:error, {:unsupported_intent, intent}}
 
-  defp ticket_facts(ticket) when is_map(ticket) do
+  defp to_domain(ticket) when is_map(ticket) do
     %{
       "ticket_id" => ticket["id"],
       "subject" => ticket["subject"],
@@ -37,5 +32,5 @@ defmodule TragarAi.Connectors.Freshdesk do
     |> Map.new()
   end
 
-  defp ticket_facts(_), do: %{}
+  defp to_domain(_), do: %{}
 end

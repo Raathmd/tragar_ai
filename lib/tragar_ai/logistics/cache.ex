@@ -1,18 +1,23 @@
 defmodule TragarAi.Logistics.Cache do
   @moduledoc """
-  Read-through cache over FreightWare reads, backed by the `Shipment` and
-  `Quote` Ash resources.
+  Read-through cache over the domain `Shipment` and `Quote` resources.
 
-  On a query: return the cached row if it's fresh (within the TTL); otherwise
-  fetch live via `TragarAi.Freight`, upsert the resource, and return. If the
-  live call fails but a (stale) row exists, the stale row is returned so the
-  assist tool degrades gracefully rather than erroring.
+  Returns the cached row if fresh (within the TTL); otherwise fetches live via
+  `TragarAi.Freight`, maps it into the domain shape
+  (`TragarAi.Adapters.FreightWare.Mapper`), upserts the resource with provenance,
+  and returns the domain entity. If the live call fails but a stale row exists,
+  the stale row is returned so the assist tool degrades gracefully.
+
+  The returned value is the **domain entity** (a map), not a source payload.
   """
 
+  alias TragarAi.Adapters.FreightWare.Mapper
   alias TragarAi.Freight
   alias TragarAi.Logistics
 
   require Logger
+
+  @source "FreightWare"
 
   defp ttl_minutes do
     :tragar_ai
@@ -22,16 +27,16 @@ defmodule TragarAi.Logistics.Cache do
 
   # ── Shipments ───────────────────────────────────────────────────────────────
 
-  @doc "Read-through fetch of a waybill. Returns %{\"waybill\" => map, \"events\" => list}."
-  def fetch_shipment(waybill) do
+  @doc "Read-through fetch of a shipment by waybill. Returns the domain shipment map."
+  def shipment(waybill) do
     cached = cached_shipment(waybill)
 
     if cached && fresh?(cached.cached_at) do
-      {:ok, shipment_view(cached)}
+      {:ok, shipment_domain(cached)}
     else
       case fetch_live_shipment(waybill) do
-        {:ok, view} -> {:ok, view}
-        {:error, reason} -> stale_or_error(cached, &shipment_view/1, reason)
+        {:ok, domain} -> {:ok, domain}
+        {:error, reason} -> stale_or_error(cached, &shipment_domain/1, reason)
       end
     end
   end
@@ -39,8 +44,9 @@ defmodule TragarAi.Logistics.Cache do
   defp fetch_live_shipment(waybill) do
     with {:ok, wb} when is_map(wb) <- Freight.get_waybill(waybill),
          {:ok, events} <- Freight.track_and_trace(:waybills, waybill) do
-      upsert_shipment(waybill, wb, events)
-      {:ok, %{"waybill" => wb, "events" => events}}
+      domain = Mapper.shipment(wb, events)
+      upsert_shipment(domain, %{"waybill" => wb, "tracking" => events})
+      {:ok, domain}
     else
       {:ok, nil} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
@@ -48,24 +54,24 @@ defmodule TragarAi.Logistics.Cache do
     end
   end
 
-  defp upsert_shipment(waybill, wb, events) do
+  defp upsert_shipment(domain, raw) do
     Logistics.upsert_shipment(%{
-      waybill_number: wb["waybill_number"] || waybill,
-      account_reference: wb["account_reference"],
-      shipper_reference: wb["shipper_reference"],
-      service_type: wb["service_type"],
-      status_code: wb["status_code"],
-      status_description: wb["status_description"],
-      consignor_name: wb["consignor_name"],
-      consignee_name: wb["consignee_name"],
-      consignee_city: wb["consignee_city"],
-      tracking_events: events,
-      pod: pod_from(events, wb),
-      raw: wb,
+      waybill_number: domain["waybill_number"],
+      account_reference: domain["account_reference"],
+      status: domain["status"],
+      status_code: domain["status_code"],
+      service_type: domain["service_type"],
+      consignor: domain["consignor"],
+      consignee: domain["consignee"],
+      consignee_city: domain["consignee_city"],
+      events: domain["events"] || [],
+      pod: domain["pod"],
+      sources: [@source],
+      source_data: %{@source => raw},
       cached_at: DateTime.utc_now()
     })
   rescue
-    e -> Logger.warning("Failed to cache shipment #{waybill}: #{Exception.message(e)}")
+    e -> Logger.warning("Failed to cache shipment: #{Exception.message(e)}")
   end
 
   defp cached_shipment(waybill) do
@@ -75,35 +81,43 @@ defmodule TragarAi.Logistics.Cache do
     end
   end
 
-  defp shipment_view(s), do: %{"waybill" => s.raw, "events" => s.tracking_events || []}
-
-  defp pod_from(events, wb) do
-    case Enum.find_value(events, & &1["pod"]) do
-      pod when is_map(pod) -> pod
-      _ -> if wb["pod_image_url"], do: %{"image_url" => wb["pod_image_url"]}, else: nil
-    end
+  defp shipment_domain(s) do
+    %{
+      "waybill_number" => s.waybill_number,
+      "account_reference" => s.account_reference,
+      "status" => s.status,
+      "status_code" => s.status_code,
+      "service_type" => s.service_type,
+      "consignor" => s.consignor,
+      "consignee" => s.consignee,
+      "consignee_city" => s.consignee_city,
+      "events" => s.events || [],
+      "pod" => s.pod
+    }
+    |> compact()
   end
 
   # ── Quotes ──────────────────────────────────────────────────────────────────
 
-  @doc "Read-through fetch of a quote. Returns the normalized quote map."
-  def fetch_quote(quote_id) do
+  @doc "Read-through fetch of a quote. Returns the domain quote map."
+  def quote(quote_id) do
     cached = cached_quote(quote_id)
 
     if cached && fresh?(cached.cached_at) do
-      {:ok, cached.raw}
+      {:ok, quote_domain(cached)}
     else
       case fetch_live_quote(quote_id) do
-        {:ok, quote} -> {:ok, quote}
-        {:error, reason} -> stale_or_error(cached, & &1.raw, reason)
+        {:ok, domain} -> {:ok, domain}
+        {:error, reason} -> stale_or_error(cached, &quote_domain/1, reason)
       end
     end
   end
 
   defp fetch_live_quote(quote_id) do
-    with {:ok, quote} when is_map(quote) <- Freight.get_quote(quote_id) do
-      upsert_quote(quote)
-      {:ok, quote}
+    with {:ok, q} when is_map(q) <- Freight.get_quote(quote_id) do
+      domain = Mapper.quote(q)
+      upsert_quote(domain, q)
+      {:ok, domain}
     else
       {:ok, nil} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
@@ -111,20 +125,21 @@ defmodule TragarAi.Logistics.Cache do
     end
   end
 
-  defp upsert_quote(q) do
+  defp upsert_quote(domain, raw) do
     Logistics.upsert_quote(%{
-      quote_number: q["quote_number"],
-      quote_obj: q["quote_obj"],
-      account_reference: q["account_reference"],
-      service_type: q["service_type"],
-      status_code: q["status_code"],
-      status_description: q["status_description"],
-      consignor_name: q["consignor_name"],
-      consignee_name: q["consignee_name"],
-      charged_amount: to_string_or_nil(q["charged_amount"]),
-      items: q["items"] || [],
-      sundries: q["sundries"] || [],
-      raw: q,
+      quote_number: domain["quote_number"],
+      quote_obj: domain["quote_obj"],
+      account_reference: domain["account_reference"],
+      status: domain["status"],
+      status_code: domain["status_code"],
+      service_type: domain["service_type"],
+      consignor: domain["consignor"],
+      consignee: domain["consignee"],
+      charged_amount: to_string_or_nil(domain["charged_amount"]),
+      items: domain["items"] || [],
+      sundries: domain["sundries"] || [],
+      sources: [@source],
+      source_data: %{@source => raw},
       cached_at: DateTime.utc_now()
     })
   rescue
@@ -138,6 +153,23 @@ defmodule TragarAi.Logistics.Cache do
     end
   end
 
+  defp quote_domain(q) do
+    %{
+      "quote_number" => q.quote_number,
+      "quote_obj" => q.quote_obj,
+      "account_reference" => q.account_reference,
+      "status" => q.status,
+      "status_code" => q.status_code,
+      "service_type" => q.service_type,
+      "consignor" => q.consignor,
+      "consignee" => q.consignee,
+      "charged_amount" => q.charged_amount,
+      "items" => q.items || [],
+      "sundries" => q.sundries || []
+    }
+    |> compact()
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────────────
 
   defp fresh?(nil), do: false
@@ -145,9 +177,11 @@ defmodule TragarAi.Logistics.Cache do
   defp fresh?(%DateTime{} = at),
     do: DateTime.diff(DateTime.utc_now(), at, :minute) < ttl_minutes()
 
-  defp stale_or_error(nil, _view_fun, reason), do: {:error, reason}
-  defp stale_or_error(cached, view_fun, _reason), do: {:ok, view_fun.(cached)}
+  defp stale_or_error(nil, _fun, reason), do: {:error, reason}
+  defp stale_or_error(cached, fun, _reason), do: {:ok, fun.(cached)}
 
   defp to_string_or_nil(nil), do: nil
   defp to_string_or_nil(v), do: to_string(v)
+
+  defp compact(map), do: for({k, v} <- map, v != nil and v != "", into: %{}, do: {k, v})
 end

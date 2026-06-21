@@ -1,8 +1,12 @@
 defmodule TragarAi.Logistics.Shipment do
   @moduledoc """
-  Cached FreightWare waybill (shipment) — status, parties, tracking events and
-  POD. Promoted columns are for querying/AshAdmin; `raw` keeps the full
-  normalized waybill so nothing is lost. Upserted by `TragarAi.Logistics.Cache`.
+  A shipment in **Tragar's** domain — a consignment/delivery, independent of any
+  one source system. Fields use domain vocabulary (status, consignor, consignee);
+  `sources` records which systems contributed and `source_data` keeps each
+  source's raw payload for provenance. Today FreightWare populates it (status,
+  events, POD); Granite/Vantage will contribute POD/route via their adapters.
+
+  Populated read-through by `TragarAi.Logistics.Cache`.
   """
 
   use Ash.Resource,
@@ -20,17 +24,24 @@ defmodule TragarAi.Logistics.Shipment do
 
     attribute :waybill_number, :string, allow_nil?: false
     attribute :account_reference, :string
-    attribute :shipper_reference, :string
-    attribute :service_type, :string
+    attribute :status, :string
     attribute :status_code, :string
-    attribute :status_description, :string
-    attribute :consignor_name, :string
-    attribute :consignee_name, :string
+    attribute :service_type, :string
+    attribute :consignor, :string
+    attribute :consignee, :string
     attribute :consignee_city, :string
 
-    attribute :tracking_events, {:array, :map}, default: []
+    attribute :events, {:array, :map}, default: []
     attribute :pod, :map
-    attribute :raw, :map, default: %{}, description: "Full normalized waybill."
+
+    attribute :sources, {:array, :string},
+      default: [],
+      description: "Source systems that contributed to this record."
+
+    attribute :source_data, :map,
+      default: %{},
+      description: "Provenance: each source's raw payload, keyed by source name."
+
     attribute :cached_at, :utc_datetime_usec
 
     timestamps()
@@ -52,16 +63,16 @@ defmodule TragarAi.Logistics.Shipment do
       accept [
         :waybill_number,
         :account_reference,
-        :shipper_reference,
-        :service_type,
+        :status,
         :status_code,
-        :status_description,
-        :consignor_name,
-        :consignee_name,
+        :service_type,
+        :consignor,
+        :consignee,
         :consignee_city,
-        :tracking_events,
+        :events,
         :pod,
-        :raw,
+        :sources,
+        :source_data,
         :cached_at
       ]
 

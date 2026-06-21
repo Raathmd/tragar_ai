@@ -15,7 +15,7 @@ defmodule TragarAi.Assist.Engine do
 
   alias TragarAi.Assist
   alias TragarAi.Assist.Validator
-  alias TragarAi.Connectors
+  alias TragarAi.Adapters
   alias TragarAi.CoreAI
 
   require Logger
@@ -51,7 +51,7 @@ defmodule TragarAi.Assist.Engine do
   end
 
   defp fetch_and_phrase(question, intent, entities, context) do
-    case Connectors.fetch(intent, entities) do
+    case Adapters.fetch(intent, entities) do
       {:ok, facts} ->
         {:ok, draft} = CoreAI.phrase(intent, facts)
 
@@ -129,7 +129,7 @@ defmodule TragarAi.Assist.Engine do
   defp source_name(nil), do: nil
 
   defp source_name(intent) do
-    case Connectors.source_for(intent) do
+    case Adapters.adapter_for(intent) do
       nil -> nil
       source -> source.name()
     end

@@ -95,24 +95,26 @@ defmodule TragarAi.FreightTest do
   end
 
   describe "Cache" do
-    test "fetch_shipment caches the waybill as a Shipment resource" do
-      assert {:ok, %{"waybill" => wb}} = Cache.fetch_shipment("WB7")
-      assert wb["status_description"] == "In transit"
+    test "shipment/1 caches a domain Shipment with provenance" do
+      assert {:ok, domain} = Cache.shipment("WB7")
+      assert domain["status"] == "In transit"
 
       assert {:ok, shipment} = Logistics.get_shipment_by_waybill("WB7")
       assert shipment.account_reference == "ACC9"
-      assert shipment.status_description == "In transit"
+      assert shipment.status == "In transit"
+      assert shipment.sources == ["FreightWare"]
+      assert Map.has_key?(shipment.source_data, "FreightWare")
     end
 
     test "second fetch is served from the cache (no live call needed)" do
-      assert {:ok, _} = Cache.fetch_shipment("WB7")
+      assert {:ok, _} = Cache.shipment("WB7")
 
       # Replace the stub so any live call errors; fresh cache hit should still succeed.
       Req.Test.stub(TragarAi.Dovetail.Client, fn conn ->
         conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{})
       end)
 
-      assert {:ok, %{"waybill" => wb}} = Cache.fetch_shipment("WB7")
+      assert {:ok, wb} = Cache.shipment("WB7")
       assert wb["waybill_number"] == "WB7"
     end
   end
