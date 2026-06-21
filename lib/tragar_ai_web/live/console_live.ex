@@ -22,7 +22,8 @@ defmodule TragarAiWeb.ConsoleLive do
   def mount(_params, _session, socket) do
     {:ok,
      socket
-     |> assign(question: "", waybill: "", ticket_id: "", account: "", agent: "")
+     |> assign(question: "", agent: "")
+     |> assign(messages: [], frame: %{intent: nil, entities: %{}})
      |> assign(interaction: nil, reply: false, demo: true)
      |> assign(model: TragarAi.CoreAI.info())
      |> assign(right_tab: "recents", detail: nil, detail_title: nil)
@@ -33,69 +34,38 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # ── Prompt (centre) ─────────────────────────────────────────────────────────
 
+  # A chat turn: the AI keeps clarifying (carrying the frame) until it resolves
+  # the intent, or the user ends the chat.
   @impl true
   def handle_event("ask", params, socket) do
-    question = String.trim(params["question"] || "")
-    demo = params["demo"] == "true"
+    text = String.trim(params["question"] || "")
 
-    if question == "" do
-      {:noreply, put_flash(socket, :error, "Enter a question first.")}
+    socket =
+      assign(socket,
+        demo: params["demo"] == "true",
+        agent: params["agent"] || socket.assigns.agent
+      )
+
+    if text == "" do
+      {:noreply, put_flash(socket, :error, "Type a message first.")}
     else
-      entities = entities_from(params)
-      entities = if demo, do: resolve_demo_entities(question, entities), else: entities
-      context = %{agent: blank_to_nil(params["agent"]), entities: entities, demo: demo}
-
-      {:ok, interaction} = Engine.answer(question, context)
-
-      {:noreply,
-       socket
-       |> assign(
-         interaction: interaction,
-         reply: false,
-         demo: demo,
-         question: question,
-         waybill: params["waybill"] || "",
-         ticket_id: params["ticket_id"] || "",
-         account: params["account"] || "",
-         agent: params["agent"] || ""
-       )
-       |> load_history()}
+      {:noreply, converse(socket, text, false)}
     end
   end
 
+  # Run a demo query as a fresh conversation seeded with its entities.
   def handle_event("run_sample", %{"idx" => idx}, socket) do
     entry = Enum.at(TragarAi.Demo.catalog(), String.to_integer(idx))
-    {:ok, interaction} = Engine.answer(entry.question, %{demo: true, entities: entry.entities})
 
-    {:noreply,
-     socket
-     |> assign(
-       interaction: interaction,
-       reply: false,
-       demo: true,
-       question: entry.question,
-       waybill: entry.entities[:waybill] || "",
-       ticket_id: entry.entities[:ticket_id] || "",
-       account: entry.entities[:account] || ""
-     )
-     |> load_history()}
+    socket
+    |> reset_chat_state()
+    |> assign(frame: %{intent: nil, entities: entry.entities}, demo: true)
+    |> converse(entry.question, false)
+    |> then(&{:noreply, &1})
   end
 
-  # Editing the prompt or its fields drops the previous result so a stale answer
-  # never lingers; the user re-runs with Query (or Enter).
-  def handle_event("prompt_changed", params, socket) do
-    {:noreply,
-     assign(socket,
-       question: params["question"] || "",
-       waybill: params["waybill"] || "",
-       ticket_id: params["ticket_id"] || "",
-       account: params["account"] || "",
-       agent: params["agent"] || socket.assigns.agent,
-       demo: params["demo"] == "true",
-       interaction: nil,
-       reply: false
-     )}
-  end
+  def handle_event("reset_chat", _params, socket),
+    do: {:noreply, reset_chat_state(socket)}
 
   # Reveal the reply composer for the customer-email use case.
   def handle_event("draft_reply", _params, socket), do: {:noreply, assign(socket, reply: true)}
@@ -110,13 +80,13 @@ defmodule TragarAiWeb.ConsoleLive do
     {:noreply,
      socket
      |> put_flash(:info, "Answer relayed and logged.")
-     |> reset_question()
+     |> reset_chat_state()
      |> load_history()}
   end
 
   def handle_event("discard", _params, socket) do
     {:ok, _} = Assist.discard_interaction(socket.assigns.interaction, %{})
-    {:noreply, socket |> reset_question() |> load_history()}
+    {:noreply, socket |> reset_chat_state() |> load_history()}
   end
 
   def handle_event("seed_demo", _params, socket) do
@@ -147,18 +117,12 @@ defmodule TragarAiWeb.ConsoleLive do
   def handle_event("prompt_ticket", %{"id" => id}, socket) do
     ticket = Enum.find(socket.assigns.tickets, &(&1.ticket_id == id))
     {question, entities} = ticket_prompt(ticket)
-    {:ok, interaction} = Engine.answer(question, %{demo: socket.assigns.demo, entities: entities})
 
-    {:noreply,
-     socket
-     |> assign(
-       interaction: interaction,
-       reply: true,
-       question: question,
-       ticket_id: id,
-       selected_ticket: nil
-     )
-     |> load_history()}
+    socket
+    |> reset_chat_state()
+    |> assign(frame: %{intent: nil, entities: entities}, selected_ticket: nil)
+    |> converse(question, true)
+    |> then(&{:noreply, &1})
   end
 
   # ── Right panel ─────────────────────────────────────────────────────────────
@@ -204,9 +168,7 @@ defmodule TragarAiWeb.ConsoleLive do
         <.tickets_pane tickets={@tickets} ticket_sort={@ticket_sort} demo={@demo} />
         <.centre
           question={@question}
-          waybill={@waybill}
-          ticket_id={@ticket_id}
-          account={@account}
+          messages={@messages}
           agent={@agent}
           demo={@demo}
           interaction={@interaction}
@@ -354,27 +316,44 @@ defmodule TragarAiWeb.ConsoleLive do
   defp centre(assigns) do
     ~H"""
     <main class="space-y-4">
-      <form phx-submit="ask" phx-change="prompt_changed" class="space-y-3">
+      <div
+        :if={@messages != []}
+        class="space-y-2 max-h-[40vh] overflow-y-auto rounded-lg border border-base-300 p-3"
+      >
+        <div :for={m <- @messages} class={chat_row(m.role)}>
+          <div class={chat_bubble(m)}>
+            <div class="text-[10px] uppercase tracking-wide opacity-60">
+              {if m.role == :user, do: "You", else: "Tragar AI"}
+            </div>
+            {m.text}
+          </div>
+        </div>
+      </div>
+
+      <form phx-submit="ask" class="space-y-2">
         <textarea
           name="question"
-          rows="3"
+          rows="2"
           data-drop
           class="textarea textarea-bordered w-full"
-          placeholder="Query mode — retrieve details from any source (e.g. Where is load 4821? · Quote 7012 · Balance on ACC1001)"
+          placeholder="Ask Tragar AI — e.g. “Where is load 4821?”, “an invoice”, then “ACC1001”…"
         >{@question}</textarea>
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <input name="waybill" value={@waybill} placeholder="Waybill" class="input input-bordered" />
-          <input
-            name="ticket_id"
-            value={@ticket_id}
-            placeholder="Ticket #"
-            class="input input-bordered"
-          />
-          <input name="account" value={@account} placeholder="Account" class="input input-bordered" />
-          <input name="agent" value={@agent} placeholder="Your name" class="input input-bordered" />
-        </div>
         <div class="flex flex-wrap items-center gap-3">
-          <button type="submit" class="btn btn-primary">Query</button>
+          <button type="submit" class="btn btn-primary">Send</button>
+          <button
+            :if={@messages != []}
+            type="button"
+            phx-click="reset_chat"
+            class="btn btn-ghost btn-sm"
+          >
+            End chat
+          </button>
+          <input
+            name="agent"
+            value={@agent}
+            placeholder="Your name"
+            class="input input-bordered input-sm w-32"
+          />
           <label class="flex items-center gap-2 text-sm cursor-pointer">
             <input
               type="checkbox"
@@ -413,13 +392,6 @@ defmodule TragarAiWeb.ConsoleLive do
           >
             View {pe.label} details →
           </button>
-        </div>
-
-        <div
-          :if={@interaction.draft_answer && !@reply}
-          class={"rounded-md px-3 py-2 text-sm " <> answer_tone(@interaction)}
-        >
-          <span class="font-medium">Tragar AI:</span> {@interaction.draft_answer}
         </div>
 
         <%= if (fields = surfaced_fields(@interaction)) != [] do %>
@@ -695,11 +667,11 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  defp ticket_prompt(%{waybill_reference: wb} = t) when is_binary(wb) and wb != "",
-    do: {"Reply to ticket ##{t.ticket_id}: #{t.subject}", %{waybill: wb}}
+  defp ticket_prompt(%{waybill_reference: wb}) when is_binary(wb) and wb != "",
+    do: {"Where is waybill #{wb}?", %{waybill: wb}}
 
   defp ticket_prompt(t),
-    do: {"Reply to ticket ##{t.ticket_id}: #{t.subject}", %{ticket_id: t.ticket_id}}
+    do: {"Show ticket #{t.ticket_id}", %{ticket_id: t.ticket_id}}
 
   defp load_detail(socket, type, key) do
     case fetch_detail(type, key, socket.assigns.demo) do
@@ -791,30 +763,81 @@ defmodule TragarAiWeb.ConsoleLive do
 
   defp primary_entity(_), do: nil
 
-  defp reset_question(socket) do
+  # ── Conversation ─────────────────────────────────────────────────────────────
+
+  # One chat turn: interpret in the running frame, validate+fetch+phrase or
+  # clarify, accumulate the frame, and append the user + AI messages.
+  defp converse(socket, text, reply?) do
+    frame = socket.assigns.frame
+
+    base =
+      if socket.assigns.demo,
+        do: resolve_demo_entities(text, frame.entities),
+        else: frame.entities
+
+    context = %{
+      demo: socket.assigns.demo,
+      agent: blank_to_nil(socket.assigns.agent),
+      entities: base,
+      intent: frame.intent
+    }
+
+    {:ok, interaction} = Engine.answer(text, context)
+    resolved? = interaction.status == :drafted
+
+    new_frame = %{
+      intent: carry_intent(interaction, frame.intent),
+      entities: Map.merge(base, atomize_entities(interaction.entities))
+    }
+
+    messages =
+      socket.assigns.messages ++
+        [
+          %{role: :user, text: text},
+          %{role: :ai, text: interaction.draft_answer, resolved: resolved?}
+        ]
+
+    socket
+    |> assign(
+      messages: messages,
+      frame: new_frame,
+      question: "",
+      interaction: if(resolved?, do: interaction, else: nil),
+      reply: resolved? and reply?
+    )
+    |> load_history()
+  end
+
+  defp reset_chat_state(socket) do
     assign(socket,
+      messages: [],
+      frame: %{intent: nil, entities: %{}},
       interaction: nil,
       reply: false,
-      question: "",
-      waybill: "",
-      ticket_id: "",
-      account: ""
+      question: ""
     )
   end
 
-  defp entities_from(params) do
-    %{}
-    |> put_entity(:waybill, params["waybill"])
-    |> put_entity(:ticket_id, params["ticket_id"])
-    |> put_entity(:account, params["account"])
+  defp carry_intent(%{intent: intent}, _prev) when is_binary(intent) do
+    String.to_existing_atom(intent)
+  rescue
+    ArgumentError -> nil
   end
 
-  defp put_entity(acc, key, value) do
-    case blank_to_nil(value) do
-      nil -> acc
-      v -> Map.put(acc, key, v)
-    end
+  defp carry_intent(_interaction, prev), do: prev
+
+  @entity_atoms %{
+    "waybill" => :waybill,
+    "account" => :account,
+    "ticket_id" => :ticket_id,
+    "quote" => :quote
+  }
+
+  defp atomize_entities(entities) when is_map(entities) do
+    for {k, v} <- entities, key = @entity_atoms[to_string(k)], into: %{}, do: {key, v}
   end
+
+  defp atomize_entities(_), do: %{}
 
   defp blank_to_nil(nil), do: nil
 
@@ -947,9 +970,18 @@ defmodule TragarAiWeb.ConsoleLive do
 
   defp humanize_error(err), do: err |> String.replace(":", ": ") |> String.replace("_", " ")
 
-  # The AI message box tone: a failed interaction is the AI prompting back.
-  defp answer_tone(%{status: :failed}), do: "bg-warning/15 text-warning-content"
-  defp answer_tone(_), do: "bg-base-200"
+  defp chat_row(:user), do: "flex justify-end"
+  defp chat_row(_), do: "flex justify-start"
+
+  defp chat_bubble(%{role: :user}),
+    do: "max-w-[85%] rounded-lg bg-primary text-primary-content px-3 py-2 text-sm"
+
+  # An unresolved AI turn is a prompt-back (amber); a resolved one is the answer.
+  defp chat_bubble(%{resolved: false}),
+    do: "max-w-[85%] rounded-lg bg-warning/15 px-3 py-2 text-sm"
+
+  defp chat_bubble(_),
+    do: "max-w-[85%] rounded-lg bg-base-200 px-3 py-2 text-sm"
 
   defp call_class("source", false), do: "badge-error"
   defp call_class("source", _), do: "badge-info"

@@ -87,25 +87,24 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "Acme Distributors"
   end
 
-  test "editing the prompt clears the previous result", %{conn: conn} do
+  test "a clarifying chat resolves the intent across turns", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
+    # Turn 1: invoice intent but no account → the AI asks back.
     html =
       view
-      |> form("form[phx-submit=ask]", %{question: "Where is load 4821?", demo: "true"})
+      |> form("form[phx-submit=ask]", %{question: "Is there an invoice?", demo: "true"})
       |> render_submit()
 
-    # The result (and its AI-steps panel) is on screen.
-    assert html =~ "In transit"
-    assert html =~ "AI steps"
+    assert html =~ "account number"
 
+    # Turn 2: supply the account → the carried intent now resolves.
     html =
       view
-      |> form("form[phx-submit=ask]", %{question: "Where is load 4990?", demo: "true"})
-      |> render_change()
+      |> form("form[phx-submit=ask]", %{question: "ACC1001", demo: "true"})
+      |> render_submit()
 
-    # Editing the prompt drops the previous result.
-    refute html =~ "AI steps"
+    assert html =~ "INV-55012"
   end
 
   test "selecting a ticket and drafting a reply enters reply mode", %{conn: conn} do

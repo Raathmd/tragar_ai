@@ -29,13 +29,13 @@ defmodule TragarAi.Assist.Engine do
     case CoreAI.interpret(question, context) do
       {:ok, request} ->
         entities = merge_entities(request.entities, context)
+        # Carry the conversation's intent when this turn only adds an entity.
+        intent = effective_intent(request.intent, context)
 
-        Logger.info(
-          "[assist] interpret #{inspect(question)} -> #{request.intent} #{inspect(entities)}"
-        )
+        Logger.info("[assist] interpret #{inspect(question)} -> #{intent} #{inspect(entities)}")
 
-        log = [interpret_entry(question, request.intent, entities)]
-        process(question, %{request | entities: entities}, context, log)
+        log = [interpret_entry(question, intent, entities)]
+        process(question, %{request | intent: intent, entities: entities}, context, log)
 
       {:error, reason} ->
         Logger.warning("[assist] interpret failed: #{inspect(reason)}")
@@ -218,6 +218,10 @@ defmodule TragarAi.Assist.Engine do
   defp merge_entities(model_entities, context) do
     Map.merge(model_entities || %{}, Map.get(context, :entities, %{}))
   end
+
+  # In a conversation, a turn that only supplies an entity keeps the prior intent.
+  defp effective_intent(:unknown, context), do: Map.get(context, :intent) || :unknown
+  defp effective_intent(intent, _context), do: intent
 
   defp stringify(entities) when is_map(entities) do
     Map.new(entities, fn {k, v} -> {to_string(k), v} end)

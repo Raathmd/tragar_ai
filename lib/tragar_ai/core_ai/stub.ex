@@ -8,6 +8,7 @@ defmodule TragarAi.CoreAI.Stub do
 
   @waybill_re ~r/\b(?:load|waybill|wb|consignment)?\s*#?\s*(\d{4,})\b/i
   @account_re ~r/\b(?:account|acc|customer)\s*#?\s*([A-Z0-9]{3,})\b/i
+  @acc_code_re ~r/\b(ACC\d{3,})\b/i
   @quote_re ~r/\bquote\s*#?\s*(\d{3,})\b/i
 
   @doc false
@@ -64,7 +65,7 @@ defmodule TragarAi.CoreAI.Stub do
   defp extract_entities(question) do
     %{}
     |> put_match(:waybill, Regex.run(@waybill_re, question))
-    |> put_match(:account, Regex.run(@account_re, question))
+    |> put_match(:account, Regex.run(@account_re, question) || Regex.run(@acc_code_re, question))
     |> put_match(:quote, Regex.run(@quote_re, question))
   end
 
