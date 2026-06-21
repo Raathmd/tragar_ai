@@ -103,7 +103,12 @@ defmodule TragarAiWeb.ConsoleLive do
         <button type="submit" class="btn btn-primary">Ask</button>
       </form>
 
-      <section :if={@interaction} class="rounded-lg border border-base-300 p-4 space-y-4">
+      <section
+        :if={@interaction}
+        id="resource-panel"
+        phx-hook=".Composer"
+        class="rounded-lg border border-base-300 p-4 space-y-4"
+      >
         <div class="flex items-center gap-2 text-sm">
           <span class={"badge " <> status_class(@interaction.status)}>{@interaction.status}</span>
           <span :if={@interaction.intent} class="badge badge-ghost">{@interaction.intent}</span>
@@ -116,20 +121,92 @@ defmodule TragarAiWeb.ConsoleLive do
           Could not complete automatically: {@interaction.error}
         </div>
 
-        <div :if={map_size(@interaction.facts || %{}) > 0}>
-          <h3 class="text-sm font-medium mb-1">Source facts (read-only)</h3>
-          <pre class="bg-base-200 rounded p-3 text-xs overflow-x-auto">{facts_text(@interaction.facts)}</pre>
-        </div>
+        <%= if (fields = surfaced_fields(@interaction)) != [] do %>
+          <div>
+            <h3 class="text-sm font-medium mb-2">
+              {@interaction.source || "Source"} data — drag or click a field into your reply
+            </h3>
+            <div class="flex flex-wrap gap-2">
+              <button
+                :for={f <- fields}
+                type="button"
+                draggable="true"
+                data-snippet={f.snippet}
+                class="cursor-grab active:cursor-grabbing rounded-md border border-base-300 bg-base-200 px-2.5 py-1.5 text-left hover:border-primary"
+                title="Drag into the reply, or click to insert"
+              >
+                <span class="block text-[10px] uppercase tracking-wide text-base-content/50">
+                  {f.label}
+                </span>
+                <span class="block text-sm">{f.value}</span>
+              </button>
+            </div>
+          </div>
+        <% end %>
 
         <form phx-submit="relay" class="space-y-3">
           <input type="hidden" name="agent" value={@agent} />
-          <h3 class="text-sm font-medium">Draft answer — review &amp; edit before relaying</h3>
-          <textarea name="final_answer" rows="5" class="textarea textarea-bordered w-full">{@interaction.draft_answer}</textarea>
+          <h3 class="text-sm font-medium">Draft answer — drop fields in, edit, then relay</h3>
+          <textarea
+            name="final_answer"
+            rows="6"
+            class="textarea textarea-bordered w-full"
+            placeholder="Drag fields above into here, or type your reply…"
+          >{@interaction.draft_answer}</textarea>
           <div class="flex gap-2">
             <button type="submit" class="btn btn-primary">Relay to customer</button>
             <button type="button" phx-click="discard" class="btn btn-ghost">Discard</button>
           </div>
         </form>
+
+        <details class="text-xs text-base-content/60">
+          <summary class="cursor-pointer">Raw source payload</summary>
+          <pre class="bg-base-200 rounded p-3 mt-2 overflow-x-auto">{facts_text(@interaction.facts)}</pre>
+        </details>
+
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".Composer">
+          export default {
+            mounted() { this.bind() },
+            updated() { this.bind() },
+            bind() {
+              const el = this.el
+              const textarea = () => el.querySelector("textarea[name=final_answer]")
+
+              el.addEventListener("dragstart", (e) => {
+                const chip = e.target.closest("[data-snippet]")
+                if (chip) e.dataTransfer.setData("text/plain", chip.getAttribute("data-snippet"))
+              })
+
+              el.addEventListener("click", (e) => {
+                const chip = e.target.closest("[data-snippet]")
+                const ta = textarea()
+                if (chip && ta) this.insert(ta, chip.getAttribute("data-snippet"))
+              })
+
+              const ta = textarea()
+              if (ta && !ta.dataset.dropBound) {
+                ta.dataset.dropBound = "1"
+                ta.addEventListener("dragover", (e) => e.preventDefault())
+                ta.addEventListener("drop", (e) => {
+                  e.preventDefault()
+                  this.insert(ta, e.dataTransfer.getData("text/plain"))
+                })
+              }
+            },
+            insert(ta, text) {
+              if (!text) return
+              const start = ta.selectionStart ?? ta.value.length
+              const before = ta.value.slice(0, start)
+              const after = ta.value.slice(start)
+              const prefix = before && !before.endsWith("\n") ? "\n" : ""
+              const piece = prefix + text
+              ta.value = before + piece + after
+              ta.focus()
+              const pos = (before + piece).length
+              ta.setSelectionRange(pos, pos)
+            }
+          }
+        </script>
       </section>
 
       <section>
@@ -184,6 +261,58 @@ defmodule TragarAiWeb.ConsoleLive do
   defp blank_to_nil(value), do: value
 
   defp facts_text(facts), do: Jason.encode!(facts, pretty: true)
+
+  # Flatten the resource's facts into draggable {label, value, snippet} fields.
+  defp surfaced_fields(%{facts: facts}) when is_map(facts) do
+    scalars =
+      for {k, v} <- facts, k not in ~w(events last_event pod waybill_number), scalar?(v) do
+        field(k, v)
+      end
+
+    id_field =
+      if facts["waybill_number"], do: [field("waybill_number", facts["waybill_number"])], else: []
+
+    id_field ++ scalars ++ event_field(facts["last_event"]) ++ pod_field(facts["pod"])
+  end
+
+  defp surfaced_fields(_), do: []
+
+  defp scalar?(v), do: is_binary(v) or is_number(v) or is_boolean(v)
+
+  defp field(key, value) do
+    label = humanize(key)
+    %{label: label, value: to_string(value), snippet: "#{label}: #{value}"}
+  end
+
+  defp event_field(%{} = e) do
+    text =
+      [e["event_description"] || e["description"], e["event_date"] || e["date"]]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" — ")
+
+    if text == "",
+      do: [],
+      else: [%{label: "Last update", value: text, snippet: "Latest update: #{text}"}]
+  end
+
+  defp event_field(_), do: []
+
+  defp pod_field(%{} = pod) do
+    text =
+      [pod["receiver"] && "received by #{pod["receiver"]}", pod["date"] && "on #{pod["date"]}"]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+
+    if text == "",
+      do: [],
+      else: [%{label: "Proof of delivery", value: text, snippet: "Proof of delivery: #{text}"}]
+  end
+
+  defp pod_field(_), do: []
+
+  defp humanize(key) do
+    key |> to_string() |> String.replace("_", " ") |> String.capitalize()
+  end
 
   defp status_class(:drafted), do: "badge-info"
   defp status_class(:relayed), do: "badge-success"
