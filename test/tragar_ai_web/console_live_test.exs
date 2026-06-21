@@ -50,8 +50,8 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "In transit"
     assert html =~ "FreightWare"
 
-    # Query mode shows details only; reveal the reply box (customer-email use case).
-    view |> element("button", "Draft customer reply") |> render_click()
+    # Query mode shows details only; reveal the reply box (the agent writes it).
+    view |> element("button", "Write a reply") |> render_click()
 
     html =
       view

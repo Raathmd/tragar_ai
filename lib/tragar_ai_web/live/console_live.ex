@@ -437,26 +437,26 @@ defmodule TragarAiWeb.ConsoleLive do
           <form phx-submit="relay" class="space-y-3">
             <input type="hidden" name="agent" value={@agent} />
             <h3 class="text-sm font-medium">
-              Draft reply to customer — drop fields in, edit, then relay
+              Your reply to the customer — write whatever you want; the AI's draft is only a starting point
             </h3>
             <textarea
               name="final_answer"
               rows="6"
               data-drop
               class="textarea textarea-bordered w-full"
-              placeholder="Drag fields above into here, or type your reply…"
-            >{@interaction.draft_answer}</textarea>
+              placeholder="Type your reply… (drag fields above in, or ignore the AI entirely)"
+            >{reply_seed(@interaction)}</textarea>
             <div class="flex gap-2">
               <button type="submit" class="btn btn-primary">Relay to customer</button>
               <button type="button" phx-click="discard" class="btn btn-ghost">Discard</button>
             </div>
           </form>
         <% else %>
-          <div :if={@interaction.status == :drafted} class="flex items-center gap-2">
+          <div :if={@interaction} class="flex items-center gap-2">
             <button type="button" phx-click="draft_reply" class="btn btn-outline btn-sm">
-              Draft customer reply
+              Write a reply
             </button>
-            <span class="text-xs text-base-content/50">for the email use case</span>
+            <span class="text-xs text-base-content/50">you write it; the AI just helps</span>
           </div>
         <% end %>
 
@@ -819,11 +819,17 @@ defmodule TragarAiWeb.ConsoleLive do
       messages: messages,
       frame: new_frame,
       question: "",
-      interaction: if(resolved?, do: interaction, else: nil),
-      reply: resolved? and reply?
+      # Keep the interaction (even if unresolved) so the agent can always reply.
+      interaction: interaction,
+      reply: reply?
     )
     |> load_history()
   end
+
+  # The composer starts from the AI's answer only when it actually answered;
+  # never seed it with a clarify/error message.
+  defp reply_seed(%{status: :drafted, draft_answer: draft}), do: draft
+  defp reply_seed(_), do: ""
 
   # Turn a failed interpretation into actionable next steps: queries the schema
   # can answer, grounded in whatever entity the AI did extract.
