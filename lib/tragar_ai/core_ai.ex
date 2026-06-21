@@ -56,6 +56,30 @@ defmodule TragarAi.CoreAI do
   def mode, do: Keyword.get(config(), :mode, :stub)
   defp config, do: Application.get_env(:tragar_ai, __MODULE__, [])
 
+  @doc """
+  Describe the model currently doing interpret/phrase, for display:
+  `%{mode, label, model, provider, base_url}`.
+  """
+  @spec info() :: map()
+  def info do
+    cfg = config()
+    mode = mode()
+    base = Keyword.get(cfg, :base_url)
+    model = Keyword.get(cfg, :model)
+
+    {provider, label} =
+      case mode do
+        :http ->
+          prov = if base && String.contains?(base, "11434"), do: "Ollama", else: "sidecar"
+          {prov, "#{model || "local model"} · #{prov}"}
+
+        _ ->
+          {"in-process", model || "Core AI stub (rule-based)"}
+      end
+
+    %{mode: mode, label: label, model: model, provider: provider, base_url: base}
+  end
+
   # ── HTTP (real sidecar) ─────────────────────────────────────────────────────
 
   defp http_interpret(question, context) do

@@ -45,6 +45,9 @@ config :tragar_ai, Oban,
 # the sidecar to use the real local model.
 config :tragar_ai, TragarAi.CoreAI,
   mode: :stub,
+  # Optional display name of the model (e.g. "qwen2.5:7b-instruct" or
+  # "Apple Foundation Models"); shown in the console. nil => derived label.
+  model: nil,
   base_url: "http://127.0.0.1:11434",
   receive_timeout: 30_000
 

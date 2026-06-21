@@ -24,6 +24,7 @@ defmodule TragarAiWeb.ConsoleLive do
      socket
      |> assign(question: "", waybill: "", ticket_id: "", account: "", agent: "")
      |> assign(interaction: nil, reply: false, demo: true)
+     |> assign(model: TragarAi.CoreAI.info())
      |> assign(right_tab: "recents", detail: nil, detail_title: nil)
      |> assign(selected_ticket: nil, ticket_sort: "fifo")
      |> load_history()
@@ -157,11 +158,22 @@ defmodule TragarAiWeb.ConsoleLive do
   def render(assigns) do
     ~H"""
     <div id="console" phx-hook=".DragDrop" class="p-4 lg:p-6 space-y-4">
-      <header>
-        <h1 class="text-2xl font-semibold">Tragar · Support Assist</h1>
-        <p class="text-sm text-base-content/70">
-          Surface facts from the source systems. Reply to a customer, or just look something up.
-        </p>
+      <header class="flex items-start justify-between gap-3">
+        <div>
+          <h1 class="text-2xl font-semibold">Tragar · Support Assist</h1>
+          <p class="text-sm text-base-content/70">
+            Surface facts from the source systems. Reply to a customer, or just look something up.
+          </p>
+        </div>
+        <div class="text-right shrink-0">
+          <div class="text-[11px] uppercase tracking-wide text-base-content/50">Core AI model</div>
+          <div class="flex items-center gap-1 justify-end">
+            <span class={"badge badge-sm " <> if(@model.mode == :http, do: "badge-success", else: "badge-ghost")}>
+              {@model.label}
+            </span>
+            <span class="badge badge-sm badge-outline">{@model.mode}</span>
+          </div>
+        </div>
       </header>
 
       <div class="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)_320px]">
@@ -175,6 +187,7 @@ defmodule TragarAiWeb.ConsoleLive do
           demo={@demo}
           interaction={@interaction}
           reply={@reply}
+          model={@model}
         />
         <.right_panel
           right_tab={@right_tab}
@@ -440,11 +453,17 @@ defmodule TragarAiWeb.ConsoleLive do
       </section>
 
       <section :if={@interaction} class="rounded-lg border border-base-300 bg-base-200/40 p-3">
-        <h3 class="text-xs font-medium uppercase tracking-wide text-base-content/60 mb-2">
-          AI steps · interpret → validate → fetch → phrase
-        </h3>
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-xs font-medium uppercase tracking-wide text-base-content/60">
+            AI steps · interpret → validate → fetch → phrase
+          </h3>
+          <span class="text-[11px] text-base-content/50">model: {@model.label}</span>
+        </div>
         <ol class="space-y-1.5">
-          <li :for={s <- loop_trace(@interaction)} class="flex items-start gap-2 text-xs">
+          <li
+            :for={s <- loop_trace(@interaction, @model.label)}
+            class="flex items-start gap-2 text-xs"
+          >
             <span class={"badge badge-xs mt-0.5 " <> step_class(s.status)}>{s.status}</span>
             <div class="min-w-0">
               <div class="font-medium">{s.label}</div>
@@ -796,7 +815,7 @@ defmodule TragarAiWeb.ConsoleLive do
   defp ticket_badge(_), do: "badge-ghost"
 
   # Build the interpret → validate → fetch → phrase trace from an interaction.
-  defp loop_trace(%{} = i) do
+  defp loop_trace(%{} = i, model) do
     err = to_string(i.error || "")
 
     {validate, fetch, phrase} =
@@ -811,14 +830,14 @@ defmodule TragarAiWeb.ConsoleLive do
     interpret = if String.starts_with?(err, "interpret"), do: :fail, else: :ok
 
     [
-      %{label: "Core AI · interpret", status: interpret, detail: trace_interpret(i)},
+      %{label: "Core AI · interpret · #{model}", status: interpret, detail: trace_interpret(i)},
       %{label: "Elixir · validate", status: validate, detail: trace_validate(validate, err)},
       %{label: "Fetch fact (read-only)", status: fetch, detail: trace_fetch(fetch, i, err)},
-      %{label: "Core AI · phrase", status: phrase, detail: trace_phrase(phrase, i)}
+      %{label: "Core AI · phrase · #{model}", status: phrase, detail: trace_phrase(phrase, i)}
     ]
   end
 
-  defp loop_trace(_), do: []
+  defp loop_trace(_, _), do: []
 
   defp validation_error?(e),
     do:

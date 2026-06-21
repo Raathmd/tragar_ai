@@ -63,6 +63,7 @@ if config_env() != :test do
   # and CORE_AI_URL to use a running local model.
   config :tragar_ai, TragarAi.CoreAI,
     mode: String.to_atom(System.get_env("CORE_AI_MODE") || "stub"),
+    model: System.get_env("CORE_AI_MODEL"),
     base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434"
 end
 
