@@ -699,13 +699,36 @@ defmodule TragarAiWeb.ConsoleLive do
     if Map.has_key?(entities, :account) do
       entities
     else
-      name = TragarAi.Demo.Fixtures.customer()["name"]
-      first = name |> String.split() |> List.first() |> String.downcase()
-
-      if String.contains?(String.downcase(question), first),
-        do: Map.put(entities, :account, TragarAi.Demo.Fixtures.account_reference()),
-        else: entities
+      case demo_account_for(String.downcase(question)) do
+        nil -> entities
+        acc -> Map.put(entities, :account, acc)
+      end
     end
+  end
+
+  # Map a customer name, invoice number, or waybill mentioned in the question to
+  # its account, so account-scoped intents (customer/invoice) resolve in demo.
+  defp demo_account_for(q) do
+    name =
+      TragarAi.Demo.Fixtures.customer()["name"]
+      |> String.split()
+      |> List.first()
+      |> String.downcase()
+
+    invoice = TragarAi.Demo.Fixtures.invoice()
+    invoice_no = String.downcase(invoice["invoice_number"])
+
+    cond do
+      String.contains?(q, name) -> TragarAi.Demo.Fixtures.account_reference()
+      String.contains?(q, invoice_no) -> invoice["account_reference"]
+      true -> waybill_account(q)
+    end
+  end
+
+  defp waybill_account(q) do
+    Enum.find_value(TragarAi.Demo.Fixtures.shipments(), fn {wb, s} ->
+      if String.contains?(q, wb), do: s["account_reference"]
+    end)
   end
 
   defp fetch_detail(type, key, demo) do

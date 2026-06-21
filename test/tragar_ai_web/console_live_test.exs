@@ -73,6 +73,20 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "Outstanding"
   end
 
+  test "customer lookup by invoice number resolves the account (demo)", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/console")
+
+    html =
+      view
+      |> form("form[phx-submit=ask]", %{
+        question: "Who is the customer on INV-55012?",
+        demo: "true"
+      })
+      |> render_submit()
+
+    assert html =~ "Acme Distributors"
+  end
+
   test "editing the prompt clears the previous result", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
