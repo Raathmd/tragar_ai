@@ -15,18 +15,34 @@ defmodule TragarAi.Assist.EngineTest do
           |> Plug.Conn.put_resp_header("x-freightware", "tok")
           |> Req.Test.json(%{"response" => %{}})
 
-        String.contains?(conn.request_path, "/waybills/4821") ->
+        String.contains?(conn.request_path, "/trackAndTrace") ->
           Req.Test.json(conn, %{
             "response" => %{
-              "waybillNumber" => "4821",
-              "statusDescription" => "In transit",
-              "consigneeName" => "Acme"
+              "esTrackAndTrace" => %{
+                "TrackAndTrace" => [
+                  %{"eventDescription" => "Departed JHB", "eventDate" => "2026-06-18"}
+                ]
+              }
             }
           })
 
-        String.contains?(conn.request_path, "/trackAndTrace") ->
+        # empty waybill list = not found
+        String.contains?(conn.request_path, "/waybills/0000") ->
+          Req.Test.json(conn, %{"response" => %{"esWaybills" => %{"Waybills" => []}}})
+
+        String.contains?(conn.request_path, "/waybills/4821") ->
           Req.Test.json(conn, %{
-            "response" => %{"events" => [%{"eventDescription" => "Departed JHB"}]}
+            "response" => %{
+              "esWaybills" => %{
+                "Waybills" => [
+                  %{
+                    "waybillNumber" => "4821",
+                    "statusDescription" => "In transit",
+                    "consigneeName" => "Acme"
+                  }
+                ]
+              }
+            }
           })
 
         true ->
@@ -64,6 +80,13 @@ defmodule TragarAi.Assist.EngineTest do
     assert {:ok, i} = Engine.answer("hello there")
     assert i.status == :failed
     assert i.error == "not_understood"
+  end
+
+  test "an unknown waybill fails safe as not_found" do
+    assert {:ok, i} = Engine.answer("where is 0000?")
+    assert i.status == :failed
+    assert i.error == "not_found"
+    assert i.draft_answer =~ "FreightWare"
   end
 
   test "relay marks the interaction relayed" do

@@ -14,13 +14,19 @@ defmodule TragarAiWeb.ConsoleLiveTest do
           |> Plug.Conn.put_resp_header("x-freightware", "tok")
           |> Req.Test.json(%{"response" => %{}})
 
-        String.contains?(conn.request_path, "/waybills/4821") ->
+        String.contains?(conn.request_path, "/trackAndTrace") ->
           Req.Test.json(conn, %{
-            "response" => %{"waybillNumber" => "4821", "statusDescription" => "In transit"}
+            "response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}
           })
 
-        String.contains?(conn.request_path, "/trackAndTrace") ->
-          Req.Test.json(conn, %{"response" => %{"events" => []}})
+        String.contains?(conn.request_path, "/waybills/4821") ->
+          Req.Test.json(conn, %{
+            "response" => %{
+              "esWaybills" => %{
+                "Waybills" => [%{"waybillNumber" => "4821", "statusDescription" => "In transit"}]
+              }
+            }
+          })
 
         true ->
           conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})

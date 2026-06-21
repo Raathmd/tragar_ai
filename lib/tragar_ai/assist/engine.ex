@@ -110,6 +110,12 @@ defmodule TragarAi.Assist.Engine do
   defp fetch_failure(:missing_waybill, _),
     do: [error: "missing_waybill", draft: "I need a waybill number to look that up."]
 
+  defp fetch_failure(:not_found, intent),
+    do: [
+      error: "not_found",
+      draft: "I couldn't find that in #{source_name(intent)} — please check the number."
+    ]
+
   defp fetch_failure(reason, intent),
     do: [
       error: inspect(reason),

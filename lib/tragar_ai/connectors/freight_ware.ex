@@ -2,6 +2,16 @@ defmodule TragarAi.Connectors.FreightWare do
   @moduledoc """
   FreightWare (Dovetail) read-only connector — load/consignment status, ETA,
   waybill lookup and proof-of-delivery. Wraps `TragarAi.Dovetail.Client`.
+
+  The response shapes mirror the live FreightWare V2 API (as used by the Rust
+  reference, `tragar_quote_dioxus`):
+
+    * waybill   → `response.esWaybills.Waybills[]`
+    * tracking  → `response.esTrackAndTrace.TrackAndTrace[]` (each event may
+      carry a `POD` with capitalised keys: `PODDate`, `PODImageURL`, …)
+
+  `Client` already strips the outer `response` envelope, so this module reads
+  from `esWaybills` / `esTrackAndTrace`.
   """
 
   @behaviour TragarAi.Connectors.Source
@@ -17,15 +27,23 @@ defmodule TragarAi.Connectors.FreightWare do
   @impl true
   def fetch(intent, %{waybill: waybill})
       when is_binary(waybill) and intent in [:load_status, :eta, :pod] do
-    with {:ok, waybill_data} <- Client.get_waybill(waybill),
-         {:ok, tracking} <- Client.track_and_trace(:waybills, waybill) do
-      {:ok, facts(waybill, waybill_data, tracking)}
+    with {:ok, waybill_resp} <- Client.get_waybill(waybill),
+         wb when wb != %{} <- extract_waybill(waybill_resp),
+         {:ok, tracking_resp} <- Client.track_and_trace(:waybills, waybill) do
+      {:ok, facts(waybill, wb, extract_events(tracking_resp))}
+    else
+      %{} -> {:error, :not_found}
+      {:error, _} = error -> error
     end
   end
 
   def fetch(:waybill_lookup, %{waybill: waybill}) when is_binary(waybill) do
-    with {:ok, waybill_data} <- Client.get_waybill(waybill) do
-      {:ok, facts(waybill, waybill_data, %{})}
+    with {:ok, waybill_resp} <- Client.get_waybill(waybill),
+         wb when wb != %{} <- extract_waybill(waybill_resp) do
+      {:ok, facts(waybill, wb, [])}
+    else
+      %{} -> {:error, :not_found}
+      {:error, _} = error -> error
     end
   end
 
@@ -36,56 +54,66 @@ defmodule TragarAi.Connectors.FreightWare do
 
   # ── Normalisation ───────────────────────────────────────────────────────────
 
-  defp facts(waybill, data, tracking) do
-    events = events(tracking)
+  defp facts(waybill_number, wb, events) do
+    normalized = Enum.map(events, &normalize_event/1)
 
     %{
-      "waybill_number" => dig(data, ["waybillNumber", "waybill_number"]) || waybill,
-      "status" =>
-        dig(data, ["statusDescription", "status_description"]) ||
-          dig(data, ["statusCode", "status_code"]),
-      "status_code" => dig(data, ["statusCode", "status_code"]),
-      "service_type" => dig(data, ["serviceType", "service_type"]),
-      "consignor" => dig(data, ["consignorName", "consignor_name"]),
-      "consignee" => dig(data, ["consigneeName", "consignee_name"]),
-      "eta" => dig(data, ["eta", "estimatedDelivery", "estimated_delivery"]),
-      "events" => events,
-      "last_event" => List.first(events),
-      "pod" => pod(tracking, events)
+      "waybill_number" => dig(wb, "waybillNumber") || waybill_number,
+      "status" => dig(wb, "statusDescription") || dig(wb, "statusCode"),
+      "status_code" => dig(wb, "statusCode"),
+      "service_type" => dig(wb, "serviceType"),
+      "service_type_description" => dig(wb, "serviceTypeDescription"),
+      "consignor" => dig(wb, "consignorName"),
+      "consignor_city" => dig(wb, "consignorCity"),
+      "consignee" => dig(wb, "consigneeName"),
+      "consignee_city" => dig(wb, "consigneeCity"),
+      "number_of_items" => dig(wb, "numberOfItems"),
+      "waybill_date" => dig(wb, "waybillDate"),
+      "eta" => dig(wb, "estimatedDelivery") || dig(wb, "deliveryDate"),
+      "events" => normalized,
+      "last_event" => List.first(normalized),
+      "pod" => extract_pod(events)
     }
     |> compact()
   end
 
-  defp events(tracking) do
-    tracking
-    |> extract_events()
-    |> Enum.map(fn e ->
-      %{
-        "code" => dig(e, ["eventCode", "event_code"]),
-        "date" => dig(e, ["eventDate", "event_date"]),
-        "time" => dig(e, ["eventTime", "event_time"]),
-        "description" => dig(e, ["eventDescription", "event_description"]),
-        "branch" => dig(e, ["branchCode", "branch_code"])
-      }
-      |> compact()
-    end)
-  end
+  # A single waybill comes back inside esWaybills.Waybills; tolerate a flat map too.
+  defp extract_waybill(%{"esWaybills" => %{"Waybills" => [wb | _]}}) when is_map(wb), do: wb
+  defp extract_waybill(%{"esWaybills" => %{"Waybills" => []}}), do: %{}
+  defp extract_waybill(%{"waybillNumber" => _} = wb), do: wb
+  defp extract_waybill(_), do: %{}
 
-  defp extract_events(%{"events" => e}) when is_list(e), do: e
-  defp extract_events(%{"trackEvents" => e}) when is_list(e), do: e
-  defp extract_events(%{"trackingEvents" => e}) when is_list(e), do: e
-  defp extract_events(e) when is_list(e), do: e
+  defp extract_events(%{"esTrackAndTrace" => %{"TrackAndTrace" => events}}) when is_list(events),
+    do: events
+
+  defp extract_events(%{"TrackAndTrace" => events}) when is_list(events), do: events
+  defp extract_events(%{"events" => events}) when is_list(events), do: events
+  defp extract_events(events) when is_list(events), do: events
   defp extract_events(_), do: []
 
-  defp pod(tracking, events) do
-    raw = get_in(tracking, ["pod"]) || Enum.find_value(events, fn e -> e["pod"] end)
+  defp normalize_event(e) do
+    %{
+      "code" => dig(e, "eventCode"),
+      "date" => dig(e, "eventDate"),
+      "time" => dig(e, "eventTime"),
+      "description" => dig(e, "eventDescription"),
+      "branch" => dig(e, "branchCode")
+    }
+    |> compact()
+  end
 
-    case raw do
+  # POD is nested on a delivery event under the capitalised "POD" key.
+  defp extract_pod(events) do
+    case Enum.find_value(events, fn e -> Map.get(e, "POD") || Map.get(e, "pod") end) do
       pod when is_map(pod) ->
         %{
-          "date" => dig(pod, ["podDate", "pod_date"]),
-          "receiver" => dig(pod, ["receiverName", "receiver_name"]),
-          "image_url" => dig(pod, ["podImageUrl", "pod_image_url"])
+          "date" => dig(pod, "PODDate"),
+          "time" => dig(pod, "PODTime"),
+          "receiver" => dig(pod, "receiverName"),
+          "parcels" => dig(pod, "numberofParcels"),
+          "image_url" => dig(pod, "PODImageURL"),
+          "grn_reference" => dig(pod, "GRNReference"),
+          "comments" => dig(pod, "comments")
         }
         |> compact()
 
@@ -94,7 +122,7 @@ defmodule TragarAi.Connectors.FreightWare do
     end
   end
 
-  defp dig(map, keys) when is_map(map), do: Enum.find_value(keys, fn k -> Map.get(map, k) end)
+  defp dig(map, key) when is_map(map), do: Map.get(map, key)
   defp dig(_, _), do: nil
 
   defp compact(map) do
