@@ -79,11 +79,19 @@ defmodule TragarAi.Dovetail.Client do
     end
   end
 
+  # FreightWare returns the session token in a header whose spelling varies
+  # ("x-freightware" and "xfreightware" have both been observed, and the
+  # hyphenated one can come back empty). Read the first non-empty value across
+  # the known spellings; an empty token is treated as a failure by login/0.
+  @token_headers ["x-freightware", "xfreightware"]
+
   defp token_from_headers(%Req.Response{} = resp) do
-    case Req.Response.get_header(resp, @auth_header) do
-      [token | _] when is_binary(token) and token != "" -> token
-      _ -> nil
-    end
+    Enum.find_value(@token_headers, fn header ->
+      case Req.Response.get_header(resp, header) do
+        [token | _] when is_binary(token) and token != "" -> token
+        _ -> nil
+      end
+    end)
   end
 
   # ── Quotes ──────────────────────────────────────────────────────────────────
