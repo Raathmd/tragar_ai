@@ -8,6 +8,7 @@ defmodule TragarAi.CoreAI.Stub do
 
   @waybill_re ~r/\b(?:load|waybill|wb|consignment)?\s*#?\s*(\d{4,})\b/i
   @account_re ~r/\b(?:account|acc|customer)\s*#?\s*([A-Z0-9]{3,})\b/i
+  @quote_re ~r/\bquote\s*#?\s*(\d{3,})\b/i
 
   @doc false
   def interpret(question, _context \\ %{}) do
@@ -19,6 +20,8 @@ defmodule TragarAi.CoreAI.Stub do
 
   defp classify(q, entities) do
     cond do
+      contains?(q, ["service type", "service types", "services available"]) -> :service_types
+      contains?(q, ["quote"]) -> :quote_lookup
       contains?(q, ["pod", "proof of delivery", "signed for", "who signed"]) -> :pod
       contains?(q, ["eta", "when will", "arrive", "how long"]) -> :eta
       contains?(q, ["stock", "pick", "pack", "in the warehouse", "on hand"]) -> :stock
@@ -36,6 +39,7 @@ defmodule TragarAi.CoreAI.Stub do
     %{}
     |> put_match(:waybill, Regex.run(@waybill_re, question))
     |> put_match(:account, Regex.run(@account_re, question))
+    |> put_match(:quote, Regex.run(@quote_re, question))
   end
 
   defp put_match(acc, _key, nil), do: acc
@@ -98,6 +102,8 @@ defmodule TragarAi.CoreAI.Stub do
 
   defp event_text(%{"description" => d, "date" => date}), do: "#{d} on #{date}"
   defp event_text(%{"description" => d}), do: d
+  defp event_text(%{"event_description" => d, "event_date" => date}), do: "#{d} on #{date}"
+  defp event_text(%{"event_description" => d}), do: d
   defp event_text(other), do: inspect(other)
 
   defp pod_when(%{"date" => date}) when is_binary(date), do: " on #{date}"

@@ -1,131 +1,89 @@
 defmodule TragarAi.Connectors.FreightWare do
   @moduledoc """
-  FreightWare (Dovetail) read-only connector — load/consignment status, ETA,
-  waybill lookup and proof-of-delivery. Wraps `TragarAi.Dovetail.Client`.
+  FreightWare (Dovetail) read-only connector for the support-assist loop.
 
-  The response shapes mirror the live FreightWare V2 API (as used by the Rust
-  reference, `tragar_quote_dioxus`):
-
-    * waybill   → `response.esWaybills.Waybills[]`
-    * tracking  → `response.esTrackAndTrace.TrackAndTrace[]` (each event may
-      carry a `POD` with capitalised keys: `PODDate`, `PODImageURL`, …)
-
-  `Client` already strips the outer `response` envelope, so this module reads
-  from `esWaybills` / `esTrackAndTrace`.
+  Shipment and quote reads go through `TragarAi.Logistics.Cache` (read-through,
+  backed by the `Shipment`/`Quote` Ash resources); reference data (service types)
+  goes live via `TragarAi.Freight`. Results are shaped into the flat `facts` map
+  the phraser expects.
   """
 
   @behaviour TragarAi.Connectors.Source
 
-  alias TragarAi.Dovetail.Client
+  alias TragarAi.Freight
+  alias TragarAi.Logistics.Cache
 
   @impl true
   def name, do: "FreightWare"
 
   @impl true
-  def intents, do: [:load_status, :eta, :waybill_lookup, :pod]
+  def intents,
+    do: [:load_status, :eta, :pod, :waybill_lookup, :track, :quote_lookup, :service_types]
 
   @impl true
+  def fetch(intent, entities)
+
   def fetch(intent, %{waybill: waybill})
       when is_binary(waybill) and intent in [:load_status, :eta, :pod] do
-    with {:ok, waybill_resp} <- Client.get_waybill(waybill),
-         wb when wb != %{} <- extract_waybill(waybill_resp),
-         {:ok, tracking_resp} <- Client.track_and_trace(:waybills, waybill) do
-      {:ok, facts(waybill, wb, extract_events(tracking_resp))}
-    else
-      %{} -> {:error, :not_found}
-      {:error, _} = error -> error
+    with {:ok, %{"waybill" => wb, "events" => events}} <- Cache.fetch_shipment(waybill) do
+      {:ok, shipment_facts(wb, events)}
     end
   end
 
   def fetch(:waybill_lookup, %{waybill: waybill}) when is_binary(waybill) do
-    with {:ok, waybill_resp} <- Client.get_waybill(waybill),
-         wb when wb != %{} <- extract_waybill(waybill_resp) do
-      {:ok, facts(waybill, wb, [])}
-    else
-      %{} -> {:error, :not_found}
-      {:error, _} = error -> error
+    with {:ok, %{"waybill" => wb}} <- Cache.fetch_shipment(waybill), do: {:ok, wb}
+  end
+
+  def fetch(:track, %{waybill: waybill}) when is_binary(waybill) do
+    with {:ok, %{"waybill" => wb, "events" => events}} <- Cache.fetch_shipment(waybill) do
+      {:ok,
+       %{
+         "waybill_number" => wb["waybill_number"] || waybill,
+         "events" => events,
+         "last_event" => List.first(events)
+       }}
     end
   end
 
-  def fetch(intent, _entities) when intent in [:load_status, :eta, :pod, :waybill_lookup],
-    do: {:error, :missing_waybill}
+  def fetch(:quote_lookup, %{quote: quote}) when is_binary(quote) do
+    with {:ok, q} when is_map(q) <- Cache.fetch_quote(quote), do: {:ok, q}
+  end
 
+  def fetch(:service_types, _entities) do
+    with {:ok, types} <- Freight.service_types(), do: {:ok, %{"service_types" => types}}
+  end
+
+  def fetch(intent, _entities)
+      when intent in [:load_status, :eta, :pod, :waybill_lookup, :track],
+      do: {:error, :missing_waybill}
+
+  def fetch(:quote_lookup, _), do: {:error, :missing_quote}
   def fetch(intent, _), do: {:error, {:unsupported_intent, intent}}
 
-  # ── Normalisation ───────────────────────────────────────────────────────────
+  # ── Shaping ─────────────────────────────────────────────────────────────────
 
-  defp facts(waybill_number, wb, events) do
-    normalized = Enum.map(events, &normalize_event/1)
-
+  defp shipment_facts(wb, events) do
     %{
-      "waybill_number" => dig(wb, "waybillNumber") || waybill_number,
-      "status" => dig(wb, "statusDescription") || dig(wb, "statusCode"),
-      "status_code" => dig(wb, "statusCode"),
-      "service_type" => dig(wb, "serviceType"),
-      "service_type_description" => dig(wb, "serviceTypeDescription"),
-      "consignor" => dig(wb, "consignorName"),
-      "consignor_city" => dig(wb, "consignorCity"),
-      "consignee" => dig(wb, "consigneeName"),
-      "consignee_city" => dig(wb, "consigneeCity"),
-      "number_of_items" => dig(wb, "numberOfItems"),
-      "waybill_date" => dig(wb, "waybillDate"),
-      "eta" => dig(wb, "estimatedDelivery") || dig(wb, "deliveryDate"),
-      "events" => normalized,
-      "last_event" => List.first(normalized),
-      "pod" => extract_pod(events)
+      "waybill_number" => wb["waybill_number"],
+      "status" => wb["status_description"] || wb["status_code"],
+      "status_code" => wb["status_code"],
+      "service_type" => wb["service_type"],
+      "consignor" => wb["consignor_name"],
+      "consignee" => wb["consignee_name"],
+      "consignee_city" => wb["consignee_city"],
+      "events" => events,
+      "last_event" => List.first(events),
+      "pod" => pod_from(events, wb)
     }
     |> compact()
   end
 
-  # A single waybill comes back inside esWaybills.Waybills; tolerate a flat map too.
-  defp extract_waybill(%{"esWaybills" => %{"Waybills" => [wb | _]}}) when is_map(wb), do: wb
-  defp extract_waybill(%{"esWaybills" => %{"Waybills" => []}}), do: %{}
-  defp extract_waybill(%{"waybillNumber" => _} = wb), do: wb
-  defp extract_waybill(_), do: %{}
-
-  defp extract_events(%{"esTrackAndTrace" => %{"TrackAndTrace" => events}}) when is_list(events),
-    do: events
-
-  defp extract_events(%{"TrackAndTrace" => events}) when is_list(events), do: events
-  defp extract_events(%{"events" => events}) when is_list(events), do: events
-  defp extract_events(events) when is_list(events), do: events
-  defp extract_events(_), do: []
-
-  defp normalize_event(e) do
-    %{
-      "code" => dig(e, "eventCode"),
-      "date" => dig(e, "eventDate"),
-      "time" => dig(e, "eventTime"),
-      "description" => dig(e, "eventDescription"),
-      "branch" => dig(e, "branchCode")
-    }
-    |> compact()
-  end
-
-  # POD is nested on a delivery event under the capitalised "POD" key.
-  defp extract_pod(events) do
-    case Enum.find_value(events, fn e -> Map.get(e, "POD") || Map.get(e, "pod") end) do
-      pod when is_map(pod) ->
-        %{
-          "date" => dig(pod, "PODDate"),
-          "time" => dig(pod, "PODTime"),
-          "receiver" => dig(pod, "receiverName"),
-          "parcels" => dig(pod, "numberofParcels"),
-          "image_url" => dig(pod, "PODImageURL"),
-          "grn_reference" => dig(pod, "GRNReference"),
-          "comments" => dig(pod, "comments")
-        }
-        |> compact()
-
-      _ ->
-        nil
+  defp pod_from(events, wb) do
+    case Enum.find_value(events, & &1["pod"]) do
+      pod when is_map(pod) -> pod
+      _ -> if wb["pod_image_url"], do: %{"image_url" => wb["pod_image_url"]}, else: nil
     end
   end
 
-  defp dig(map, key) when is_map(map), do: Map.get(map, key)
-  defp dig(_, _), do: nil
-
-  defp compact(map) do
-    map |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end) |> Map.new()
-  end
+  defp compact(map), do: for({k, v} <- map, v != nil and v != "", into: %{}, do: {k, v})
 end

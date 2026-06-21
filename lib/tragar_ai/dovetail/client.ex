@@ -94,59 +94,9 @@ defmodule TragarAi.Dovetail.Client do
     end)
   end
 
-  # ── Quotes ──────────────────────────────────────────────────────────────────
-
-  @doc "Generate an instant ('quick') freight quote. Returns the rates response."
-  def quick_quote(params), do: post("/quotes/quick", params)
-
-  @doc "Create a formal quote from quick-quote details."
-  def create_quote(params), do: post("/quotes/", params)
-
-  @doc "Fetch a single quote by its FreightWare object id."
-  def get_quote(quote_obj), do: get("/quotes/#{quote_obj}/")
-
-  @doc "Search quotes. `params` is a map of query-string filters."
-  def search_quotes(params \\ %{}), do: get("/quotes/", params: params)
-
-  @doc "Accept a quote. `acceptance_type` is e.g. `\"quote\"` or `\"waybill\"`."
-  def accept_quote(quote_obj, acceptance_type, params \\ %{}),
-    do: put("/quotes/#{quote_obj}/accept/#{acceptance_type}", params)
-
-  @doc "Reject a quote."
-  def reject_quote(quote_obj, params \\ %{}), do: put("/quotes/#{quote_obj}/reject", params)
-
-  # ── Waybills & tracking ───────────────────────────────────────────────────────
-
-  @doc "Search waybills. `params` is a map of query-string filters."
-  def list_waybills(params \\ %{}), do: get("/waybills/", params: params)
-
-  @doc "Fetch a single waybill by number."
-  def get_waybill(waybill_number), do: get("/waybills/#{waybill_number}")
-
-  @doc """
-  Track & trace by reference. `ref_type` is `:waybills` or `:quotes`
-  (anything FreightWare accepts as a track root). Returns tracking events.
-  """
-  def track_and_trace(ref_type, reference),
-    do: get("/#{ref_type}/#{reference}/trackAndTrace")
-
-  @doc """
-  Fetch a POD (proof-of-delivery) document image as raw bytes.
-  Returns `{:ok, binary}` on success.
-  """
-  def pod_image(path), do: get_raw("/document/image/#{path}")
-
-  # ── Base data ─────────────────────────────────────────────────────────────────
-
-  def service_types(params \\ %{}), do: get("/system/baseData/serviceTypes", params: params)
-
-  def consignment_types(params \\ %{}),
-    do: get("/system/baseData/consignmentTypes", params: params)
-
-  def products(params \\ %{}), do: get("/system/baseData/products", params: params)
-  def accounts(params \\ %{}), do: get("/system/baseData/accounts", params: params)
-  def sites(params \\ %{}), do: get("/system/baseData/sites", params: params)
-  def postal_codes(params \\ %{}), do: get("/system/baseData/postalCodes", params: params)
+  # Operation-specific endpoints (quotes, waybills, base data) live in
+  # `TragarAi.Freight`, which calls the transport functions below and normalizes
+  # the responses. This module is the transport layer only.
 
   @doc "Lightweight connectivity probe — succeeds if we can obtain a token."
   @spec health() :: :ok | {:error, term()}
@@ -172,11 +122,15 @@ defmodule TragarAi.Dovetail.Client do
 
   # Performs a request with the cached token, re-authenticating once on 401/403.
   defp request(method, path, opts, retry? \\ true) do
+    {filters, opts} = Keyword.pop(opts, :filters)
+    {paging, opts} = Keyword.pop(opts, :paging)
+
     with {:ok, token} <- TragarAi.Dovetail.TokenStore.token() do
       req =
         base_request()
         |> Req.merge([method: method, url: @api_path <> path] ++ opts)
         |> Req.Request.put_header(@auth_header, token)
+        |> maybe_put_esfilters(filters, paging)
 
       case Req.request(req) do
         {:ok, %Req.Response{status: status}} when status in [401, 403] and retry? ->
@@ -195,29 +149,38 @@ defmodule TragarAi.Dovetail.Client do
     end
   end
 
-  # Raw variant for binary payloads (e.g. POD images) — no JSON decoding/unwrap.
-  defp get_raw(path, retry? \\ true) do
-    with {:ok, token} <- TragarAi.Dovetail.TokenStore.token() do
-      req =
-        base_request()
-        |> Req.merge(method: :get, url: @api_path <> path, decode_body: false)
-        |> Req.Request.put_header(@auth_header, token)
+  # FreightWare passes search filters/paging in an `esfilters` HTTP header whose
+  # value is a JSON string (capitalised Filters/Paging, camelCase inner keys).
+  defp maybe_put_esfilters(req, filters, paging) do
+    if filters in [nil, []] and is_nil(paging) do
+      req
+    else
+      payload =
+        %{"Filters" => build_filters(filters)}
+        |> maybe_add_paging(paging)
 
-      case Req.request(req) do
-        {:ok, %Req.Response{status: status}} when status in [401, 403] and retry? ->
-          TragarAi.Dovetail.TokenStore.invalidate()
-          get_raw(path, false)
-
-        {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
-          {:ok, body}
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          {:error, {:http_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      Req.Request.put_header(req, "esfilters", Jason.encode!(payload))
     end
+  end
+
+  defp build_filters(nil), do: []
+
+  defp build_filters(filters) do
+    Enum.map(filters, fn {name, value} ->
+      %{"filterName" => to_string(name), "filterValue" => to_string(value)}
+    end)
+  end
+
+  defp maybe_add_paging(payload, nil), do: payload
+
+  defp maybe_add_paging(payload, paging) do
+    Map.put(payload, "Paging", [
+      %{
+        "paged" => Map.get(paging, :paged, true),
+        "resultsPerPage" => Map.get(paging, :results_per_page, 20),
+        "pageNumber" => Map.get(paging, :page_number, 1)
+      }
+    ])
   end
 
   # Base Req request shared by every call: base URL, JSON content-type, timeouts,
