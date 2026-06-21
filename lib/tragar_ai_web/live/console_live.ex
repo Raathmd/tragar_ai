@@ -14,23 +14,26 @@ defmodule TragarAiWeb.ConsoleLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    # Demo mode defaults on until the source systems are connected.
     {:ok,
      socket
      |> assign(question: "", waybill: "", ticket_id: "", account: "", agent: "")
-     |> assign(interaction: nil)
+     |> assign(interaction: nil, demo: true)
      |> load_history()}
   end
 
   @impl true
   def handle_event("ask", params, socket) do
     question = String.trim(params["question"] || "")
+    demo = params["demo"] == "true"
 
     if question == "" do
       {:noreply, put_flash(socket, :error, "Enter a question first.")}
     else
       context = %{
         agent: blank_to_nil(params["agent"]),
-        entities: entities_from(params)
+        entities: entities_from(params),
+        demo: demo
       }
 
       {:ok, interaction} = Engine.answer(question, context)
@@ -39,6 +42,7 @@ defmodule TragarAiWeb.ConsoleLive do
        socket
        |> assign(
          interaction: interaction,
+         demo: demo,
          question: question,
          waybill: params["waybill"] || "",
          ticket_id: params["ticket_id"] || "",
@@ -47,6 +51,17 @@ defmodule TragarAiWeb.ConsoleLive do
        )
        |> load_history()}
     end
+  end
+
+  def handle_event("seed_demo", _params, socket) do
+    :ok = TragarAi.Demo.seed()
+
+    {:noreply,
+     put_flash(
+       socket,
+       :info,
+       "Demo data loaded — harmonized customer & vehicle are in the resources."
+     )}
   end
 
   def handle_event("relay", %{"final_answer" => final} = params, socket) do
@@ -100,7 +115,30 @@ defmodule TragarAiWeb.ConsoleLive do
           <input name="account" value={@account} placeholder="Account" class="input input-bordered" />
           <input name="agent" value={@agent} placeholder="Your name" class="input input-bordered" />
         </div>
-        <button type="submit" class="btn btn-primary">Ask</button>
+        <div class="flex flex-wrap items-center gap-3">
+          <button type="submit" class="btn btn-primary">Ask</button>
+          <label class="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              name="demo"
+              value="true"
+              checked={@demo}
+              class="checkbox checkbox-sm"
+            /> Demo mode <span class="text-base-content/50">(fact-check from fixtures)</span>
+          </label>
+          <button
+            type="button"
+            phx-click="seed_demo"
+            class="btn btn-ghost btn-sm"
+            title="Load the demo customer & vehicle into the resources"
+          >
+            Load demo data
+          </button>
+        </div>
+        <p :if={@demo} class="text-xs text-base-content/60">
+          Try: “Where is load 4821?” · “Proof of delivery for 4990” · “What service types?” ·
+          “Is a truck available?” · account ACC1001 → balance · quote 7012 · ticket 55.
+        </p>
       </form>
 
       <section
@@ -115,6 +153,7 @@ defmodule TragarAiWeb.ConsoleLive do
           <span :if={@interaction.source} class="text-base-content/60">
             via {@interaction.source}
           </span>
+          <span :if={@demo} class="badge badge-warning badge-sm">demo</span>
         </div>
 
         <div :if={@interaction.error} class="text-sm text-error">

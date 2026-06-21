@@ -51,7 +51,7 @@ defmodule TragarAi.Assist.Engine do
   end
 
   defp fetch_and_phrase(question, intent, entities, context) do
-    case Adapters.fetch(intent, entities) do
+    case fetch_facts(intent, entities, context) do
       {:ok, facts} ->
         {:ok, draft} = CoreAI.phrase(intent, facts)
 
@@ -123,6 +123,10 @@ defmodule TragarAi.Assist.Engine do
     ]
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
+
+  # In demo mode, fact-check against fixtures; otherwise the live adapters.
+  defp fetch_facts(intent, entities, %{demo: true}), do: TragarAi.Demo.fetch(intent, entities)
+  defp fetch_facts(intent, entities, _context), do: Adapters.fetch(intent, entities)
 
   defp create(attrs), do: Assist.create_interaction(attrs)
 

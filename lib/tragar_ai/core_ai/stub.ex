@@ -20,18 +20,44 @@ defmodule TragarAi.CoreAI.Stub do
 
   defp classify(q, entities) do
     cond do
-      contains?(q, ["service type", "service types", "services available"]) -> :service_types
-      contains?(q, ["quote"]) -> :quote_lookup
-      contains?(q, ["pod", "proof of delivery", "signed for", "who signed"]) -> :pod
-      contains?(q, ["eta", "when will", "arrive", "how long"]) -> :eta
-      contains?(q, ["stock", "pick", "pack", "in the warehouse", "on hand"]) -> :stock
-      contains?(q, ["invoice", "balance", "payment", "paid", "owe", "account status"]) -> :invoice
-      contains?(q, ["route", "distance", "planned route", "km to"]) -> :route
-      contains?(q, ["vehicle", "truck", "fleet", "driver available"]) -> :vehicle_status
-      contains?(q, ["ticket", "complaint", "previous query", "case"]) -> :ticket_context
-      contains?(q, ["where", "status", "track", "trace", "happening with"]) -> :load_status
-      Map.has_key?(entities, :waybill) -> :load_status
-      true -> :unknown
+      contains?(q, ["service type", "service types", "services available"]) ->
+        :service_types
+
+      contains?(q, ["quote"]) ->
+        :quote_lookup
+
+      contains?(q, ["pod", "proof of delivery", "signed for", "who signed"]) ->
+        :pod
+
+      contains?(q, ["eta", "when will", "arrive", "how long"]) ->
+        :eta
+
+      contains?(q, ["stock", "pick", "pack", "in the warehouse", "on hand"]) ->
+        :stock
+
+      contains?(q, ["invoice", "balance", "payment", "paid", "owe", "account status"]) ->
+        :invoice
+
+      contains?(q, ["route", "distance", "planned route", "km to"]) ->
+        :route
+
+      contains?(q, ["vehicle", "truck", "fleet", "driver available"]) ->
+        :vehicle_status
+
+      contains?(q, ["ticket", "complaint", "previous query", "case"]) ->
+        :ticket_context
+
+      contains?(q, ["billing contact", "customer contact", "who is the customer", "debtor"]) ->
+        :customer_lookup
+
+      contains?(q, ["where", "status", "track", "trace", "happening with"]) ->
+        :load_status
+
+      Map.has_key?(entities, :waybill) ->
+        :load_status
+
+      true ->
+        :unknown
     end
   end
 
@@ -82,9 +108,49 @@ defmodule TragarAi.CoreAI.Stub do
   end
 
   def phrase(:stock, f, _), do: generic("Stock", f)
-  def phrase(:invoice, f, _), do: generic("Account", f)
-  def phrase(:vehicle_status, f, _), do: generic("Vehicle", f)
-  def phrase(:ticket_context, f, _), do: generic("Ticket", f)
+
+  def phrase(:customer_lookup, f, _) do
+    "#{get(f, "name") || "The customer"} (account #{get(f, "account_reference")})" <>
+      if(get(f, "email"), do: " — billing contact #{get(f, "email")}", else: "") <>
+      if(get(f, "description"), do: ". #{get(f, "description")}.", else: ".")
+  end
+
+  def phrase(:quote_lookup, f, _) do
+    "Quote #{get(f, "quote_number")} is #{get(f, "status") || "on record"}" <>
+      if(get(f, "charged_amount"), do: " at #{get(f, "charged_amount")}", else: "") <>
+      if(get(f, "service_type"), do: " (#{get(f, "service_type")}).", else: ".")
+  end
+
+  def phrase(:invoice, f, _) do
+    "Account #{get(f, "account_reference")}: invoice #{get(f, "invoice_number")} is " <>
+      "#{String.downcase(get(f, "status") || "on record")}" <>
+      if(get(f, "balance"), do: ", balance #{get(f, "balance")}", else: "") <>
+      if(get(f, "due_date"), do: " (due #{get(f, "due_date")}).", else: ".")
+  end
+
+  def phrase(:vehicle_status, f, _) do
+    avail =
+      case get(f, "available") do
+        true -> " and available"
+        false -> " and not currently available"
+        _ -> ""
+      end
+
+    "Vehicle #{get(f, "registration")}" <>
+      if(get(f, "status"), do: " is #{get(f, "status")}", else: "") <> avail <> "."
+  end
+
+  def phrase(:service_types, f, _) do
+    case get(f, "service_types") do
+      [_ | _] = list -> "We offer: #{Enum.join(list, ", ")}."
+      _ -> "I don't have the service list on hand."
+    end
+  end
+
+  def phrase(:ticket_context, f, _) do
+    "Previous ticket ##{get(f, "id")} — \"#{get(f, "subject")}\"" <>
+      if(get(f, "status"), do: " (#{get(f, "status")}).", else: ".")
+  end
 
   def phrase(_intent, facts, _) do
     "Here is what I found: #{summarise(facts)}"
