@@ -35,3 +35,6 @@ tragar_ai-*.tar
 npm-debug.log
 /assets/node_modules/
 
+
+# Swift sidecar build artifacts
+/sidecar/.build/

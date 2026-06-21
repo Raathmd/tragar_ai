@@ -64,7 +64,7 @@ defmodule TragarAi.CoreAI do
         {:ok,
          %{
            intent: to_atom(body["intent"]),
-           entities: body["entities"] || %{},
+           entities: atomize_entities(body["entities"]),
            raw: question
          }}
 
@@ -87,13 +87,35 @@ defmodule TragarAi.CoreAI do
   end
 
   defp req do
-    Req.new(
+    [
       base_url: Keyword.fetch!(config(), :base_url),
       receive_timeout: Keyword.get(config(), :receive_timeout, 30_000)
-    )
+    ]
+    |> Keyword.merge(Keyword.get(config(), :req_options, []))
+    |> Req.new()
   end
 
+  # Only the entity keys the validator/connectors understand are accepted; the
+  # model's JSON gives string keys, which we map to the known atoms.
+  @entity_keys %{"waybill" => :waybill, "ticket_id" => :ticket_id, "account" => :account}
+
+  defp atomize_entities(map) when is_map(map) do
+    for {k, v} <- map,
+        key = @entity_keys[to_string(k)],
+        not is_nil(v) and v != "",
+        into: %{},
+        do: {key, v}
+  end
+
+  defp atomize_entities(_), do: %{}
+
   defp to_atom(value) when is_atom(value), do: value
-  defp to_atom(value) when is_binary(value), do: String.to_existing_atom(value)
+
+  defp to_atom(value) when is_binary(value) do
+    String.to_existing_atom(value)
+  rescue
+    ArgumentError -> :unknown
+  end
+
   defp to_atom(_), do: :unknown
 end
