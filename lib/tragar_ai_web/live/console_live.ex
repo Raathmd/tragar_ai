@@ -26,7 +26,7 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(messages: [], frame: %{intent: nil, entities: %{}})
      |> assign(interaction: nil, reply: false, demo: true)
      |> assign(model: TragarAi.CoreAI.info())
-     |> assign(right_tab: "recents", detail: nil, detail_title: nil)
+     |> assign(right_tab: "chat", detail: nil, detail_title: nil)
      |> assign(selected_ticket: nil, ticket_sort: "fifo")
      |> load_history()
      |> load_tickets()}
@@ -85,6 +85,7 @@ defmodule TragarAiWeb.ConsoleLive do
      socket
      |> put_flash(:info, "Answer relayed and logged.")
      |> reset_chat_state()
+     |> assign(right_tab: "recents")
      |> load_history()}
   end
 
@@ -172,15 +173,16 @@ defmodule TragarAiWeb.ConsoleLive do
         <.tickets_pane tickets={@tickets} ticket_sort={@ticket_sort} demo={@demo} />
         <.centre
           question={@question}
-          messages={@messages}
           agent={@agent}
           demo={@demo}
+          messages={@messages}
           interaction={@interaction}
           reply={@reply}
           model={@model}
         />
         <.right_panel
           right_tab={@right_tab}
+          messages={@messages}
           history={@history}
           detail={@detail}
           detail_title={@detail_title}
@@ -320,31 +322,6 @@ defmodule TragarAiWeb.ConsoleLive do
   defp centre(assigns) do
     ~H"""
     <main class="space-y-4">
-      <div
-        :if={@messages != []}
-        class="space-y-2 max-h-[40vh] overflow-y-auto rounded-lg border border-base-300 p-3"
-      >
-        <div :for={m <- @messages} class={chat_row(m.role)}>
-          <div class={chat_bubble(m)}>
-            <div class="text-[10px] uppercase tracking-wide opacity-60">
-              {if m.role == :user, do: "You", else: "Tragar AI"}
-            </div>
-            {m.text}
-            <div :if={m[:suggestions] not in [nil, []]} class="mt-2 flex flex-wrap gap-1">
-              <button
-                :for={s <- m.suggestions}
-                type="button"
-                phx-click="suggest"
-                phx-value-q={s.q}
-                class="btn btn-xs"
-              >
-                {s.label}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <form phx-submit="ask" class="space-y-2">
         <textarea
           name="question"
@@ -521,6 +498,14 @@ defmodule TragarAiWeb.ConsoleLive do
         <button
           type="button"
           phx-click="switch_right"
+          phx-value-tab="chat"
+          class={tab_class(@right_tab == "chat")}
+        >
+          Chat
+        </button>
+        <button
+          type="button"
+          phx-click="switch_right"
           phx-value-tab="recents"
           class={tab_class(@right_tab == "recents")}
         >
@@ -534,6 +519,34 @@ defmodule TragarAiWeb.ConsoleLive do
         >
           Details
         </button>
+      </div>
+
+      <div
+        :if={@right_tab == "chat"}
+        class="space-y-2 max-h-[74vh] overflow-y-auto rounded-lg border border-base-300 p-3"
+      >
+        <div :for={m <- @messages} class={chat_row(m.role)}>
+          <div class={chat_bubble(m)}>
+            <div class="text-[10px] uppercase tracking-wide opacity-60">
+              {if m.role == :user, do: "You", else: "Tragar AI"}
+            </div>
+            {m.text}
+            <div :if={m[:suggestions] not in [nil, []]} class="mt-2 flex flex-wrap gap-1">
+              <button
+                :for={s <- m.suggestions}
+                type="button"
+                phx-click="suggest"
+                phx-value-q={s.q}
+                class="btn btn-xs"
+              >
+                {s.label}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div :if={@messages == []} class="p-2 text-xs text-base-content/60">
+          Ask Tragar AI on the left — the conversation appears here.
+        </div>
       </div>
 
       <div
@@ -821,7 +834,8 @@ defmodule TragarAiWeb.ConsoleLive do
       question: "",
       # Keep the interaction (even if unresolved) so the agent can always reply.
       interaction: interaction,
-      reply: reply?
+      reply: reply?,
+      right_tab: "chat"
     )
     |> load_history()
   end
