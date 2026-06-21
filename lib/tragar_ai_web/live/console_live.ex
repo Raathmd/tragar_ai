@@ -40,11 +40,9 @@ defmodule TragarAiWeb.ConsoleLive do
     if question == "" do
       {:noreply, put_flash(socket, :error, "Enter a question first.")}
     else
-      context = %{
-        agent: blank_to_nil(params["agent"]),
-        entities: entities_from(params),
-        demo: demo
-      }
+      entities = entities_from(params)
+      entities = if demo, do: resolve_demo_entities(question, entities), else: entities
+      context = %{agent: blank_to_nil(params["agent"]), entities: entities, demo: demo}
 
       {:ok, interaction} = Engine.answer(question, context)
 
@@ -631,9 +629,24 @@ defmodule TragarAiWeb.ConsoleLive do
         )
 
       _ ->
+        # Replace any previous result so a miss doesn't leave stale details.
         socket
-        |> assign(right_tab: "details", selected_ticket: nil)
+        |> assign(detail: nil, detail_title: nil, right_tab: "details", selected_ticket: nil)
         |> put_flash(:error, "No #{detail_label(type)} found for #{key}.")
+    end
+  end
+
+  # In demo mode, resolve a known customer name in the question to its account.
+  defp resolve_demo_entities(question, entities) do
+    if Map.has_key?(entities, :account) do
+      entities
+    else
+      name = TragarAi.Demo.Fixtures.customer()["name"]
+      first = name |> String.split() |> List.first() |> String.downcase()
+
+      if String.contains?(String.downcase(question), first),
+        do: Map.put(entities, :account, TragarAi.Demo.Fixtures.account_reference()),
+        else: entities
     end
   end
 

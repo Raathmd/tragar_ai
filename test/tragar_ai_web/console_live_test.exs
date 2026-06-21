@@ -61,6 +61,18 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "relayed"
   end
 
+  test "a general query resolves the customer name to an account (demo)", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/console")
+
+    html =
+      view
+      |> form("form[phx-submit=ask]", %{question: "Does Acme have an open invoice?", demo: "true"})
+      |> render_submit()
+
+    assert html =~ "INV-55012"
+    assert html =~ "Outstanding"
+  end
+
   test "selecting a ticket and drafting a reply enters reply mode", %{conn: conn} do
     TragarAi.Demo.seed()
     {:ok, view, _html} = live(conn, ~p"/console")
