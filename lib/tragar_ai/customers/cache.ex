@@ -8,8 +8,6 @@ defmodule TragarAi.Customers.Cache do
   alias TragarAi.Customers
   alias TragarAi.Freight
 
-  require Logger
-
   @source "FreightWare"
 
   defp ttl_minutes do
@@ -36,36 +34,19 @@ defmodule TragarAi.Customers.Cache do
     with {:ok, accounts} <- Freight.accounts(),
          account when is_map(account) <-
            Enum.find(accounts, &(&1["account_reference"] == account_reference)) do
-      domain = map_account(account)
-      upsert(domain, account)
-      {:ok, domain}
+      # Contribute FreightWare's slice; merges with any other source already present.
+      {:ok, customer} =
+        Customers.contribute(account_reference, @source, account, %{
+          name: account["account_name"],
+          description: account["account_description"]
+        })
+
+      {:ok, domain(customer)}
     else
       nil -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
       other -> {:error, other}
     end
-  end
-
-  defp map_account(a) do
-    %{
-      "account_reference" => a["account_reference"],
-      "name" => a["account_name"],
-      "description" => a["account_description"]
-    }
-    |> compact()
-  end
-
-  defp upsert(domain, raw) do
-    Customers.upsert_customer(%{
-      account_reference: domain["account_reference"],
-      name: domain["name"],
-      description: domain["description"],
-      sources: [@source],
-      source_data: %{@source => raw},
-      cached_at: DateTime.utc_now()
-    })
-  rescue
-    e -> Logger.warning("Failed to cache customer: #{Exception.message(e)}")
   end
 
   defp cached_customer(ref) do

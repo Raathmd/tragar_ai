@@ -78,5 +78,29 @@ defmodule TragarAi.DomainResourcesTest do
       assert {:ok, %{"account_reference" => "ACC9"}} =
                Adapters.fetch(:customer_lookup, %{account: "ACC9"})
     end
+
+    test "a customer accumulates across sources (FreightWare + Pastel), not overwrite" do
+      # FreightWare contributes name.
+      assert {:ok, _} = Customers.Cache.customer("ACC9")
+
+      # Pastel later contributes its slice (e.g. billing email) for the same account.
+      assert {:ok, _} =
+               Customers.contribute(
+                 "ACC9",
+                 "Pastel",
+                 %{"debtorCode" => "ACC9", "terms" => "30 days"},
+                 %{
+                   email: "billing@acme.test"
+                 }
+               )
+
+      assert {:ok, customer} = Customers.get_customer("ACC9")
+      # kept from FreightWare
+      assert customer.name == "Acme Ltd"
+      # added by Pastel
+      assert customer.email == "billing@acme.test"
+      assert Enum.sort(customer.sources) == ["FreightWare", "Pastel"]
+      assert Map.keys(customer.source_data) |> Enum.sort() == ["FreightWare", "Pastel"]
+    end
   end
 end
