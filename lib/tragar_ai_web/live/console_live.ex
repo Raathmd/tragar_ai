@@ -438,6 +438,21 @@ defmodule TragarAiWeb.ConsoleLive do
           <pre class="bg-base-200 rounded p-3 mt-2 overflow-x-auto">{facts_text(@interaction.facts)}</pre>
         </details>
       </section>
+
+      <section :if={@interaction} class="rounded-lg border border-base-300 bg-base-200/40 p-3">
+        <h3 class="text-xs font-medium uppercase tracking-wide text-base-content/60 mb-2">
+          AI steps · interpret → validate → fetch → phrase
+        </h3>
+        <ol class="space-y-1.5">
+          <li :for={s <- loop_trace(@interaction)} class="flex items-start gap-2 text-xs">
+            <span class={"badge badge-xs mt-0.5 " <> step_class(s.status)}>{s.status}</span>
+            <div class="min-w-0">
+              <div class="font-medium">{s.label}</div>
+              <div class="text-base-content/60 break-words">{s.detail}</div>
+            </div>
+          </li>
+        </ol>
+      </section>
     </main>
     """
   end
@@ -779,6 +794,71 @@ defmodule TragarAiWeb.ConsoleLive do
   defp ticket_badge("Pending"), do: "badge-info"
   defp ticket_badge("Resolved"), do: "badge-success"
   defp ticket_badge(_), do: "badge-ghost"
+
+  # Build the interpret → validate → fetch → phrase trace from an interaction.
+  defp loop_trace(%{} = i) do
+    err = to_string(i.error || "")
+
+    {validate, fetch, phrase} =
+      cond do
+        i.status == :drafted -> {:ok, :ok, :ok}
+        String.starts_with?(err, "interpret") -> {:skip, :skip, :skip}
+        validation_error?(err) -> {:fail, :skip, :skip}
+        fetch_error?(err) -> {:ok, :fail, :skip}
+        true -> {:ok, :ok, :fail}
+      end
+
+    interpret = if String.starts_with?(err, "interpret"), do: :fail, else: :ok
+
+    [
+      %{label: "Core AI · interpret", status: interpret, detail: trace_interpret(i)},
+      %{label: "Elixir · validate", status: validate, detail: trace_validate(validate, err)},
+      %{label: "Fetch fact (read-only)", status: fetch, detail: trace_fetch(fetch, i, err)},
+      %{label: "Core AI · phrase", status: phrase, detail: trace_phrase(phrase, i)}
+    ]
+  end
+
+  defp loop_trace(_), do: []
+
+  defp validation_error?(e),
+    do:
+      String.starts_with?(e, "not_understood") or String.starts_with?(e, "missing_entities") or
+        String.starts_with?(e, "unknown_intent")
+
+  defp fetch_error?(e),
+    do:
+      String.starts_with?(e, "not_found") or String.starts_with?(e, "not_available") or
+        String.starts_with?(e, "missing_waybill")
+
+  defp trace_interpret(i) do
+    entities =
+      case i.entities do
+        m when is_map(m) and map_size(m) > 0 ->
+          Enum.map_join(m, ", ", fn {k, v} -> "#{k}=#{v}" end)
+
+        _ ->
+          "none"
+      end
+
+    "intent: #{i.intent || "—"} · entities: #{entities}"
+  end
+
+  defp trace_validate(:fail, err), do: humanize_error(err)
+  defp trace_validate(:skip, _), do: "—"
+  defp trace_validate(_, _), do: "allowed; required entities present"
+
+  defp trace_fetch(:ok, i, _), do: "via #{i.source || "—"} → #{map_size(i.facts || %{})} fields"
+  defp trace_fetch(:fail, _i, err), do: humanize_error(err)
+  defp trace_fetch(_, _, _), do: "—"
+
+  defp trace_phrase(:ok, i), do: i.draft_answer
+  defp trace_phrase(_, _), do: "—"
+
+  defp humanize_error(err), do: err |> String.replace(":", ": ") |> String.replace("_", " ")
+
+  defp step_class(:ok), do: "badge-success"
+  defp step_class(:fail), do: "badge-error"
+  defp step_class(_), do: "badge-ghost"
 
   defp status_class(:drafted), do: "badge-info"
   defp status_class(:relayed), do: "badge-success"
