@@ -367,8 +367,10 @@ defmodule TragarAiWeb.ConsoleLive do
         class="rounded-lg border border-base-300 p-4 space-y-4"
       >
         <div class="flex flex-wrap items-center gap-2 text-sm">
-          <span class={"badge " <> status_class(@interaction.status)}>{@interaction.status}</span>
-          <span :if={@interaction.intent} class="badge badge-ghost">{@interaction.intent}</span>
+          <span class={"badge " <> outcome_class(@interaction)}>{outcome_label(@interaction)}</span>
+          <span :if={show_intent?(@interaction)} class="badge badge-ghost">
+            {@interaction.intent}
+          </span>
           <span :if={@interaction.source} class="text-base-content/60">
             via {@interaction.source}
           </span>
@@ -556,7 +558,7 @@ defmodule TragarAiWeb.ConsoleLive do
         <div :for={i <- @history} class="p-2">
           <div class="flex items-center justify-between gap-2">
             <span class="text-xs truncate">{i.question}</span>
-            <span class={"badge badge-xs " <> status_class(i.status)}>{i.status}</span>
+            <span class={"badge badge-xs " <> outcome_class(i)}>{outcome_label(i)}</span>
           </div>
         </div>
         <div :if={@history == []} class="p-3 text-xs text-base-content/60">No interactions yet.</div>
@@ -1075,9 +1077,44 @@ defmodule TragarAiWeb.ConsoleLive do
   defp step_class(:fail), do: "badge-error"
   defp step_class(_), do: "badge-ghost"
 
-  defp status_class(:drafted), do: "badge-info"
-  defp status_class(:relayed), do: "badge-success"
-  defp status_class(:failed), do: "badge-error"
-  defp status_class(:discarded), do: "badge-ghost"
-  defp status_class(_), do: "badge-ghost"
+  # Plain-language outcome (not raw status/error jargon) for the badge.
+  defp outcome_label(%{status: :drafted}), do: "answered"
+  defp outcome_label(%{status: :relayed}), do: "relayed"
+  defp outcome_label(%{status: :discarded}), do: "discarded"
+
+  defp outcome_label(%{status: :failed, error: error}) do
+    cond do
+      error == "unsupported_action" -> "out of scope"
+      error == "not_found" -> "not found"
+      error == "not_available" -> "not connected"
+      clarify_error?(error) -> "needs detail"
+      true -> "couldn't complete"
+    end
+  end
+
+  defp outcome_label(_), do: "—"
+
+  defp outcome_class(%{status: :drafted}), do: "badge-info"
+  defp outcome_class(%{status: :relayed}), do: "badge-success"
+  defp outcome_class(%{status: :discarded}), do: "badge-ghost"
+
+  defp outcome_class(%{status: :failed, error: error}) do
+    if error == "not_available", do: "badge-error", else: "badge-warning"
+  end
+
+  defp outcome_class(_), do: "badge-ghost"
+
+  defp clarify_error?(error) when is_binary(error) do
+    String.starts_with?(error, "not_understood") or String.starts_with?(error, "missing_entities") or
+      String.starts_with?(error, "unknown_intent") or
+      String.starts_with?(error, "missing_waybill")
+  end
+
+  defp clarify_error?(_), do: false
+
+  # Hide the intent chip when it's not a real, queryable intent.
+  defp show_intent?(%{intent: intent}) when is_binary(intent),
+    do: intent not in ["unsupported_action", "unknown"]
+
+  defp show_intent?(_), do: false
 end
