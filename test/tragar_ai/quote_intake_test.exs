@@ -4,6 +4,8 @@ defmodule TragarAi.QuoteIntakeTest do
   alias TragarAi.QuoteIntake.{Flow, Server}
 
   defmodule FakeFreightWare do
+    def resolve_service_type(_text), do: {:ok, %{"code" => "ECO", "name" => "ECONOMY"}}
+    def quick_quote(_params), do: {:ok, [%{"service_type" => "ECO", "total_charge" => "1234.00"}]}
     def create_quote(_params), do: {:ok, %{"quote_number" => "Q9001"}}
   end
 
@@ -40,26 +42,35 @@ defmodule TragarAi.QuoteIntakeTest do
     end
   end
 
+  # Pass the fake FreightWare on every turn so the :ready step rates against it
+  # instead of the live API.
+  defp step(base, msg),
+    do: Server.handle(Map.put(base, :message, msg), freightware: FakeFreightWare)
+
   describe "Server (guided conversation)" do
-    test "runs from opening question through to a created quote" do
+    test "runs from opening question, resolves the service code, rates, and creates the quote" do
       tid = "T-#{System.unique_integer([:positive])}"
       base = %{ticket_id: tid, account: "ITD02"}
 
-      {:ok, r0} = Server.handle(Map.put(base, :message, "I need a quote"))
+      {:ok, r0} = step(base, "I need a quote")
       assert r0.reply =~ "service"
       assert r0.status == "collecting"
       refute r0.complete
 
-      {:ok, _} = Server.handle(Map.put(base, :message, "Economy"))
-      {:ok, _} = Server.handle(Map.put(base, :message, "Sandton 2196"))
-      {:ok, _} = Server.handle(Map.put(base, :message, "Durban 4001"))
-      {:ok, ready} = Server.handle(Map.put(base, :message, "3 pallets, 1200kg"))
+      {:ok, _} = step(base, "Economy")
+      {:ok, _} = step(base, "Sandton 2196")
+      {:ok, _} = step(base, "Durban 4001")
+      {:ok, ready} = step(base, "3 pallets, 1200kg")
 
       assert ready.status == "ready"
       assert ready.reply =~ "ACCEPT"
+      # Live rate is surfaced, and the resolved service code replaces "Economy".
+      assert ready.rate == "1234.00"
+      assert ready.reply =~ "1234.00"
+      assert ready.quote_params["service_type"] == "ECO"
       assert ready.quote_params["consignee_postal_code"] == "4001"
 
-      {:ok, done} = Server.handle(Map.put(base, :message, "ACCEPT"), freightware: FakeFreightWare)
+      {:ok, done} = step(base, "ACCEPT")
       assert done.status == "accepted"
       assert done.quote_number == "Q9001"
       assert done.complete
@@ -69,13 +80,13 @@ defmodule TragarAi.QuoteIntakeTest do
       tid = "T-#{System.unique_integer([:positive])}"
       base = %{ticket_id: tid, account: "ITD02"}
 
-      Server.handle(Map.put(base, :message, "hi"))
-      Server.handle(Map.put(base, :message, "Economy"))
-      Server.handle(Map.put(base, :message, "Sandton 2196"))
-      Server.handle(Map.put(base, :message, "Durban 4001"))
-      Server.handle(Map.put(base, :message, "1 box, 5kg"))
+      step(base, "hi")
+      step(base, "Economy")
+      step(base, "Sandton 2196")
+      step(base, "Durban 4001")
+      step(base, "1 box, 5kg")
 
-      {:ok, done} = Server.handle(Map.put(base, :message, "REJECT"))
+      {:ok, done} = step(base, "REJECT")
       assert done.status == "rejected"
       assert done.complete
     end

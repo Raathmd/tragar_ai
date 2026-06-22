@@ -166,6 +166,36 @@ defmodule TragarAi.Freight do
     end
   end
 
+  @doc """
+  Resolve free text (e.g. "Economy", "overnight", or a code) to a real
+  FreightWare service type. Matches by exact code first (so the 3 OVERNIGHT
+  services don't collide), then exact name, then a contains match. Returns the
+  full service-type map; take `"code"` for the quote `serviceType`.
+  """
+  def resolve_service_type(text) when is_binary(text) do
+    t = text |> String.trim() |> String.downcase()
+
+    with {:ok, types} <- service_types() do
+      down = fn v -> v |> to_string() |> String.downcase() end
+
+      match =
+        Enum.find(types, &(down.(&1["code"]) == t)) ||
+          Enum.find(types, &(down.(&1["name"]) == t)) ||
+          (t != "" &&
+             Enum.find(types, fn st ->
+               String.contains?(down.(st["name"]), t) or
+                 String.contains?(down.(st["short_description"]), t)
+             end))
+
+      case match do
+        nil -> {:error, :no_service_match}
+        st -> {:ok, st}
+      end
+    end
+  end
+
+  def resolve_service_type(_), do: {:error, :no_service_match}
+
   def consignment_types do
     with {:ok, resp} <- Client.get("/system/baseData/consignmentTypes") do
       {:ok, Normalize.consignment_types(resp)}

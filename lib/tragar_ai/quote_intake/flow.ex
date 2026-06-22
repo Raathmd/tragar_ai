@@ -122,11 +122,24 @@ defmodule TragarAi.QuoteIntake.Flow do
     end
   end
 
+  @doc """
+  Confirmation summary once a quote is ready, including the live rate if the
+  Server obtained one.
+  """
+  def ready_summary(slots, rate) do
+    price = if rate, do: " The estimated rate is R #{rate}.", else: ""
+
+    "Here's your quote request — from #{slots["collection"]} to #{slots["delivery"]}, " <>
+      "#{slots["service"]}, #{slots["goods"]}.#{price} " <>
+      "Reply ACCEPT to create the quote in FreightWare, or REJECT to cancel."
+  end
+
   @doc "Assemble FreightWare quote params from the gathered slots."
   def to_quote_params(slots, account) do
     %{
       "account_reference" => account,
-      "service_type" => slots["service"],
+      # Prefer the resolved FreightWare service code over the customer's words.
+      "service_type" => slots["service_code"] || slots["service"],
       "consignor_name" => name_part(slots["collection"]),
       "consignor_postal_code" => postal(slots["collection"]),
       "consignee_name" => name_part(slots["delivery"]),

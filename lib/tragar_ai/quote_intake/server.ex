@@ -29,7 +29,7 @@ defmodule TragarAi.QuoteIntake.Server do
 
     case load(ticket_id) do
       nil -> open(ticket_id, account, input, message)
-      %{status: "collecting"} = s -> collect(s, message)
+      %{status: "collecting"} = s -> collect(s, message, fw)
       %{status: "ready"} = s -> confirm(s, message, fw)
       %{status: status} = s -> {:ok, result(s, "This quote request is already #{status}.", true)}
     end
@@ -54,19 +54,62 @@ defmodule TragarAi.QuoteIntake.Server do
     end
   end
 
-  # Mid-conversation — record the answer, ask the next question or summarize.
-  defp collect(session, message) do
+  # Mid-conversation — record the answer, ask the next question or finalize.
+  defp collect(session, message, fw) do
     case Flow.advance(session.slots, message) do
       {:ask, slots, question} ->
         save(session, %{slots: slots, last_reply: question})
         |> ok(question, false)
 
-      {:ready, slots, summary} ->
-        save(session, %{slots: slots, status: "ready", last_reply: summary})
-        |> ok(summary, false,
-          quote_params: Flow.to_quote_params(slots, session.account_reference)
-        )
+      {:ready, slots, _summary} ->
+        finalize(session, slots, fw)
     end
+  end
+
+  # All params gathered — resolve the real service code, get a live rate
+  # (best-effort), and ask the customer to confirm.
+  defp finalize(session, slots, fw) do
+    account = session.account_reference
+    {slots, rate} = rate_quote(slots, account, fw)
+    summary = Flow.ready_summary(slots, rate)
+
+    save(session, %{slots: slots, status: "ready", last_reply: summary})
+    |> ok(summary, false, quote_params: Flow.to_quote_params(slots, account), rate: rate)
+  end
+
+  # Map the service words → real FreightWare code, then quick-quote for a rate.
+  # Both are best-effort: failures leave the flow intact (no code / no price).
+  defp rate_quote(slots, account, fw) do
+    slots =
+      case safe(fn -> fw.resolve_service_type(slots["service"]) end) do
+        {:ok, st} -> Map.put(slots, "service_code", st["code"])
+        _ -> slots
+      end
+
+    params = Flow.to_quote_params(slots, account)
+
+    rate =
+      case safe(fn -> fw.quick_quote(params) end) do
+        {:ok, rates} -> pick_rate(rates, slots["service_code"])
+        _ -> nil
+      end
+
+    {if(rate, do: Map.put(slots, "rate", rate), else: slots), rate}
+  end
+
+  defp pick_rate(rates, code) when is_list(rates) and rates != [] do
+    rate = Enum.find(rates, &(&1["service_type"] == code)) || hd(rates)
+    rate["total_charge"] || rate["freight_charge"]
+  end
+
+  defp pick_rate(_, _), do: nil
+
+  defp safe(fun) do
+    fun.()
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
   end
 
   # Quote is ready — interpret ACCEPT / REJECT.
