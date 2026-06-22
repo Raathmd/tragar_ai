@@ -30,7 +30,11 @@ defmodule TragarAiWeb.QuoteIntakeController do
     case TragarAi.Freight.service_types() do
       {:ok, types} when is_list(types) ->
         Enum.map(types, fn t ->
-          %{"code" => t["service_type"], "label" => t["service_type_description"]}
+          %{
+            "code" => t["code"],
+            "label" => t["name"] || t["description"],
+            "class" => t["service_class"]
+          }
         end)
 
       _ ->

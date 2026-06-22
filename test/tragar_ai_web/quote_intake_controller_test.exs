@@ -17,7 +17,7 @@ defmodule TragarAiWeb.QuoteIntakeControllerTest do
             "response" => %{
               "esServiceTypes" => %{
                 "ServiceTypes" => [
-                  %{"serviceType" => "ECO", "serviceTypeDescription" => "Economy"}
+                  %{"code" => "ECO", "name" => "Economy", "serviceClass" => "ECO"}
                 ]
               }
             }
