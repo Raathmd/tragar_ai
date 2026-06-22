@@ -6,7 +6,8 @@ defmodule TragarAi.CoreAI.Stub do
   same contract as the real sidecar (`TragarAi.CoreAI`).
   """
 
-  @waybill_re ~r/\b(?:load|waybill|wb|consignment)?\s*#?\s*(\d{4,})\b/i
+  # Waybill numbers are digits with an optional letter suffix, e.g. 4821 or 0006794936FC.
+  @waybill_re ~r/\b(?:load|waybill|wb|consignment)?\s*#?\s*(\d{4,}[A-Z]{0,4})\b/i
   @account_re ~r/\b(?:account|acc|customer)\s*#?\s*([A-Z0-9]{3,})\b/i
   @acc_code_re ~r/\b(ACC\d{3,})\b/i
   @quote_re ~r/\bquote\s*#?\s*(\d{3,})\b/i
@@ -69,7 +70,7 @@ defmodule TragarAi.CoreAI.Stub do
   defp extract_entities(question) do
     %{}
     |> put_match(:waybill, Regex.run(@waybill_re, question))
-    |> put_match(:account, Regex.run(@account_re, question) || Regex.run(@acc_code_re, question))
+    |> put_match(:account, Regex.run(@acc_code_re, question) || Regex.run(@account_re, question))
     |> put_match(:quote, Regex.run(@quote_re, question))
   end
 
