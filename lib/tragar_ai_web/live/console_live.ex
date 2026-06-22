@@ -16,6 +16,7 @@ defmodule TragarAiWeb.ConsoleLive do
 
   alias TragarAi.Assist
   alias TragarAi.Assist.Engine
+  alias TragarAi.Freight.Statuses
   alias TragarAi.Support
 
   @impl true
@@ -59,11 +60,30 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  def handle_event("search_waybills", %{"account" => account, "status" => status}, socket) do
-    case blank_to_nil(account) do
-      nil -> {:noreply, put_flash(socket, :error, "Enter an account to search.")}
-      acc -> {:noreply, run_waybill_search(socket, acc, String.to_existing_atom(status))}
+  def handle_event("search_waybills", params, socket) do
+    case blank_to_nil(params["account"]) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Enter an account to search.")}
+
+      acc ->
+        {:noreply,
+         run_waybill_search(
+           socket,
+           acc,
+           params["status"] || "all",
+           blank_to_nil(params["date_from"]),
+           blank_to_nil(params["date_to"])
+         )}
     end
+  end
+
+  # Click a waybill in the search list → auto-prompt for its latest status.
+  def handle_event("prompt_waybill", %{"number" => number}, socket) do
+    socket
+    |> reset_chat_state()
+    |> assign(frame: %{intent: nil, entities: %{waybill: number}})
+    |> converse("Where is waybill #{number}?", false)
+    |> then(&{:noreply, &1})
   end
 
   # Run a demo query as a fresh conversation seeded with its entities.
@@ -554,14 +574,18 @@ defmodule TragarAiWeb.ConsoleLive do
             placeholder="Account, e.g. ITD02"
             class="input input-bordered input-xs w-full"
           />
+          <select name="status" class="select select-bordered select-xs w-full">
+            <option value="all">All statuses</option>
+            <option value="undelivered">Undelivered</option>
+            <option value="delivered">Delivered</option>
+            <option disabled>── exact status ──</option>
+            <option :for={{code, label} <- Statuses.waybill()} value={code}>{label} ({code})</option>
+          </select>
           <div class="flex gap-1">
-            <select name="status" class="select select-bordered select-xs flex-1">
-              <option value="undelivered">Undelivered</option>
-              <option value="delivered">Delivered</option>
-              <option value="all">All</option>
-            </select>
-            <button class="btn btn-xs btn-primary">Search</button>
+            <input type="date" name="date_from" class="input input-bordered input-xs flex-1" />
+            <input type="date" name="date_to" class="input input-bordered input-xs flex-1" />
           </div>
+          <button class="btn btn-xs btn-primary w-full">Search</button>
         </form>
 
         <div :if={@search_meta} class="text-[11px] text-base-content/60 px-1">
@@ -569,7 +593,7 @@ defmodule TragarAiWeb.ConsoleLive do
             Search failed: {@search_meta.error}
           </span>
           <span :if={!@search_meta[:error]}>
-            {@search_meta.account} · {@search_meta.status} · {length(@search_results)} of {@search_meta.total} (last year, account-scoped)
+            {@search_meta.account} · {@search_meta.status} · {length(@search_results)} of {@search_meta.total} (account-scoped)
           </span>
         </div>
 
@@ -577,9 +601,8 @@ defmodule TragarAiWeb.ConsoleLive do
           <button
             :for={w <- @search_results}
             type="button"
-            phx-click="show_detail"
-            phx-value-type="shipment"
-            phx-value-key={w.number}
+            phx-click="prompt_waybill"
+            phx-value-number={w.number}
             class="w-full p-2 text-left hover:bg-base-200"
           >
             <div class="flex items-center justify-between gap-2">
@@ -999,20 +1022,24 @@ defmodule TragarAiWeb.ConsoleLive do
     cond do
       String.contains?(t, "undeliver") or String.contains?(t, "not delivered") or
         String.contains?(t, "open") or String.contains?(t, "outstanding") ->
-        :undelivered
+        "undelivered"
 
       String.contains?(t, "deliver") ->
-        :delivered
+        "delivered"
 
       true ->
-        :all
+        "all"
     end
   end
 
-  defp run_waybill_search(socket, account, status) do
-    case fetch_waybill_list(account, socket.assigns.demo) do
+  defp run_waybill_search(socket, account, status, date_from \\ nil, date_to \\ nil) do
+    # A real status code filters server-side; a group (undelivered/delivered/all)
+    # fetches the window and filters client-side.
+    code = if status in Statuses.waybill_codes(), do: status, else: nil
+
+    case fetch_waybills(account, socket.assigns.demo, code, date_from, date_to) do
       {:ok, list} ->
-        results = list |> filter_status(status) |> Enum.map(&waybill_summary/1)
+        results = list |> apply_group(status) |> Enum.map(&waybill_summary/1)
 
         assign(socket,
           search_results: results,
@@ -1029,22 +1056,31 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  defp fetch_waybill_list(account, true), do: {:ok, TragarAi.Demo.waybills_for(account)}
+  defp fetch_waybills(account, true, _code, _from, _to),
+    do: {:ok, TragarAi.Demo.waybills_for(account)}
 
-  defp fetch_waybill_list(account, false) do
-    case TragarAi.Freight.search_waybills(%{account_reference: account}) do
+  defp fetch_waybills(account, false, code, from, to) do
+    params =
+      %{account_reference: account}
+      |> put_if(:status_code, code)
+      |> put_if(:date_from, from)
+      |> put_if(:date_to, to)
+
+    case TragarAi.Freight.search_waybills(params) do
       {:ok, r} -> {:ok, r["waybills"] || []}
       err -> err
     end
   end
 
-  defp filter_status(list, :undelivered), do: Enum.reject(list, &delivered_wb?/1)
-  defp filter_status(list, :delivered), do: Enum.filter(list, &delivered_wb?/1)
-  defp filter_status(list, _all), do: list
+  defp put_if(map, _k, v) when v in [nil, ""], do: map
+  defp put_if(map, k, v), do: Map.put(map, k, v)
 
-  defp delivered_wb?(w),
-    do:
-      String.upcase(to_string(w["status_code"] || w["status"] || "")) in ~w(POD DLV DEL DELIVERED)
+  # Group filters (the real status codes are filtered server-side instead).
+  defp apply_group(list, "undelivered"),
+    do: Enum.reject(list, &(Statuses.delivered?(&1) or Statuses.deleted?(&1)))
+
+  defp apply_group(list, "delivered"), do: Enum.filter(list, &Statuses.delivered?/1)
+  defp apply_group(list, _other), do: list
 
   defp waybill_summary(w) do
     %{
@@ -1120,13 +1156,11 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # FreightWare status codes → plain language for the chips.
   defp humanize_status(value) do
-    case String.upcase(to_string(value)) do
-      "POD" -> "Delivered"
-      "DLV" -> "Delivered"
-      "DEL" -> "Delivered"
-      "INT" -> "In transit"
-      "COL" -> "Collected"
-      _ -> to_string(value)
+    v = to_string(value)
+
+    case List.keyfind(Statuses.waybill(), String.upcase(v), 0) do
+      {_code, label} -> label
+      nil -> v
     end
   end
 
