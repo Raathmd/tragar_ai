@@ -42,6 +42,13 @@ defmodule TragarAi.Demo do
     |> Enum.filter(&(&1["account_reference"] == account))
   end
 
+  @doc "Demo quotes for an account."
+  def quotes_for(account) do
+    Fixtures.quotes()
+    |> Map.values()
+    |> Enum.filter(&(&1["account_reference"] == account))
+  end
+
   defp waybill(e), do: e[:waybill] || e["waybill"]
   defp quote_no(e), do: e[:quote] || e["quote"]
   defp ticket_id(e), do: e[:ticket_id] || e["ticket_id"]

@@ -29,6 +29,7 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(model: TragarAi.CoreAI.info())
      |> assign(right_tab: "chat", detail: nil, detail_title: nil)
      |> assign(search_results: [], search_meta: nil)
+     |> assign(quote_results: [], quote_meta: nil)
      |> assign(selected_ticket: nil, ticket_sort: "fifo")
      |> load_history()
      |> load_tickets()}
@@ -51,6 +52,9 @@ defmodule TragarAiWeb.ConsoleLive do
     cond do
       text == "" ->
         {:noreply, put_flash(socket, :error, "Type a message first.")}
+
+      spec = parse_quote_search(text) ->
+        {:noreply, run_quote_search(socket, spec.account, spec.status)}
 
       spec = parse_waybill_search(text) ->
         {:noreply, run_waybill_search(socket, spec.account, spec.status)}
@@ -75,6 +79,31 @@ defmodule TragarAiWeb.ConsoleLive do
            blank_to_nil(params["date_to"])
          )}
     end
+  end
+
+  def handle_event("search_quotes", params, socket) do
+    case blank_to_nil(params["account"]) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Enter an account to search.")}
+
+      acc ->
+        {:noreply,
+         run_quote_search(
+           socket,
+           acc,
+           params["status"] || "all",
+           blank_to_nil(params["date_from"]),
+           blank_to_nil(params["date_to"])
+         )}
+    end
+  end
+
+  def handle_event("prompt_quote", %{"number" => number}, socket) do
+    socket
+    |> reset_chat_state()
+    |> assign(frame: %{intent: nil, entities: %{quote: number}})
+    |> converse("Show quote #{number}", false)
+    |> then(&{:noreply, &1})
   end
 
   # Click a waybill in the search list → auto-prompt for its latest status.
@@ -221,6 +250,8 @@ defmodule TragarAiWeb.ConsoleLive do
           detail_title={@detail_title}
           search_results={@search_results}
           search_meta={@search_meta}
+          quote_results={@quote_results}
+          quote_meta={@quote_meta}
         />
       </div>
 
@@ -562,8 +593,65 @@ defmodule TragarAiWeb.ConsoleLive do
           phx-value-tab="search"
           class={tab_class(@right_tab == "search")}
         >
-          Search
+          Waybills
         </button>
+        <button
+          type="button"
+          phx-click="switch_right"
+          phx-value-tab="quotes"
+          class={tab_class(@right_tab == "quotes")}
+        >
+          Quotes
+        </button>
+      </div>
+
+      <div :if={@right_tab == "quotes"} class="space-y-2">
+        <form phx-submit="search_quotes" class="rounded-lg border border-base-300 p-2 space-y-2">
+          <div class="text-[11px] text-base-content/50">Account-scoped quote search</div>
+          <input
+            name="account"
+            placeholder="Account, e.g. ITD02"
+            class="input input-bordered input-xs w-full"
+          />
+          <select name="status" class="select select-bordered select-xs w-full">
+            <option value="all">All statuses</option>
+            <option :for={{code, label} <- Statuses.quote()} value={code}>{label} ({code})</option>
+          </select>
+          <div class="flex gap-1">
+            <input type="date" name="date_from" class="input input-bordered input-xs flex-1" />
+            <input type="date" name="date_to" class="input input-bordered input-xs flex-1" />
+          </div>
+          <button class="btn btn-xs btn-primary w-full">Search</button>
+        </form>
+
+        <div :if={@quote_meta} class="text-[11px] text-base-content/60 px-1">
+          <span :if={@quote_meta[:error]} class="text-error">Search failed: {@quote_meta.error}</span>
+          <span :if={!@quote_meta[:error]}>
+            {@quote_meta.account} · {@quote_meta.status} · {length(@quote_results)} of {@quote_meta.total} (account-scoped)
+          </span>
+        </div>
+
+        <div class="rounded-lg border border-base-300 divide-y divide-base-200 max-h-[64vh] overflow-y-auto">
+          <button
+            :for={q <- @quote_results}
+            type="button"
+            phx-click="prompt_quote"
+            phx-value-number={q.number}
+            class="w-full p-2 text-left hover:bg-base-200"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium">{q.number}</span>
+              <span class="badge badge-xs badge-ghost">{q.status}</span>
+            </div>
+            <div class="text-[11px] text-base-content/50">{q.consignee} · {q.amount}</div>
+          </button>
+          <div :if={@quote_results == [] and @quote_meta} class="p-3 text-xs text-base-content/60">
+            No {@quote_meta.status} quotes in the window.
+          </div>
+          <div :if={is_nil(@quote_meta)} class="p-3 text-xs text-base-content/60">
+            Search an account's quotes — or ask “accepted quotes for ITD02”.
+          </div>
+        </div>
       </div>
 
       <div :if={@right_tab == "search"} class="space-y-2">
@@ -1088,6 +1176,82 @@ defmodule TragarAiWeb.ConsoleLive do
       status: humanize_status(w["status_code"] || w["status"]),
       consignee: w["consignee_name"] || w["consignee"],
       date: w["waybill_date"] || w["eta"]
+    }
+  end
+
+  # ── Quote search (account-scoped) ────────────────────────────────────────────
+
+  # "show me accepted quotes for ITD02" → %{account: "ITD02", status: "ACC"}.
+  defp parse_quote_search(text) do
+    t = String.downcase(text)
+    account = Regex.run(~r/\b(?:for|on|account|customer)\s+([A-Za-z0-9]{3,})\b/, text)
+    number? = Regex.match?(~r/\bquote\s*#?\s*\d{3,}/i, text)
+
+    cond do
+      not String.contains?(t, "quote") ->
+        nil
+
+      account == nil ->
+        nil
+
+      number? and not String.contains?(t, "quotes") ->
+        nil
+
+      true ->
+        %{account: account |> tl() |> hd() |> String.upcase(), status: quote_search_status(t)}
+    end
+  end
+
+  defp quote_search_status(t) do
+    Enum.find_value(TragarAi.Freight.Statuses.quote(), "all", fn {code, label} ->
+      if String.contains?(t, String.downcase(label)), do: code
+    end)
+  end
+
+  defp run_quote_search(socket, account, status, date_from \\ nil, date_to \\ nil) do
+    code = if status in Enum.map(Statuses.quote(), &elem(&1, 0)), do: status, else: nil
+
+    case fetch_quotes(account, socket.assigns.demo, code, date_from, date_to) do
+      {:ok, list} ->
+        assign(socket,
+          quote_results: Enum.map(list, &quote_summary/1),
+          quote_meta: %{account: account, status: status, total: length(list)},
+          right_tab: "quotes"
+        )
+
+      {:error, reason} ->
+        assign(socket,
+          quote_results: [],
+          quote_meta: %{account: account, status: status, error: inspect(reason)},
+          right_tab: "quotes"
+        )
+    end
+  end
+
+  defp fetch_quotes(account, true, _code, _from, _to),
+    do: {:ok, TragarAi.Demo.quotes_for(account)}
+
+  defp fetch_quotes(account, false, code, from, to) do
+    params =
+      %{account_reference: account}
+      |> put_if(:status_code, code)
+      |> put_if(:date_from, from)
+      |> put_if(:date_to, to)
+
+    case TragarAi.Freight.search_quotes(params) do
+      {:ok, %{"quotes" => quotes}} -> {:ok, quotes || []}
+      {:ok, list} when is_list(list) -> {:ok, list}
+      err -> err
+    end
+  end
+
+  defp quote_summary(q) do
+    %{
+      number: q["quote_number"],
+      status: q["status"] || q["status_code"],
+      amount: q["charged_amount"],
+      consignee: q["consignee"] || q["consignee_name"],
+      date: q["quote_date"]
     }
   end
 

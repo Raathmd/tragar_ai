@@ -139,6 +139,18 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "account-scoped"
   end
 
+  test "a quote-search query lists account-scoped quotes in the Quotes tab", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/console")
+
+    html =
+      view
+      |> form("form[phx-submit=ask]", %{question: "show me quotes for ACC1001", demo: "true"})
+      |> render_submit()
+
+    assert html =~ "1 of 1"
+    assert html =~ "7012"
+  end
+
   test "selecting a ticket and drafting a reply enters reply mode", %{conn: conn} do
     TragarAi.Demo.seed()
     {:ok, view, _html} = live(conn, ~p"/console")
