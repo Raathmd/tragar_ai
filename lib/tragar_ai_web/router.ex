@@ -14,6 +14,7 @@ defmodule TragarAiWeb.Router do
 
   pipeline :api do
     plug :accepts, ["json"]
+    plug TragarAiWeb.Plugs.ApiAuth
   end
 
   scope "/", TragarAiWeb do

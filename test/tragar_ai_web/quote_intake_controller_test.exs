@@ -61,4 +61,30 @@ defmodule TragarAiWeb.QuoteIntakeControllerTest do
     conn = post(conn, ~p"/api/quotes/intake", %{"ticket_id" => "FD-1"})
     assert json_response(conn, 400)["error"] =~ "account"
   end
+
+  describe "bearer auth (when a key is configured)" do
+    setup do
+      Application.put_env(:tragar_ai, :api_key, "s3cret")
+      on_exit(fn -> Application.delete_env(:tragar_ai, :api_key) end)
+    end
+
+    test "rejects a missing/wrong token", %{conn: conn} do
+      assert conn |> get(~p"/api/quotes/workflow") |> json_response(401)
+
+      assert conn
+             |> put_req_header("authorization", "Bearer nope")
+             |> get(~p"/api/quotes/workflow")
+             |> json_response(401)
+    end
+
+    test "accepts the correct bearer token", %{conn: conn} do
+      resp =
+        conn
+        |> put_req_header("authorization", "Bearer s3cret")
+        |> get(~p"/api/quotes/workflow")
+        |> json_response(200)
+
+      assert resp["name"] == "create_quote"
+    end
+  end
 end

@@ -65,6 +65,11 @@ if config_env() != :test do
     mode: String.to_atom(System.get_env("CORE_AI_MODE") || "stub"),
     model: System.get_env("CORE_AI_MODEL"),
     base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434"
+
+  # Inbound API auth — the bearer token Freddy (Freshdesk AI Agent) must send to
+  # call /api/* . We mint this; the admin stores it in Freshdesk's Action
+  # Authentication. When unset, /api is open (local dev only); prod must set it.
+  config :tragar_ai, :api_key, System.get_env("TRAGAR_API_KEY")
 end
 
 if config_env() == :prod do
