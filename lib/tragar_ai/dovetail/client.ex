@@ -138,7 +138,7 @@ defmodule TragarAi.Dovetail.Client do
           request(method, path, opts, false)
 
         {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
-          {:ok, unwrap(body)}
+          decode(body)
 
         {:ok, %Req.Response{status: status, body: body}} ->
           {:error, {:http_error, status, body}}
@@ -148,6 +148,27 @@ defmodule TragarAi.Dovetail.Client do
       end
     end
   end
+
+  # We take the raw body (Req's `decode_body: false`) and decode it ourselves so
+  # we can scrub the non-UTF-8 bytes FreightWare leaves in some text fields (e.g.
+  # 0xA0 Latin-1 non-breaking space) that would otherwise break JSON decoding.
+  defp decode(""), do: {:ok, %{}}
+
+  defp decode(body) when is_binary(body) do
+    case body |> scrub_utf8() |> Jason.decode() do
+      {:ok, decoded} -> {:ok, unwrap(decoded)}
+      {:error, %Jason.DecodeError{} = err} -> {:error, {:decode_failed, err.position}}
+    end
+  end
+
+  defp decode(body), do: {:ok, unwrap(body)}
+
+  # Keep valid UTF-8 codepoints; replace any invalid byte with a space.
+  defp scrub_utf8(binary), do: do_scrub(binary, []) |> IO.iodata_to_binary()
+
+  defp do_scrub(<<>>, acc), do: Enum.reverse(acc)
+  defp do_scrub(<<c::utf8, rest::binary>>, acc), do: do_scrub(rest, [<<c::utf8>> | acc])
+  defp do_scrub(<<_bad, rest::binary>>, acc), do: do_scrub(rest, [" " | acc])
 
   # FreightWare passes search filters/paging in an `esfilters` HTTP header whose
   # value is a JSON string (capitalised Filters/Paging, camelCase inner keys).
@@ -191,6 +212,8 @@ defmodule TragarAi.Dovetail.Client do
       receive_timeout: 30_000,
       retry: :transient,
       max_retries: 2,
+      # We decode JSON ourselves (in `decode/1`) after scrubbing non-UTF-8 bytes.
+      decode_body: false,
       headers: [{"content-type", "application/json"}, {"accept", "application/json"}]
     ]
     |> Keyword.merge(Keyword.get(config(), :req_options, []))

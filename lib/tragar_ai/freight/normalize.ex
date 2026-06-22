@@ -216,8 +216,16 @@ defmodule TragarAi.Freight.Normalize do
 
   @account [
     {"accountReference", "account_reference"},
+    # The base-data accounts dump uses "name"; other endpoints use "accountName".
     {"accountName", "account_name"},
-    {"accountDescription", "account_description"}
+    {"name", "account_name"},
+    {"accountDescription", "account_description"},
+    {"accountProfileDesc", "account_description"},
+    {"shortName", "short_name"},
+    {"currentStatus", "status"},
+    {"physicalCity", "city"},
+    {"eMailAddress", "email"},
+    {"telephoneNumber", "telephone"}
   ]
 
   @branch [
@@ -370,12 +378,18 @@ defmodule TragarAi.Freight.Normalize do
 
   defp take(map, fields) when is_map(map) do
     for {fw, clean} <- fields,
-        (v = Map.get(map, fw)) != nil and v != "",
+        v = trim(Map.get(map, fw)),
+        v not in [nil, ""],
         into: %{},
         do: {clean, v}
   end
 
   defp take(_, _), do: %{}
+
+  # FreightWare leaves stray newlines/spaces in text fields; trim them so blanks
+  # drop out and the UI stays clean. Non-strings pass through untouched.
+  defp trim(v) when is_binary(v), do: String.trim(v)
+  defp trim(v), do: v
 
   defp list(nil, _fun), do: []
   defp list(items, fun) when is_list(items), do: Enum.map(items, fun)
