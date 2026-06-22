@@ -172,6 +172,30 @@ defmodule TragarAi.CoreAI.Stub do
     String.downcase(to_string(get(f, "status_code") || get(f, "status") || "")) in @delivered_codes
   end
 
+  # POD line: signed-by + POD date parsed from the "POD created" event, else a
+  # generic note if a POD image is on file.
+  defp pod_phrase(f) do
+    desc =
+      (get(f, "events") || [])
+      |> Enum.find_value(fn e ->
+        d = e["event_description"] || ""
+        if String.contains?(d, "POD created"), do: d
+      end)
+
+    received = desc && capture(Regex.run(~r/Received By:\s*(.+)/, desc))
+    pod_date = desc && capture(Regex.run(~r/POD Date:\s*(.+)/, desc))
+
+    cond do
+      received && pod_date -> " Signed by #{received} on #{pod_date}."
+      received -> " Signed by #{received}."
+      get(f, "pod") -> " Proof of delivery is on file."
+      true -> ""
+    end
+  end
+
+  defp capture([_, v | _]), do: String.trim(v)
+  defp capture(_), do: nil
+
   # The delivery milestone — the latest tracking event that reports a delivery.
   defp delivery_event(f) do
     (get(f, "events") || [])
@@ -231,8 +255,7 @@ defmodule TragarAi.CoreAI.Stub do
       # latest back-office event (e.g. invoiced).
       delivered?(f) ->
         on = if ev = delivery_event(f), do: " on #{ev["event_date"]}", else: ""
-        pod = if get(f, "pod"), do: " Proof of delivery is on file.", else: ""
-        "Waybill #{get(f, "waybill_number")} has been delivered#{on}.#{pod}"
+        "Waybill #{get(f, "waybill_number")} has been delivered#{on}.#{pod_phrase(f)}"
 
       true ->
         "Waybill #{get(f, "waybill_number")} is currently #{quote_status(f)}." <>

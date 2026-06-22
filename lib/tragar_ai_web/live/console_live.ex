@@ -578,7 +578,7 @@ defmodule TragarAiWeb.ConsoleLive do
           </div>
         </form>
 
-        <div :if={@detail} class="rounded-lg border border-base-300 p-3">
+        <div :if={@detail} class="rounded-lg border border-base-300 p-3 max-h-[72vh] overflow-y-auto">
           <h4 class="text-xs font-medium mb-1">{@detail_title}</h4>
           <dl class="text-xs">
             <div
@@ -589,6 +589,25 @@ defmodule TragarAiWeb.ConsoleLive do
               <dd class="text-right">{f.value}</dd>
             </div>
           </dl>
+
+          <%= if (events = @detail["events"]) not in [nil, []] do %>
+            <div class="mt-3">
+              <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
+                Tracking ({length(events)})
+              </div>
+              <ol class="space-y-1">
+                <li :for={e <- Enum.reverse(events)} class="text-[11px] border-l-2 border-base-300 pl-2">
+                  <div class="text-base-content/50">{e["event_date"]} {e["event_time"]}</div>
+                  <div class="whitespace-pre-line">{e["event_description"]}</div>
+                </li>
+              </ol>
+            </div>
+          <% end %>
+
+          <details class="mt-3 text-[11px] text-base-content/60">
+            <summary class="cursor-pointer">Raw payload</summary>
+            <pre class="bg-base-200 rounded p-2 mt-1 overflow-x-auto">{facts_text(@detail)}</pre>
+          </details>
         </div>
         <p :if={is_nil(@detail)} class="text-xs text-base-content/60 px-1">
           Look up a waybill/quote/invoice, or click a waybill anywhere to load it here.
@@ -941,7 +960,20 @@ defmodule TragarAiWeb.ConsoleLive do
 
   defp field(key, value) do
     label = humanize(key)
-    %{label: label, value: to_string(value), snippet: "#{label}: #{value}"}
+    display = if key in ~w(status status_code), do: humanize_status(value), else: to_string(value)
+    %{label: label, value: display, snippet: "#{label}: #{display}"}
+  end
+
+  # FreightWare status codes → plain language for the chips.
+  defp humanize_status(value) do
+    case String.upcase(to_string(value)) do
+      "POD" -> "Delivered"
+      "DLV" -> "Delivered"
+      "DEL" -> "Delivered"
+      "INT" -> "In transit"
+      "COL" -> "Collected"
+      _ -> to_string(value)
+    end
   end
 
   defp event_field(%{} = e) do
