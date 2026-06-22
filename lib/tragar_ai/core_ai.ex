@@ -46,7 +46,12 @@ defmodule TragarAi.CoreAI do
   intent/entity — the AI asks the user for what it needs instead of erroring.
   """
   @spec clarify(term()) :: {:ok, String.t()}
-  def clarify(reason), do: {:ok, __MODULE__.Stub.clarify(reason)}
+  def clarify(reason) do
+    case mode() do
+      :http -> http_clarify(reason)
+      _ -> {:ok, __MODULE__.Stub.clarify(reason)}
+    end
+  end
 
   @doc "Whether the real local model is reachable (always true in stub mode)."
   @spec available?() :: boolean()
@@ -123,6 +128,39 @@ defmodule TragarAi.CoreAI do
     intent = to_atom(name)
     if intent in TragarAi.Assist.Validator.allowed_intents(), do: intent, else: :unknown
   end
+
+  # Elixir decides the situation (grounded); the model phrases it. Falls back to
+  # the deterministic template if the model is unreachable or errors.
+  defp http_clarify(reason) do
+    payload = %{intent: "clarify", facts: clarify_facts(reason), context: %{}}
+
+    case Req.post(req(), url: "/phrase", json: payload) do
+      {:ok, %Req.Response{status: 200, body: %{"answer" => answer}}} when is_binary(answer) ->
+        {:ok, answer}
+
+      _ ->
+        {:ok, __MODULE__.Stub.clarify(reason)}
+    end
+  end
+
+  defp clarify_facts({:unsupported_action, subject}),
+    do: %{
+      "situation" => "out_of_scope_change_request",
+      "subject" => subject,
+      "note" => "Read-only assistant; amendments are made in FreightWare.",
+      "capabilities" => capability_names()
+    }
+
+  defp clarify_facts({:missing_entities, missing}),
+    do: %{"situation" => "missing_information", "needed" => Enum.map(missing, &to_string/1)}
+
+  defp clarify_facts(:not_found),
+    do: %{"situation" => "reference_not_found", "capabilities" => capability_names()}
+
+  defp clarify_facts(other),
+    do: %{"situation" => to_string(other), "capabilities" => capability_names()}
+
+  defp capability_names, do: Enum.map(TragarAi.Assist.Tools.schema(), & &1["name"])
 
   defp http_phrase(intent, facts, context) do
     payload = %{intent: intent, facts: facts, context: context}
