@@ -166,6 +166,22 @@ defmodule TragarAi.CoreAI.Stub do
   defp amend_question?(%{question: q}) when is_binary(q), do: action_request?(String.downcase(q))
   defp amend_question?(_), do: false
 
+  @delivered_codes ~w(pod dlv del delivered)
+
+  defp delivered?(f) do
+    String.downcase(to_string(get(f, "status_code") || get(f, "status") || "")) in @delivered_codes
+  end
+
+  # The delivery milestone — the latest tracking event that reports a delivery.
+  defp delivery_event(f) do
+    (get(f, "events") || [])
+    |> Enum.filter(&String.contains?(String.downcase(&1["event_description"] || ""), "delivered"))
+    |> case do
+      [] -> nil
+      evs -> Enum.max_by(evs, &{&1["event_date"] || "", &1["event_time"] || ""})
+    end
+  end
+
   defp invoice_phrase(f) do
     "Account #{get(f, "account_reference")}: invoice #{get(f, "invoice_number")} is " <>
       "#{String.downcase(get(f, "status") || "on record")}" <>
@@ -207,11 +223,20 @@ defmodule TragarAi.CoreAI.Stub do
   def phrase(intent, facts, _context \\ %{})
 
   def phrase(:load_status, f, context) do
-    if amend_question?(context) do
-      amend_phrasing(f)
-    else
-      "Waybill #{get(f, "waybill_number")} is currently #{quote_status(f)}." <>
-        eta_suffix(f) <> location_suffix(f)
+    cond do
+      amend_question?(context) ->
+        amend_phrasing(f)
+
+      # "Where is it?" on a delivered shipment → cite delivery + POD, not the
+      # latest back-office event (e.g. invoiced).
+      delivered?(f) ->
+        on = if ev = delivery_event(f), do: " on #{ev["event_date"]}", else: ""
+        pod = if get(f, "pod"), do: " Proof of delivery is on file.", else: ""
+        "Waybill #{get(f, "waybill_number")} has been delivered#{on}.#{pod}"
+
+      true ->
+        "Waybill #{get(f, "waybill_number")} is currently #{quote_status(f)}." <>
+          eta_suffix(f) <> location_suffix(f)
     end
   end
 
