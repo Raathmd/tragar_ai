@@ -35,16 +35,14 @@ defmodule TragarAi.Adapters.FreightWare do
   def fetch(intent, %{waybill: waybill})
       when is_binary(waybill) and intent in [:load_status, :eta, :pod, :waybill_lookup] do
     with {:ok, shipment} <- Cache.shipment(waybill) do
-      {:ok, Map.put(shipment, "last_event", List.first(shipment["events"] || []))}
+      {:ok, Map.put(shipment, "last_event", latest_event(shipment["events"]))}
     end
   end
 
   def fetch(:track, %{waybill: waybill}) when is_binary(waybill) do
     with {:ok, shipment} <- Cache.shipment(waybill) do
       events = shipment["events"] || []
-
-      {:ok,
-       %{"waybill_number" => waybill, "events" => events, "last_event" => List.first(events)}}
+      {:ok, %{"waybill_number" => waybill, "events" => events, "last_event" => latest_event(events)}}
     end
   end
 
@@ -68,4 +66,11 @@ defmodule TragarAi.Adapters.FreightWare do
 
   def fetch(:quote_lookup, _), do: {:error, :missing_quote}
   def fetch(intent, _), do: {:error, {:unsupported_intent, intent}}
+
+  # FreightWare returns tracking events oldest-first; the latest update is the one
+  # with the greatest date+time, not the first in the list.
+  defp latest_event(events) when is_list(events) and events != [],
+    do: Enum.max_by(events, &{&1["event_date"] || "", &1["event_time"] || ""})
+
+  defp latest_event(_), do: nil
 end
