@@ -63,16 +63,13 @@ defmodule TragarAi.CoreAIHttpTest do
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
       body = Jason.decode!(raw)
 
-      assert body["facts"]["situation"] == "out_of_scope_change_request"
-      assert body["facts"]["subject"] == "quote 7012"
+      assert body["facts"]["situation"] == "amend_target_unknown"
 
-      Req.Test.json(conn, %{
-        "answer" => "Quotes can't be edited here — pop into FreightWare for that."
-      })
+      Req.Test.json(conn, %{"answer" => "Which quote or waybill — I'll check its status."})
     end)
 
-    assert {:ok, "Quotes can't be edited here — pop into FreightWare for that."} =
-             CoreAI.clarify({:unsupported_action, "quote 7012"})
+    assert {:ok, "Which quote or waybill — I'll check its status."} =
+             CoreAI.clarify(:amend_target_unknown)
   end
 
   test "clarify falls back to the deterministic template if the model errors" do
@@ -80,8 +77,8 @@ defmodule TragarAi.CoreAIHttpTest do
       conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{})
     end)
 
-    assert {:ok, message} = CoreAI.clarify({:unsupported_action, "quote 7012"})
-    assert message =~ "quote 7012"
+    assert {:ok, message} = CoreAI.clarify(:amend_target_unknown)
+    assert message =~ "quote or waybill"
   end
 
   test "phrase returns the answer string" do

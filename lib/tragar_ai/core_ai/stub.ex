@@ -22,7 +22,7 @@ defmodule TragarAi.CoreAI.Stub do
   defp classify(q, entities) do
     cond do
       action_request?(q) ->
-        :unsupported_action
+        :amend_request
 
       contains?(q, ["service type", "service types", "services available"]) ->
         :service_types
@@ -114,17 +114,10 @@ defmodule TragarAi.CoreAI.Stub do
       "I couldn't find that reference in Tragar. Please check the number, or tell me which " <>
         "waybill, quote, invoice, account or ticket you mean."
 
-  def clarify({:unsupported_action, "that"}),
+  def clarify(:amend_target_unknown),
     do:
-      "I can't make that change from here — I'm a read-only assistant. Quote and order " <>
-        "amendments are made in FreightWare's quote builder. Tell me the quote, waybill or " <>
-        "order and I'll show its current details."
-
-  def clarify({:unsupported_action, subject}),
-    do:
-      "I can't change #{subject} from here — I'm a read-only assistant. Amendments are made in " <>
-        "FreightWare's quote builder; #{subject} is currently shown above so you can see what's " <>
-        "on it. Want me to pull its full details?"
+      "Which quote or waybill do you want to add to? Whether it can be amended depends on its " <>
+        "status, so tell me the number and I'll check it in FreightWare."
 
   def clarify(_other), do: capabilities_prompt()
 
@@ -133,6 +126,24 @@ defmodule TragarAi.CoreAI.Stub do
       "proof of delivery), a quote, an invoice or account balance, a customer, a vehicle, or our " <>
       "service types. What would you like, and for which reference (e.g. “waybill 4821” or " <>
       "“account ACC1001”)?"
+  end
+
+  defp amend_label(f) do
+    cond do
+      get(f, "quote_number") -> "Quote #{get(f, "quote_number")}"
+      get(f, "waybill_number") -> "Waybill #{get(f, "waybill_number")}"
+      true -> "That item"
+    end
+  end
+
+  # Statuses that lock the item (no additions). NOTE: placeholder business rule —
+  # confirm the authoritative amendable/locked statuses with Tragar/FreightWare.
+  @locked_statuses ~w(accepted invoiced rejected expired cancelled closed collected delivered) ++
+                     ["in transit", "out for delivery"]
+
+  defp amendable?(status) do
+    s = String.downcase(to_string(status))
+    not Enum.any?(@locked_statuses, &String.contains?(s, &1))
   end
 
   defp entity_hint(:account), do: "an account number (e.g. ACC1001)"
@@ -180,6 +191,24 @@ defmodule TragarAi.CoreAI.Stub do
         else: ""
       ) <>
       if(get(f, "eta"), do: " (ETA #{get(f, "eta")}).", else: ".")
+  end
+
+  # Whether more can be added depends on the item's status — which FreightWare just
+  # told us. We advise; the agent makes the change in FreightWare.
+  def phrase(:amend_check, f, _) do
+    label = amend_label(f)
+    status = get(f, "status")
+
+    cond do
+      is_nil(status) ->
+        "I couldn't read #{label}'s status, so I can't say whether it can be added to — please check it in FreightWare."
+
+      amendable?(status) ->
+        "#{label} is #{status}, so it's not finalised yet — you can still add items to it in FreightWare's quote builder."
+
+      true ->
+        "#{label} is #{status}, which is finalised, so it can't be added to — you'd raise a new one. (Confirm in FreightWare.)"
+    end
   end
 
   def phrase(:stock, f, _), do: generic("Stock", f)

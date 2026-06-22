@@ -87,7 +87,7 @@ defmodule TragarAi.DemoTest do
       assert i.error == "not_found"
     end
 
-    test "an amend request is out of scope and answers about the carried entity" do
+    test "an amend request checks the item's FreightWare status and advises" do
       # Simulates the conversation frame: quote 7012 already established.
       {:ok, i} =
         Engine.answer("Can I add more to the quote", %{
@@ -96,11 +96,14 @@ defmodule TragarAi.DemoTest do
           entities: %{quote: "7012"}
         })
 
-      assert i.status == :failed
-      assert i.error == "unsupported_action"
-      # Not a re-run of the lookup — it names the carried quote and the boundary.
-      assert i.draft_answer =~ "quote 7012"
-      assert i.draft_answer =~ "read-only"
+      assert i.status == :drafted
+      assert i.intent == "amend_check"
+      assert i.source == "FreightWare"
+      # Quote 7012 is Accepted → finalised → can't be added to (decided from status).
+      assert i.draft_answer =~ "Accepted"
+      assert i.draft_answer =~ "finalised"
+      # It actually consulted FreightWare for the status.
+      assert Enum.any?(i.tool_log, &(&1["tool"] == "FreightWare.quote_lookup"))
     end
 
     test "an unrecognized question gets an AI prompt-back, not a bare error" do

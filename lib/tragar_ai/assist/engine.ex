@@ -55,11 +55,17 @@ defmodule TragarAi.Assist.Engine do
     end
   end
 
-  # An action (amend/cancel/…) is outside the read-only scope — respond about the
-  # entity already in context, don't pretend to do it.
-  defp process(question, %{intent: :unsupported_action, entities: entities}, context, log) do
-    reason = {:unsupported_action, action_subject(entities)}
-    clarify_fail(question, :unsupported_action, entities, context, reason, log)
+  # "Can I add to the quote/waybill?" — the answer depends on the item's status,
+  # which only FreightWare knows. Read the status (read-only) and advise; the
+  # agent makes any change in FreightWare. No entity yet → ask which.
+  defp process(question, %{intent: :amend_request, entities: entities}, context, log) do
+    case amend_target(entities) do
+      {fetch_intent, fetch_entities} ->
+        amend_check(question, fetch_intent, fetch_entities, context, log)
+
+      :none ->
+        clarify_fail(question, :amend_request, entities, context, :amend_target_unknown, log)
+    end
   end
 
   defp process(question, %{intent: intent, entities: entities}, context, log) do
@@ -73,11 +79,54 @@ defmodule TragarAi.Assist.Engine do
     end
   end
 
-  # Name the entity the action is about, from the conversation context.
-  defp action_subject(%{quote: q}) when is_binary(q), do: "quote #{q}"
-  defp action_subject(%{waybill: w}) when is_binary(w), do: "waybill #{w}"
-  defp action_subject(%{account: a}) when is_binary(a), do: "account #{a}"
-  defp action_subject(_), do: "that"
+  # Which read tells us the item's amendability status (from the carried entity).
+  defp amend_target(%{quote: q}) when is_binary(q), do: {:quote_lookup, %{quote: q}}
+  defp amend_target(%{waybill: w}) when is_binary(w), do: {:load_status, %{waybill: w}}
+  defp amend_target(_), do: :none
+
+  # Read the item's status from FreightWare, then phrase whether it can be added to.
+  defp amend_check(question, fetch_intent, entities, context, log) do
+    source = source_name(fetch_intent)
+    result = fetch_facts(fetch_intent, entities, context)
+
+    Logger.info(
+      "[assist] amend-check via #{source}.#{fetch_intent} #{inspect(entities)} -> #{summarise(result)}"
+    )
+
+    fetch_entry = fetch_entry(source, fetch_intent, entities, result)
+
+    case result do
+      {:ok, facts} ->
+        {:ok, draft} = CoreAI.phrase(:amend_check, facts)
+
+        phrase_entry =
+          ai_entry("CoreAI.phrase", %{"intent" => "amend_check"}, %{"answer" => draft}, true)
+
+        create(%{
+          question: question,
+          intent: "amend_check",
+          entities: stringify(entities),
+          facts: facts,
+          source: source,
+          tool_log: log ++ [fetch_entry, phrase_entry],
+          draft_answer: draft,
+          status: :drafted,
+          agent: context[:agent]
+        })
+
+      {:error, reason} when reason in [:not_found, :missing_waybill] ->
+        clarify_fail(question, fetch_intent, entities, context, reason, log ++ [fetch_entry])
+
+      {:error, reason} ->
+        fail(
+          question,
+          fetch_intent,
+          entities,
+          context,
+          fetch_failure(reason, fetch_intent) ++ [tool_log: log ++ [fetch_entry]]
+        )
+    end
+  end
 
   defp fetch_and_phrase(question, intent, entities, context, log) do
     source = source_name(intent)
@@ -144,7 +193,7 @@ defmodule TragarAi.Assist.Engine do
   defp error_code(:missing_waybill), do: "missing_waybill"
   defp error_code({:missing_entities, missing}), do: "missing_entities:#{Enum.join(missing, ",")}"
   defp error_code({:unknown_intent, intent}), do: "unknown_intent:#{intent}"
-  defp error_code({:unsupported_action, _subject}), do: "unsupported_action"
+  defp error_code(:amend_target_unknown), do: "amend_target_unknown"
   defp error_code(other), do: inspect(other)
 
   # In demo mode, fact-check against fixtures; otherwise the live adapters.

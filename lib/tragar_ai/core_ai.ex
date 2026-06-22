@@ -143,12 +143,11 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  defp clarify_facts({:unsupported_action, subject}),
+  defp clarify_facts(:amend_target_unknown),
     do: %{
-      "situation" => "out_of_scope_change_request",
-      "subject" => subject,
-      "note" => "Read-only assistant; amendments are made in FreightWare.",
-      "capabilities" => capability_names()
+      "situation" => "amend_target_unknown",
+      "note" => "Whether an item can be amended depends on its status in FreightWare.",
+      "needed" => ["quote number or waybill number"]
     }
 
   defp clarify_facts({:missing_entities, missing}),
