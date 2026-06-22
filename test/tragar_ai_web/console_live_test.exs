@@ -123,6 +123,22 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "INV-55012"
   end
 
+  test "a waybill-search query lists account-scoped waybills in the Search tab", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/console")
+
+    html =
+      view
+      |> form("form[phx-submit=ask]", %{
+        question: "show me undelivered waybills for ACC1001",
+        demo: "true"
+      })
+      |> render_submit()
+
+    # 1 undelivered (4821) of 2 total (4990 is delivered) — account-scoped.
+    assert html =~ "1 of 2"
+    assert html =~ "account-scoped"
+  end
+
   test "selecting a ticket and drafting a reply enters reply mode", %{conn: conn} do
     TragarAi.Demo.seed()
     {:ok, view, _html} = live(conn, ~p"/console")

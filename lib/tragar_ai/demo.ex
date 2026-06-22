@@ -35,6 +35,13 @@ defmodule TragarAi.Demo do
   defp lookup(:stock, _), do: %{"item" => "Demo SKU", "on_hand" => 120, "location" => "JHB DC"}
   defp lookup(_, _), do: nil
 
+  @doc "Demo waybills for an account (for the account-scoped search list)."
+  def waybills_for(account) do
+    Fixtures.shipments()
+    |> Map.values()
+    |> Enum.filter(&(&1["account_reference"] == account))
+  end
+
   defp waybill(e), do: e[:waybill] || e["waybill"]
   defp quote_no(e), do: e[:quote] || e["quote"]
   defp ticket_id(e), do: e[:ticket_id] || e["ticket_id"]

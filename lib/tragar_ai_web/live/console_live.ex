@@ -27,6 +27,7 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(interaction: nil, reply: false, demo: true)
      |> assign(model: TragarAi.CoreAI.info())
      |> assign(right_tab: "chat", detail: nil, detail_title: nil)
+     |> assign(search_results: [], search_meta: nil)
      |> assign(selected_ticket: nil, ticket_sort: "fifo")
      |> load_history()
      |> load_tickets()}
@@ -46,10 +47,22 @@ defmodule TragarAiWeb.ConsoleLive do
         agent: params["agent"] || socket.assigns.agent
       )
 
-    if text == "" do
-      {:noreply, put_flash(socket, :error, "Type a message first.")}
-    else
-      {:noreply, converse(socket, text, false)}
+    cond do
+      text == "" ->
+        {:noreply, put_flash(socket, :error, "Type a message first.")}
+
+      spec = parse_waybill_search(text) ->
+        {:noreply, run_waybill_search(socket, spec.account, spec.status)}
+
+      true ->
+        {:noreply, converse(socket, text, false)}
+    end
+  end
+
+  def handle_event("search_waybills", %{"account" => account, "status" => status}, socket) do
+    case blank_to_nil(account) do
+      nil -> {:noreply, put_flash(socket, :error, "Enter an account to search.")}
+      acc -> {:noreply, run_waybill_search(socket, acc, String.to_existing_atom(status))}
     end
   end
 
@@ -186,6 +199,8 @@ defmodule TragarAiWeb.ConsoleLive do
           history={@history}
           detail={@detail}
           detail_title={@detail_title}
+          search_results={@search_results}
+          search_meta={@search_meta}
         />
       </div>
 
@@ -521,6 +536,65 @@ defmodule TragarAiWeb.ConsoleLive do
         >
           Details
         </button>
+        <button
+          type="button"
+          phx-click="switch_right"
+          phx-value-tab="search"
+          class={tab_class(@right_tab == "search")}
+        >
+          Search
+        </button>
+      </div>
+
+      <div :if={@right_tab == "search"} class="space-y-2">
+        <form phx-submit="search_waybills" class="rounded-lg border border-base-300 p-2 space-y-2">
+          <div class="text-[11px] text-base-content/50">Account-scoped waybill search</div>
+          <input
+            name="account"
+            placeholder="Account, e.g. ITD02"
+            class="input input-bordered input-xs w-full"
+          />
+          <div class="flex gap-1">
+            <select name="status" class="select select-bordered select-xs flex-1">
+              <option value="undelivered">Undelivered</option>
+              <option value="delivered">Delivered</option>
+              <option value="all">All</option>
+            </select>
+            <button class="btn btn-xs btn-primary">Search</button>
+          </div>
+        </form>
+
+        <div :if={@search_meta} class="text-[11px] text-base-content/60 px-1">
+          <span :if={@search_meta[:error]} class="text-error">
+            Search failed: {@search_meta.error}
+          </span>
+          <span :if={!@search_meta[:error]}>
+            {@search_meta.account} · {@search_meta.status} · {length(@search_results)} of {@search_meta.total} (last year, account-scoped)
+          </span>
+        </div>
+
+        <div class="rounded-lg border border-base-300 divide-y divide-base-200 max-h-[64vh] overflow-y-auto">
+          <button
+            :for={w <- @search_results}
+            type="button"
+            phx-click="show_detail"
+            phx-value-type="shipment"
+            phx-value-key={w.number}
+            class="w-full p-2 text-left hover:bg-base-200"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium">{w.number}</span>
+              <span class="badge badge-xs badge-ghost">{w.status}</span>
+            </div>
+            <div class="text-[11px] text-base-content/50">{w.consignee} · {w.date}</div>
+          </button>
+          <div :if={@search_results == [] and @search_meta} class="p-3 text-xs text-base-content/60">
+            No {@search_meta.status} waybills in the window.
+          </div>
+          <div :if={is_nil(@search_meta)} class="p-3 text-xs text-base-content/60">
+            Search an account's waybills — or ask “undelivered waybills for ITD02”.
+          </div>
+        </div>
       </div>
 
       <div
@@ -596,7 +670,10 @@ defmodule TragarAiWeb.ConsoleLive do
                 Tracking ({length(events)})
               </div>
               <ol class="space-y-1">
-                <li :for={e <- Enum.reverse(events)} class="text-[11px] border-l-2 border-base-300 pl-2">
+                <li
+                  :for={e <- Enum.reverse(events)}
+                  class="text-[11px] border-l-2 border-base-300 pl-2"
+                >
                   <div class="text-base-content/50">{e["event_date"]} {e["event_time"]}</div>
                   <div class="whitespace-pre-line">{e["event_description"]}</div>
                 </li>
@@ -900,6 +977,83 @@ defmodule TragarAiWeb.ConsoleLive do
   end
 
   defp suggest(_), do: []
+
+  # ── Waybill search ───────────────────────────────────────────────────────────
+
+  # "show me undelivered waybills for ITD02" → %{account: "ITD02", status: :undelivered}.
+  defp parse_waybill_search(text) do
+    t = String.downcase(text)
+    account = Regex.run(~r/\b(?:for|on|account|customer)\s+([A-Za-z0-9]{3,})\b/, text)
+    number? = Regex.match?(~r/\bwaybill\s*#?\s*\d{4,}/i, text)
+
+    cond do
+      not String.contains?(t, "waybill") -> nil
+      account == nil -> nil
+      # A specific "waybill <number>" is a single lookup, not a search.
+      number? and not String.contains?(t, "waybills") -> nil
+      true -> %{account: account |> tl() |> hd() |> String.upcase(), status: search_status(t)}
+    end
+  end
+
+  defp search_status(t) do
+    cond do
+      String.contains?(t, "undeliver") or String.contains?(t, "not delivered") or
+        String.contains?(t, "open") or String.contains?(t, "outstanding") ->
+        :undelivered
+
+      String.contains?(t, "deliver") ->
+        :delivered
+
+      true ->
+        :all
+    end
+  end
+
+  defp run_waybill_search(socket, account, status) do
+    case fetch_waybill_list(account, socket.assigns.demo) do
+      {:ok, list} ->
+        results = list |> filter_status(status) |> Enum.map(&waybill_summary/1)
+
+        assign(socket,
+          search_results: results,
+          search_meta: %{account: account, status: status, total: length(list)},
+          right_tab: "search"
+        )
+
+      {:error, reason} ->
+        assign(socket,
+          search_results: [],
+          search_meta: %{account: account, status: status, error: inspect(reason)},
+          right_tab: "search"
+        )
+    end
+  end
+
+  defp fetch_waybill_list(account, true), do: {:ok, TragarAi.Demo.waybills_for(account)}
+
+  defp fetch_waybill_list(account, false) do
+    case TragarAi.Freight.search_waybills(%{account_reference: account}) do
+      {:ok, r} -> {:ok, r["waybills"] || []}
+      err -> err
+    end
+  end
+
+  defp filter_status(list, :undelivered), do: Enum.reject(list, &delivered_wb?/1)
+  defp filter_status(list, :delivered), do: Enum.filter(list, &delivered_wb?/1)
+  defp filter_status(list, _all), do: list
+
+  defp delivered_wb?(w),
+    do:
+      String.upcase(to_string(w["status_code"] || w["status"] || "")) in ~w(POD DLV DEL DELIVERED)
+
+  defp waybill_summary(w) do
+    %{
+      number: w["waybill_number"],
+      status: humanize_status(w["status_code"] || w["status"]),
+      consignee: w["consignee_name"] || w["consignee"],
+      date: w["waybill_date"] || w["eta"]
+    }
+  end
 
   defp reset_chat_state(socket) do
     assign(socket,

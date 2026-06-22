@@ -110,6 +110,9 @@ defmodule TragarAi.Freight do
   """
   def search_waybills(params \\ %{}) do
     with :ok <- require_account(params) do
+      # An unbounded waybill search times out — always bound it by a date window.
+      params = put_default_dates(params)
+
       filters =
         build_filters(params, [
           {"waybillNumber", :waybill_number},
@@ -120,9 +123,22 @@ defmodule TragarAi.Freight do
           {"shipperReference", :shipper_reference}
         ])
 
-      with {:ok, resp} <- Client.get("/waybills/", filters: filters, paging: paging(params, 20)) do
+      with {:ok, resp} <- Client.get("/waybills/", filters: filters, paging: paging(params, 50)) do
         {:ok, Normalize.waybills(resp)}
       end
+    end
+  end
+
+  # Default to roughly the last year so the search is bounded (and reachable).
+  defp put_default_dates(params) do
+    if params[:date_from] || params["date_from"] do
+      params
+    else
+      today = Date.utc_today()
+
+      params
+      |> Map.put(:date_from, Date.to_iso8601(Date.add(today, -365)))
+      |> Map.put(:date_to, Date.to_iso8601(today))
     end
   end
 

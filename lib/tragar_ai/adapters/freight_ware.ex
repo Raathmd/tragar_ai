@@ -42,7 +42,9 @@ defmodule TragarAi.Adapters.FreightWare do
   def fetch(:track, %{waybill: waybill}) when is_binary(waybill) do
     with {:ok, shipment} <- Cache.shipment(waybill) do
       events = shipment["events"] || []
-      {:ok, %{"waybill_number" => waybill, "events" => events, "last_event" => latest_event(events)}}
+
+      {:ok,
+       %{"waybill_number" => waybill, "events" => events, "last_event" => latest_event(events)}}
     end
   end
 
