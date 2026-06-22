@@ -35,12 +35,20 @@ defmodule TragarAi.Assist.Tools do
     ticket_id: "Support ticket id, e.g. 55"
   }
 
-  @doc "Function/tool definitions (JSON-schema-shaped) for every allowed intent."
+  alias TragarAi.Assist.Actions
+
+  @doc """
+  The allowed actions for the model: read tools (Elixir executes) plus change
+  actions (the agent performs in the source app). Each is tagged `action`.
+  """
   @spec schema() :: [map()]
-  def schema do
+  def schema, do: read_tools() ++ change_tools()
+
+  defp read_tools do
     for {intent, required} <- Validator.required() do
       %{
         "name" => to_string(intent),
+        "action" => "read",
         "description" => Map.get(@descriptions, intent, ""),
         "source" => source_name(intent),
         "parameters" => %{
@@ -52,6 +60,24 @@ defmodule TragarAi.Assist.Tools do
             end),
           "required" => Enum.map(required, &to_string/1)
         }
+      }
+    end
+  end
+
+  # Change actions aren't executed by the assistant — the agent does them in the
+  # source app, then updates the ticket. Listed so the model knows what's possible.
+  defp change_tools do
+    for {entity, a} <- Actions.all() do
+      %{
+        "name" => "change_#{entity}",
+        "action" => "change",
+        "execution" => "performed_by_agent_in_source_app",
+        "where" => a.where,
+        "source" => "FreightWare",
+        "source_functions" => a.functions,
+        "description" =>
+          "Change a #{entity} (#{a.verbs}). Not done by the assistant — the agent does it in " <>
+            "#{a.where}, then returns and updates the ticket."
       }
     end
   end

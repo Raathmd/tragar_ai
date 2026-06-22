@@ -142,12 +142,12 @@ defmodule TragarAi.CoreAI.Stub do
       "“account ACC1001”)?"
   end
 
-  defp amend_label(f) do
+  defp amend_label_entity(f) do
     cond do
-      get(f, "quote_number") -> "Quote #{get(f, "quote_number")}"
-      get(f, "waybill_number") -> "Waybill #{get(f, "waybill_number")}"
-      get(f, "invoice_number") -> "Invoice #{get(f, "invoice_number")}"
-      true -> "That item"
+      get(f, "quote_number") -> {"Quote #{get(f, "quote_number")}", "quote"}
+      get(f, "waybill_number") -> {"Waybill #{get(f, "waybill_number")}", "waybill"}
+      get(f, "invoice_number") -> {"Invoice #{get(f, "invoice_number")}", "invoice"}
+      true -> {"That item", "quote"}
     end
   end
 
@@ -172,20 +172,25 @@ defmodule TragarAi.CoreAI.Stub do
       if(get(f, "due_date"), do: " (due #{get(f, "due_date")}).", else: ".")
   end
 
-  # Answer amendability from the status FreightWare just returned.
+  # A change request: read the status (to advise), then hand the change back to the
+  # agent — they do it in the source app, then return and update the ticket.
   defp amend_phrasing(f) do
-    label = amend_label(f)
+    {label, entity} = amend_label_entity(f)
     status = get(f, "status")
+    change = TragarAi.Assist.Actions.change_for(entity)
 
     cond do
       is_nil(status) ->
-        "I couldn't read #{label}'s status, so I can't say whether it can be added to — please check it in FreightWare."
+        "I couldn't read #{label}'s status — check it in #{change.where}, then update the ticket."
 
       amendable?(status) ->
-        "#{label} is #{status}, so it's not finalised yet — you can still add to it in FreightWare's quote builder."
+        "#{label} is #{status}, so it's not finalised yet — you can #{change.verbs} it in " <>
+          "#{change.where}, then come back and update the ticket. (I can't make the change — it's a " <>
+          "read-only assistant.)"
 
       true ->
-        "#{label} is #{status}, which is finalised, so it can't be added to — you'd raise a new one. (Confirm in FreightWare.)"
+        "#{label} is #{status}, which is finalised, so it can't be added to — you'd raise a new one " <>
+          "in #{change.where}, then update the ticket."
     end
   end
 

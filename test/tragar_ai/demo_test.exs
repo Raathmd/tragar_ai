@@ -101,9 +101,11 @@ defmodule TragarAi.DemoTest do
       assert i.intent == "quote_lookup"
       assert i.source == "FreightWare"
       assert Enum.any?(i.tool_log, &(&1["tool"] == "FreightWare.quote_lookup"))
-      # Quote 7012 is Accepted → finalised → can't be added to (decided from status).
+      # Quote 7012 is Accepted → finalised → can't be added to (decided from status),
+      # and the change is handed back to the agent in FreightWare + update the ticket.
       assert i.draft_answer =~ "Accepted"
       assert i.draft_answer =~ "finalised"
+      assert i.draft_answer =~ "update the ticket"
     end
 
     test "a plain status question on the same quote is phrased as status, not amendability" do
