@@ -31,6 +31,9 @@ defmodule TragarAi.Assist.Validator do
   @doc "Allowed intents."
   def allowed_intents, do: @allowed
 
+  @doc "Required entities per intent — the schema the AI must decompose a question into."
+  def required, do: @required
+
   @doc """
   Validate a structured request. Returns `:ok` or `{:error, reason}` where
   reason is `:not_understood`, `{:unknown_intent, intent}` or

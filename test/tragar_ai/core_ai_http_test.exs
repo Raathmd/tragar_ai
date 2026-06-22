@@ -17,9 +17,15 @@ defmodule TragarAi.CoreAIHttpTest do
     :ok
   end
 
-  test "interpret maps intent to an atom and keeps only known entity keys" do
+  test "interpret sends the tool schema and maps intent + known entity keys" do
     Req.Test.stub(TragarAi.CoreAI, fn conn ->
       assert conn.request_path == "/interpret"
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      names = Jason.decode!(raw)["tools"] |> Enum.map(& &1["name"])
+
+      # The capability/function schema is handed to the model.
+      assert "load_status" in names
+      assert "invoice" in names
 
       Req.Test.json(conn, %{
         "intent" => "load_status",
@@ -31,6 +37,17 @@ defmodule TragarAi.CoreAIHttpTest do
              CoreAI.interpret("where is 4821?")
 
     assert entities == %{waybill: "4821"}
+  end
+
+  test "interpret accepts a function-calling tool_call response" do
+    Req.Test.stub(TragarAi.CoreAI, fn conn ->
+      Req.Test.json(conn, %{
+        "tool_call" => %{"name" => "quote_lookup", "arguments" => %{"quote" => "7012"}}
+      })
+    end)
+
+    assert {:ok, %{intent: :quote_lookup, entities: %{quote: "7012"}}} =
+             CoreAI.interpret("show me quote 7012")
   end
 
   test "an unknown intent string degrades to :unknown" do

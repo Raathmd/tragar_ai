@@ -90,12 +90,17 @@ defmodule TragarAi.CoreAI do
   # ── HTTP (real sidecar) ─────────────────────────────────────────────────────
 
   defp http_interpret(question, context) do
-    case Req.post(req(), url: "/interpret", json: %{question: question, context: context}) do
+    # Hand the model the tool/function schema so it can only pick a valid call.
+    payload = %{question: question, context: context, tools: TragarAi.Assist.Tools.schema()}
+
+    case Req.post(req(), url: "/interpret", json: payload) do
       {:ok, %Req.Response{status: 200, body: body}} ->
+        {name, args} = parse_interpret(body)
+
         {:ok,
          %{
-           intent: to_atom(body["intent"]),
-           entities: atomize_entities(body["entities"]),
+           intent: constrain_intent(name),
+           entities: atomize_entities(args),
            raw: question
          }}
 
@@ -105,6 +110,18 @@ defmodule TragarAi.CoreAI do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # Accept either a function-calling shape (`tool_call`) or a flat intent/entities.
+  defp parse_interpret(%{"tool_call" => %{"name" => name} = call}),
+    do: {name, call["arguments"] || call["entities"] || %{}}
+
+  defp parse_interpret(body), do: {body["intent"], body["entities"] || %{}}
+
+  # The model may only resolve to an allowed intent; anything else is :unknown.
+  defp constrain_intent(name) do
+    intent = to_atom(name)
+    if intent in TragarAi.Assist.Validator.allowed_intents(), do: intent, else: :unknown
   end
 
   defp http_phrase(intent, facts, context) do
@@ -128,7 +145,12 @@ defmodule TragarAi.CoreAI do
 
   # Only the entity keys the validator/connectors understand are accepted; the
   # model's JSON gives string keys, which we map to the known atoms.
-  @entity_keys %{"waybill" => :waybill, "ticket_id" => :ticket_id, "account" => :account}
+  @entity_keys %{
+    "waybill" => :waybill,
+    "ticket_id" => :ticket_id,
+    "account" => :account,
+    "quote" => :quote
+  }
 
   defp atomize_entities(map) when is_map(map) do
     for {k, v} <- map,
