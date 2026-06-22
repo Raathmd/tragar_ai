@@ -22,7 +22,8 @@ defmodule TragarAi.CoreAI.Stub do
   defp classify(q, entities) do
     cond do
       action_request?(q) ->
-        :amend_request
+        # An amend question needs the item's status — identify which read to call.
+        amend_read_intent(q)
 
       contains?(q, ["service type", "service types", "services available"]) ->
         :service_types
@@ -94,10 +95,28 @@ defmodule TragarAi.CoreAI.Stub do
     "re-book",
     "reschedule"
   ]
-  @action_nouns ["quote", "waybill", "booking", "collection", "order", "shipment", "load"]
+  @action_nouns [
+    "quote",
+    "waybill",
+    "booking",
+    "collection",
+    "order",
+    "shipment",
+    "load",
+    "invoice"
+  ]
 
   defp action_request?(q),
     do: contains?(q, @action_verbs) and contains?(q, @action_nouns)
+
+  # The read whose status answers an amend question (the call Elixir must make).
+  defp amend_read_intent(q) do
+    cond do
+      String.contains?(q, "quote") -> :quote_lookup
+      String.contains?(q, "invoice") -> :invoice
+      true -> :load_status
+    end
+  end
 
   # ── Clarify (prompt-back) ─────────────────────────────────────────────────────
 
@@ -114,11 +133,6 @@ defmodule TragarAi.CoreAI.Stub do
       "I couldn't find that reference in Tragar. Please check the number, or tell me which " <>
         "waybill, quote, invoice, account or ticket you mean."
 
-  def clarify(:amend_target_unknown),
-    do:
-      "Which quote or waybill do you want to add to? Whether it can be amended depends on its " <>
-        "status, so tell me the number and I'll check it in FreightWare."
-
   def clarify(_other), do: capabilities_prompt()
 
   defp capabilities_prompt do
@@ -132,6 +146,7 @@ defmodule TragarAi.CoreAI.Stub do
     cond do
       get(f, "quote_number") -> "Quote #{get(f, "quote_number")}"
       get(f, "waybill_number") -> "Waybill #{get(f, "waybill_number")}"
+      get(f, "invoice_number") -> "Invoice #{get(f, "invoice_number")}"
       true -> "That item"
     end
   end
@@ -146,6 +161,34 @@ defmodule TragarAi.CoreAI.Stub do
     not Enum.any?(@locked_statuses, &String.contains?(s, &1))
   end
 
+  # Was the agent's question a request to change the item? (passed in via context)
+  defp amend_question?(%{question: q}) when is_binary(q), do: action_request?(String.downcase(q))
+  defp amend_question?(_), do: false
+
+  defp invoice_phrase(f) do
+    "Account #{get(f, "account_reference")}: invoice #{get(f, "invoice_number")} is " <>
+      "#{String.downcase(get(f, "status") || "on record")}" <>
+      if(get(f, "balance"), do: ", balance #{get(f, "balance")}", else: "") <>
+      if(get(f, "due_date"), do: " (due #{get(f, "due_date")}).", else: ".")
+  end
+
+  # Answer amendability from the status FreightWare just returned.
+  defp amend_phrasing(f) do
+    label = amend_label(f)
+    status = get(f, "status")
+
+    cond do
+      is_nil(status) ->
+        "I couldn't read #{label}'s status, so I can't say whether it can be added to — please check it in FreightWare."
+
+      amendable?(status) ->
+        "#{label} is #{status}, so it's not finalised yet — you can still add to it in FreightWare's quote builder."
+
+      true ->
+        "#{label} is #{status}, which is finalised, so it can't be added to — you'd raise a new one. (Confirm in FreightWare.)"
+    end
+  end
+
   defp entity_hint(:account), do: "an account number (e.g. ACC1001)"
   defp entity_hint(:waybill), do: "a waybill number (e.g. 4821)"
   defp entity_hint(:quote), do: "a quote number (e.g. 7012)"
@@ -157,9 +200,13 @@ defmodule TragarAi.CoreAI.Stub do
   @doc false
   def phrase(intent, facts, _context \\ %{})
 
-  def phrase(:load_status, f, _) do
-    "Waybill #{get(f, "waybill_number")} is currently #{quote_status(f)}." <>
-      eta_suffix(f) <> location_suffix(f)
+  def phrase(:load_status, f, context) do
+    if amend_question?(context) do
+      amend_phrasing(f)
+    else
+      "Waybill #{get(f, "waybill_number")} is currently #{quote_status(f)}." <>
+        eta_suffix(f) <> location_suffix(f)
+    end
   end
 
   def phrase(:eta, f, _) do
@@ -193,24 +240,6 @@ defmodule TragarAi.CoreAI.Stub do
       if(get(f, "eta"), do: " (ETA #{get(f, "eta")}).", else: ".")
   end
 
-  # Whether more can be added depends on the item's status — which FreightWare just
-  # told us. We advise; the agent makes the change in FreightWare.
-  def phrase(:amend_check, f, _) do
-    label = amend_label(f)
-    status = get(f, "status")
-
-    cond do
-      is_nil(status) ->
-        "I couldn't read #{label}'s status, so I can't say whether it can be added to — please check it in FreightWare."
-
-      amendable?(status) ->
-        "#{label} is #{status}, so it's not finalised yet — you can still add items to it in FreightWare's quote builder."
-
-      true ->
-        "#{label} is #{status}, which is finalised, so it can't be added to — you'd raise a new one. (Confirm in FreightWare.)"
-    end
-  end
-
   def phrase(:stock, f, _), do: generic("Stock", f)
 
   def phrase(:customer_lookup, f, _) do
@@ -219,17 +248,22 @@ defmodule TragarAi.CoreAI.Stub do
       if(get(f, "description"), do: ". #{get(f, "description")}.", else: ".")
   end
 
-  def phrase(:quote_lookup, f, _) do
-    "Quote #{get(f, "quote_number")} is #{get(f, "status") || "on record"}" <>
-      if(get(f, "charged_amount"), do: " at #{get(f, "charged_amount")}", else: "") <>
-      if(get(f, "service_type"), do: " (#{get(f, "service_type")}).", else: ".")
+  def phrase(:quote_lookup, f, context) do
+    if amend_question?(context) do
+      amend_phrasing(f)
+    else
+      "Quote #{get(f, "quote_number")} is #{get(f, "status") || "on record"}" <>
+        if(get(f, "charged_amount"), do: " at #{get(f, "charged_amount")}", else: "") <>
+        if(get(f, "service_type"), do: " (#{get(f, "service_type")}).", else: ".")
+    end
   end
 
-  def phrase(:invoice, f, _) do
-    "Account #{get(f, "account_reference")}: invoice #{get(f, "invoice_number")} is " <>
-      "#{String.downcase(get(f, "status") || "on record")}" <>
-      if(get(f, "balance"), do: ", balance #{get(f, "balance")}", else: "") <>
-      if(get(f, "due_date"), do: " (due #{get(f, "due_date")}).", else: ".")
+  def phrase(:invoice, f, context) do
+    if amend_question?(context) do
+      amend_phrasing(f)
+    else
+      invoice_phrase(f)
+    end
   end
 
   def phrase(:vehicle_status, f, _) do

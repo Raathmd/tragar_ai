@@ -87,7 +87,7 @@ defmodule TragarAi.DemoTest do
       assert i.error == "not_found"
     end
 
-    test "an amend request checks the item's FreightWare status and advises" do
+    test "amend question: AI calls the quote read; answer decided from the status" do
       # Simulates the conversation frame: quote 7012 already established.
       {:ok, i} =
         Engine.answer("Can I add more to the quote", %{
@@ -97,13 +97,21 @@ defmodule TragarAi.DemoTest do
         })
 
       assert i.status == :drafted
-      assert i.intent == "amend_check"
+      # The AI identified the read call (quote_lookup); Elixir executed it.
+      assert i.intent == "quote_lookup"
       assert i.source == "FreightWare"
+      assert Enum.any?(i.tool_log, &(&1["tool"] == "FreightWare.quote_lookup"))
       # Quote 7012 is Accepted → finalised → can't be added to (decided from status).
       assert i.draft_answer =~ "Accepted"
       assert i.draft_answer =~ "finalised"
-      # It actually consulted FreightWare for the status.
-      assert Enum.any?(i.tool_log, &(&1["tool"] == "FreightWare.quote_lookup"))
+    end
+
+    test "a plain status question on the same quote is phrased as status, not amendability" do
+      {:ok, i} = Engine.answer("Is quote 7012 still open?", %{demo: true})
+
+      assert i.intent == "quote_lookup"
+      assert i.draft_answer =~ "R 4 850.00"
+      refute i.draft_answer =~ "finalised"
     end
 
     test "an unrecognized question gets an AI prompt-back, not a bare error" do

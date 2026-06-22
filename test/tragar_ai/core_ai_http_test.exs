@@ -63,13 +63,13 @@ defmodule TragarAi.CoreAIHttpTest do
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
       body = Jason.decode!(raw)
 
-      assert body["facts"]["situation"] == "amend_target_unknown"
+      assert body["facts"]["situation"] == "reference_not_found"
 
-      Req.Test.json(conn, %{"answer" => "Which quote or waybill — I'll check its status."})
+      Req.Test.json(conn, %{"answer" => "I couldn't find that — which waybill did you mean?"})
     end)
 
-    assert {:ok, "Which quote or waybill — I'll check its status."} =
-             CoreAI.clarify(:amend_target_unknown)
+    assert {:ok, "I couldn't find that — which waybill did you mean?"} =
+             CoreAI.clarify(:not_found)
   end
 
   test "clarify falls back to the deterministic template if the model errors" do
@@ -77,8 +77,8 @@ defmodule TragarAi.CoreAIHttpTest do
       conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{})
     end)
 
-    assert {:ok, message} = CoreAI.clarify(:amend_target_unknown)
-    assert message =~ "quote or waybill"
+    assert {:ok, message} = CoreAI.clarify(:not_found)
+    assert message =~ "couldn't find that reference in Tragar"
   end
 
   test "phrase returns the answer string" do

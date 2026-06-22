@@ -143,13 +143,6 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  defp clarify_facts(:amend_target_unknown),
-    do: %{
-      "situation" => "amend_target_unknown",
-      "note" => "Whether an item can be amended depends on its status in FreightWare.",
-      "needed" => ["quote number or waybill number"]
-    }
-
   defp clarify_facts({:missing_entities, missing}),
     do: %{"situation" => "missing_information", "needed" => Enum.map(missing, &to_string/1)}
 
