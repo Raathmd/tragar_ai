@@ -1,5 +1,35 @@
 defmodule TragarAiWeb.QuoteIntakeControllerTest do
-  use TragarAiWeb.ConnCase, async: true
+  use TragarAiWeb.ConnCase, async: false
+
+  setup do
+    Req.Test.set_req_test_to_shared()
+    TragarAi.Dovetail.TokenStore.invalidate()
+
+    Req.Test.stub(TragarAi.Dovetail.Client, fn conn ->
+      cond do
+        String.ends_with?(conn.request_path, "/system/auth/login") ->
+          conn
+          |> Plug.Conn.put_resp_header("x-freightware", "tok")
+          |> Req.Test.json(%{"response" => %{}})
+
+        String.contains?(conn.request_path, "/serviceTypes") ->
+          Req.Test.json(conn, %{
+            "response" => %{
+              "esServiceTypes" => %{
+                "ServiceTypes" => [
+                  %{"serviceType" => "ECO", "serviceTypeDescription" => "Economy"}
+                ]
+              }
+            }
+          })
+
+        true ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+      end
+    end)
+
+    :ok
+  end
 
   test "starts a guided quote conversation from a Freshdesk ticket", %{conn: conn} do
     body = %{
@@ -14,6 +44,17 @@ defmodule TragarAiWeb.QuoteIntakeControllerTest do
     assert resp["status"] == "collecting"
     assert resp["reply"] =~ "service"
     refute resp["complete"]
+  end
+
+  test "exposes the quote workflow descriptor as a tool", %{conn: conn} do
+    resp = conn |> get(~p"/api/quotes/workflow") |> json_response(200)
+
+    assert resp["name"] == "create_quote"
+    assert resp["account_source"] == "freshdesk_request_body"
+    keys = Enum.map(resp["steps"], & &1["key"])
+    assert keys == ["service", "collection", "delivery", "goods"]
+    assert Enum.all?(resp["steps"], &Map.has_key?(&1, "freightware_fields"))
+    assert resp["runner"]["endpoint"] =~ "/api/quotes/intake"
   end
 
   test "requires an account in the body", %{conn: conn} do

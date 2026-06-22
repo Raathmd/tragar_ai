@@ -29,6 +29,7 @@ defmodule TragarAiWeb.Router do
   scope "/api", TragarAiWeb do
     pipe_through :api
 
+    get "/quotes/workflow", QuoteIntakeController, :workflow
     post "/quotes/intake", QuoteIntakeController, :intake
   end
 

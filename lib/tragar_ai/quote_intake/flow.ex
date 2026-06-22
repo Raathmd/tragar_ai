@@ -8,22 +8,89 @@ defmodule TragarAi.QuoteIntake.Flow do
   parameters and ask the customer to confirm.
   """
 
-  # Ordered slots = the questions we guide the customer through. Keep the keys
-  # aligned with `to_quote_params/2` / `TragarAi.Freight.build_quote/1`.
+  # Ordered slots = the questions we guide the customer through, plus the metadata
+  # a machine-readable workflow descriptor needs. Keys stay aligned with
+  # `to_quote_params/2` / `TragarAi.Freight.build_quote/1`.
   @slots [
-    {"service",
-     "Which service do you need — Economy, Road Express, Overnight, Same-day, or Abnormal?"},
-    {"collection", "Where are we collecting from? Please give the suburb and postal code."},
-    {"delivery", "Where are we delivering to? Suburb and postal code, please."},
-    {"goods",
-     "What are you shipping? Tell me the contents, number of items, and total mass (kg)."}
+    %{
+      key: "service",
+      question:
+        "Which service do you need — Economy, Road Express, Overnight, Same-day, or Abnormal?",
+      required: true,
+      type: "enum",
+      maps_to: ["serviceType"],
+      hint: "One of Tragar's FreightWare service types (see allowed_values)."
+    },
+    %{
+      key: "collection",
+      question: "Where are we collecting from? Please give the suburb and postal code.",
+      required: true,
+      type: "address",
+      maps_to: ["consignorName", "consignorPostalCode"],
+      hint: "Suburb/town plus a 4-digit postal code."
+    },
+    %{
+      key: "delivery",
+      question: "Where are we delivering to? Suburb and postal code, please.",
+      required: true,
+      type: "address",
+      maps_to: ["consigneeName", "consigneePostalCode"],
+      hint: "Suburb/town plus a 4-digit postal code."
+    },
+    %{
+      key: "goods",
+      question:
+        "What are you shipping? Tell me the contents, number of items, and total mass (kg).",
+      required: true,
+      type: "freight",
+      maps_to: ["Items[].description", "Items[].pieces", "Items[].mass"],
+      hint: "Contents, number of pieces, and total mass in kilograms."
+    }
   ]
 
   @doc "The opening question for a brand-new conversation."
-  def opening_question, do: elem(hd(@slots), 1)
+  def opening_question, do: hd(@slots).question
 
   @doc "Slot keys in order."
-  def slot_keys, do: Enum.map(@slots, &elem(&1, 0))
+  def slot_keys, do: Enum.map(@slots, & &1.key)
+
+  @doc """
+  Machine-readable description of the quote workflow — the steps, parameters and
+  actions a caller (e.g. Freddy on Freshdesk) needs to take a customer through
+  creating a quote. `allowed_values` is injected per step (e.g. live service
+  types) by the caller.
+  """
+  def workflow(opts \\ []) do
+    allowed = Keyword.get(opts, :allowed_values, %{})
+
+    %{
+      "name" => "create_quote",
+      "description" =>
+        "Guided FreightWare quote creation for a Tragar account. The account is supplied " <>
+          "by Freshdesk in the request body; ask the customer each step in order, then submit.",
+      "account_source" => "freshdesk_request_body",
+      "steps" =>
+        Enum.with_index(@slots, 1)
+        |> Enum.map(fn {s, i} ->
+          %{
+            "order" => i,
+            "key" => s.key,
+            "question" => s.question,
+            "required" => s.required,
+            "type" => s.type,
+            "freightware_fields" => s.maps_to,
+            "hint" => s.hint,
+            "allowed_values" => Map.get(allowed, s.key, [])
+          }
+        end),
+      "runner" => %{
+        "endpoint" => "POST /api/quotes/intake",
+        "note" =>
+          "Relay each customer message with the same ticket_id; the response 'reply' is the next " <>
+            "question. When status is 'ready', reply ACCEPT to create the quote in FreightWare or REJECT to cancel."
+      }
+    }
+  end
 
   @doc """
   Record the customer's answer to the slot we were awaiting, then return the
@@ -80,7 +147,7 @@ defmodule TragarAi.QuoteIntake.Flow do
     Enum.find(slot_keys(), fn key -> blank?(Map.get(slots, key)) end)
   end
 
-  defp question(key), do: @slots |> List.keyfind(key, 0) |> elem(1)
+  defp question(key), do: Enum.find(@slots, &(&1.key == key)).question
 
   defp summary(slots) do
     "Here's your quote request — from #{slots["collection"]} to #{slots["delivery"]}, " <>

@@ -14,7 +14,29 @@ defmodule TragarAiWeb.QuoteIntakeController do
 
   use TragarAiWeb, :controller
 
-  alias TragarAi.QuoteIntake.Server
+  alias TragarAi.QuoteIntake.{Flow, Server}
+
+  @doc """
+  The machine-readable quote workflow — a tool Freddy (or any caller) can fetch
+  to learn the steps, parameters and allowed values for taking a customer
+  through creating a quote. The service step is enriched with the live
+  FreightWare service types.
+  """
+  def workflow(conn, _params) do
+    json(conn, Flow.workflow(allowed_values: %{"service" => service_values()}))
+  end
+
+  defp service_values do
+    case TragarAi.Freight.service_types() do
+      {:ok, types} when is_list(types) ->
+        Enum.map(types, fn t ->
+          %{"code" => t["service_type"], "label" => t["service_type_description"]}
+        end)
+
+      _ ->
+        []
+    end
+  end
 
   def intake(conn, params) do
     with {:ok, account} <- require_param(params, "account"),
