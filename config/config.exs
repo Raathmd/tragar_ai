@@ -20,7 +20,8 @@ config :tragar_ai,
     TragarAi.Support,
     TragarAi.Finance,
     TragarAi.Fleet,
-    TragarAi.Sources
+    TragarAi.Sources,
+    TragarAi.QuoteIntake
   ]
 
 # Ash configuration

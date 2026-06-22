@@ -25,6 +25,13 @@ defmodule TragarAiWeb.Router do
     live "/console", ConsoleLive
   end
 
+  # Freshdesk-facing API: guided quote intake from a ticket.
+  scope "/api", TragarAiWeb do
+    pipe_through :api
+
+    post "/quotes/intake", QuoteIntakeController, :intake
+  end
+
   # Ash admin UI for browsing interactions (dev only until real auth is added).
   if Application.compile_env(:tragar_ai, :dev_routes) do
     scope "/admin" do
