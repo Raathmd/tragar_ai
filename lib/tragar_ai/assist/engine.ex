@@ -55,6 +55,13 @@ defmodule TragarAi.Assist.Engine do
     end
   end
 
+  # An action (amend/cancel/…) is outside the read-only scope — respond about the
+  # entity already in context, don't pretend to do it.
+  defp process(question, %{intent: :unsupported_action, entities: entities}, context, log) do
+    reason = {:unsupported_action, action_subject(entities)}
+    clarify_fail(question, :unsupported_action, entities, context, reason, log)
+  end
+
   defp process(question, %{intent: intent, entities: entities}, context, log) do
     case Validator.validate(%{intent: intent, entities: entities}) do
       :ok ->
@@ -65,6 +72,12 @@ defmodule TragarAi.Assist.Engine do
         clarify_fail(question, intent, entities, context, reason, log)
     end
   end
+
+  # Name the entity the action is about, from the conversation context.
+  defp action_subject(%{quote: q}) when is_binary(q), do: "quote #{q}"
+  defp action_subject(%{waybill: w}) when is_binary(w), do: "waybill #{w}"
+  defp action_subject(%{account: a}) when is_binary(a), do: "account #{a}"
+  defp action_subject(_), do: "that"
 
   defp fetch_and_phrase(question, intent, entities, context, log) do
     source = source_name(intent)
@@ -131,6 +144,7 @@ defmodule TragarAi.Assist.Engine do
   defp error_code(:missing_waybill), do: "missing_waybill"
   defp error_code({:missing_entities, missing}), do: "missing_entities:#{Enum.join(missing, ",")}"
   defp error_code({:unknown_intent, intent}), do: "unknown_intent:#{intent}"
+  defp error_code({:unsupported_action, _subject}), do: "unsupported_action"
   defp error_code(other), do: inspect(other)
 
   # In demo mode, fact-check against fixtures; otherwise the live adapters.

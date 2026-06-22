@@ -21,6 +21,9 @@ defmodule TragarAi.CoreAI.Stub do
 
   defp classify(q, entities) do
     cond do
+      action_request?(q) ->
+        :unsupported_action
+
       contains?(q, ["service type", "service types", "services available"]) ->
         :service_types
 
@@ -75,6 +78,27 @@ defmodule TragarAi.CoreAI.Stub do
 
   defp contains?(q, terms), do: Enum.any?(terms, &String.contains?(q, &1))
 
+  # A request to change something (not a read) — outside the read-only scope.
+  @action_verbs [
+    "add to",
+    "add more",
+    "add a",
+    "amend",
+    "change",
+    "update",
+    "cancel",
+    "edit",
+    "remove",
+    "delete",
+    "book ",
+    "re-book",
+    "reschedule"
+  ]
+  @action_nouns ["quote", "waybill", "booking", "collection", "order", "shipment", "load"]
+
+  defp action_request?(q),
+    do: contains?(q, @action_verbs) and contains?(q, @action_nouns)
+
   # ── Clarify (prompt-back) ─────────────────────────────────────────────────────
 
   @doc false
@@ -89,6 +113,18 @@ defmodule TragarAi.CoreAI.Stub do
     do:
       "I couldn't find that reference in Tragar. Please check the number, or tell me which " <>
         "waybill, quote, invoice, account or ticket you mean."
+
+  def clarify({:unsupported_action, "that"}),
+    do:
+      "I can't make that change from here — I'm a read-only assistant. Quote and order " <>
+        "amendments are made in FreightWare's quote builder. Tell me the quote, waybill or " <>
+        "order and I'll show its current details."
+
+  def clarify({:unsupported_action, subject}),
+    do:
+      "I can't change #{subject} from here — I'm a read-only assistant. Amendments are made in " <>
+        "FreightWare's quote builder; #{subject} is currently shown above so you can see what's " <>
+        "on it. Want me to pull its full details?"
 
   def clarify(_other), do: capabilities_prompt()
 

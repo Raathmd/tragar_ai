@@ -87,6 +87,22 @@ defmodule TragarAi.DemoTest do
       assert i.error == "not_found"
     end
 
+    test "an amend request is out of scope and answers about the carried entity" do
+      # Simulates the conversation frame: quote 7012 already established.
+      {:ok, i} =
+        Engine.answer("Can I add more to the quote", %{
+          demo: true,
+          intent: :quote_lookup,
+          entities: %{quote: "7012"}
+        })
+
+      assert i.status == :failed
+      assert i.error == "unsupported_action"
+      # Not a re-run of the lookup — it names the carried quote and the boundary.
+      assert i.draft_answer =~ "quote 7012"
+      assert i.draft_answer =~ "read-only"
+    end
+
     test "an unrecognized question gets an AI prompt-back, not a bare error" do
       {:ok, i} = Engine.answer("What's the weather like?", %{demo: true})
 
