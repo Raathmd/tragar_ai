@@ -45,20 +45,20 @@ defmodule TragarAi.Freight do
   Returns %{quotes: [...], paging: %{}}.
   """
   def search_quotes(params \\ %{}) do
-    filters =
-      build_filters(params, [
-        {"quoteNumber", :quote_number},
-        {"accountReference", :account_reference},
-        {"statusCode", :status_code},
-        {"dateFrom", :date_from},
-        {"dateTo", :date_to},
-        {"shipperReference", :shipper_reference}
-      ])
+    with :ok <- require_account(params) do
+      filters =
+        build_filters(params, [
+          {"quoteNumber", :quote_number},
+          {"accountReference", :account_reference},
+          {"statusCode", :status_code},
+          {"dateFrom", :date_from},
+          {"dateTo", :date_to},
+          {"shipperReference", :shipper_reference}
+        ])
 
-    paging = paging(params, 10)
-
-    with {:ok, resp} <- Client.get("/quotes/", filters: filters, paging: paging) do
-      {:ok, Normalize.quotes(resp)}
+      with {:ok, resp} <- Client.get("/quotes/", filters: filters, paging: paging(params, 10)) do
+        {:ok, Normalize.quotes(resp)}
+      end
     end
   end
 
@@ -109,18 +109,20 @@ defmodule TragarAi.Freight do
   `status_code`, `date_from`, `date_to`, `shipper_reference`, `page`, `limit`.
   """
   def search_waybills(params \\ %{}) do
-    filters =
-      build_filters(params, [
-        {"waybillNumber", :waybill_number},
-        {"accountReference", :account_reference},
-        {"statusCode", :status_code},
-        {"dateFrom", :date_from},
-        {"dateTo", :date_to},
-        {"shipperReference", :shipper_reference}
-      ])
+    with :ok <- require_account(params) do
+      filters =
+        build_filters(params, [
+          {"waybillNumber", :waybill_number},
+          {"accountReference", :account_reference},
+          {"statusCode", :status_code},
+          {"dateFrom", :date_from},
+          {"dateTo", :date_to},
+          {"shipperReference", :shipper_reference}
+        ])
 
-    with {:ok, resp} <- Client.get("/waybills/", filters: filters, paging: paging(params, 20)) do
-      {:ok, Normalize.waybills(resp)}
+      with {:ok, resp} <- Client.get("/waybills/", filters: filters, paging: paging(params, 20)) do
+        {:ok, Normalize.waybills(resp)}
+      end
     end
   end
 
@@ -169,6 +171,19 @@ defmodule TragarAi.Freight do
   def accounts do
     with {:ok, resp} <- Client.get("/system/baseData/accounts") do
       {:ok, Normalize.accounts(resp)}
+    end
+  end
+
+  @doc "Fetch a single account by reference (account-scoped, individual retrieval)."
+  def get_account(account_reference) when is_binary(account_reference) do
+    with {:ok, resp} <-
+           Client.get("/system/baseData/accounts",
+             filters: [{"accountReference", account_reference}]
+           ) do
+      case Normalize.accounts(resp) do
+        [account | _] -> {:ok, account}
+        [] -> {:error, :not_found}
+      end
     end
   end
 
@@ -305,6 +320,14 @@ defmodule TragarAi.Freight do
   defp build_items(_, _), do: []
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
+
+  # Searches are always account-scoped — never an unbounded list.
+  defp require_account(params) do
+    case params[:account_reference] || params["account_reference"] do
+      ref when is_binary(ref) and ref != "" -> :ok
+      _ -> {:error, :account_required}
+    end
+  end
 
   defp build_filters(params, mapping) do
     for {fw, key} <- mapping, (v = params[key]) not in [nil, ""], do: {fw, v}

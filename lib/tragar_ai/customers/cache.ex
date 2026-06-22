@@ -31,9 +31,8 @@ defmodule TragarAi.Customers.Cache do
   end
 
   defp fetch_live(account_reference) do
-    with {:ok, accounts} <- Freight.accounts(),
-         account when is_map(account) <-
-           Enum.find(accounts, &(&1["account_reference"] == account_reference)) do
+    # Account-scoped, individual retrieval — fetch just this account, not the list.
+    with {:ok, account} <- Freight.get_account(account_reference) do
       # Contribute FreightWare's slice; harmonizes with any other source present.
       {:ok, customer} =
         Customers.contribute(
@@ -44,10 +43,6 @@ defmodule TragarAi.Customers.Cache do
         )
 
       {:ok, domain(customer)}
-    else
-      nil -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-      other -> {:error, other}
     end
   end
 

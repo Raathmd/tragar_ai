@@ -5,6 +5,11 @@ defmodule TragarAi.FreightTest do
   alias TragarAi.Logistics
   alias TragarAi.Logistics.Cache
 
+  test "searches are always account-scoped" do
+    assert {:error, :account_required} = Freight.search_quotes(%{})
+    assert {:error, :account_required} = Freight.search_waybills(%{status_code: "POD"})
+  end
+
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
