@@ -59,6 +59,12 @@ if config_env() != :test do
     domain: System.get_env("FRESHDESK_DOMAIN"),
     api_key: System.get_env("FRESHDESK_API_KEY")
 
+  # Vantage (source 2) — telematics / trip data. Token auth via /api/auth/login.
+  config :tragar_ai, TragarAi.Vantage.Client,
+    base_url: System.get_env("VANTAGE_BASE_URL") || "https://multi.vantage.run",
+    email: System.get_env("VANTAGE_EMAIL"),
+    password: System.get_env("VANTAGE_PASSWORD")
+
   # Core AI (the local model sidecar). Default stays :stub; set CORE_AI_MODE=http
   # and CORE_AI_URL to use a running local model.
   config :tragar_ai, TragarAi.CoreAI,

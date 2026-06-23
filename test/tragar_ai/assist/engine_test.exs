@@ -70,10 +70,11 @@ defmodule TragarAi.Assist.EngineTest do
   end
 
   test "a not-yet-connected source fails safe with a usable message" do
-    assert {:ok, i} = Engine.answer("what is the planned route for 4821?")
+    # Granite (WMS / stock) is still a stub; Vantage (route) is now wired.
+    assert {:ok, i} = Engine.answer("what stock is on hand?")
     assert i.status == :failed
     assert i.error == "not_available"
-    assert i.draft_answer =~ "Vantage"
+    assert i.draft_answer =~ "Granite"
   end
 
   test "an uninterpretable question fails safe" do

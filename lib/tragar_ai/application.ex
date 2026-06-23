@@ -15,6 +15,8 @@ defmodule TragarAi.Application do
       {Oban, Application.fetch_env!(:tragar_ai, Oban)},
       # Caches the Dovetail/FreightWare auth token and refreshes it on expiry.
       TragarAi.Dovetail.TokenStore,
+      # Caches the Vantage auth token.
+      TragarAi.Vantage.TokenStore,
       # Start to serve requests, typically the last entry
       TragarAiWeb.Endpoint
     ]

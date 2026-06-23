@@ -45,6 +45,12 @@ config :tragar_ai, TragarAi.Freshdesk.Client,
   api_key: "test-key",
   req_options: [plug: {Req.Test, TragarAi.Freshdesk.Client}]
 
+config :tragar_ai, TragarAi.Vantage.Client,
+  base_url: "https://vantage.test",
+  email: "test@vantage.test",
+  password: "test-pass",
+  req_options: [plug: {Req.Test, TragarAi.Vantage.Client}]
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 
