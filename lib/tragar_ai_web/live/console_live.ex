@@ -810,9 +810,9 @@ defmodule TragarAiWeb.ConsoleLive do
           </div>
 
           <%!-- Key facts --%>
-          <dl :if={surfaced_fields(%{facts: @detail}) != []} class="text-xs">
+          <dl :if={detail_fields(@detail) != []} class="text-xs">
             <div
-              :for={f <- surfaced_fields(%{facts: @detail})}
+              :for={f <- detail_fields(@detail)}
               class="flex justify-between gap-3 border-b border-base-200 py-1"
             >
               <dt class="text-base-content/60">{f.label}</dt>
@@ -1399,11 +1399,28 @@ defmodule TragarAiWeb.ConsoleLive do
   defp facts_text(facts), do: Jason.encode!(facts, pretty: true)
 
   # Flatten facts into draggable {label, value, snippet} fields.
-  defp surfaced_fields(%{facts: facts}) when is_map(facts) do
-    skip = ~w(events last_event pod waybill_number pod_image_url status status_code status_description)
+  # Middle panel (assist result): the application/domain shape, incl. the latest
+  # event. Unchanged from the original — keep surfacing the app's shape.
+  defp surfaced_fields(%{facts: facts}) when is_map(facts),
+    do: fact_fields(facts, ~w(events last_event pod waybill_number), false)
 
+  defp surfaced_fields(_), do: []
+
+  # Right detail panel: also hide the party fields, status and POD url — those get
+  # their own sections (Collection/Delivery cards, header badge, View POD button).
+  defp detail_fields(facts) when is_map(facts) do
+    fact_fields(
+      facts,
+      ~w(events last_event pod waybill_number pod_image_url status status_code status_description),
+      true
+    )
+  end
+
+  defp detail_fields(_), do: []
+
+  defp fact_fields(facts, skip, drop_party?) do
     scalars =
-      for {k, v} <- facts, k not in skip, not party_key?(k), scalar?(v) do
+      for {k, v} <- facts, k not in skip, not (drop_party? and party_key?(k)), scalar?(v) do
         field(k, v)
       end
 
@@ -1412,8 +1429,6 @@ defmodule TragarAiWeb.ConsoleLive do
 
     id_field ++ scalars ++ event_field(facts["last_event"]) ++ pod_field(facts["pod"])
   end
-
-  defp surfaced_fields(_), do: []
 
   defp scalar?(v), do: is_binary(v) or is_number(v) or is_boolean(v)
 
