@@ -33,6 +33,10 @@ defmodule TragarAiWeb.Router do
 
     get "/quotes/workflow", QuoteIntakeController, :workflow
     post "/quotes/intake", QuoteIntakeController, :intake
+
+    # Freshdesk automation → answer a ticket: interpret → tools fetch facts →
+    # compose an answer → post it back (private note) for the agent.
+    post "/tickets/answer", TicketAnswerController, :answer
   end
 
   # MCP server (JSON-RPC) at the conventional `/mcp` path — same `:api` gates

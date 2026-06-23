@@ -778,7 +778,10 @@ defmodule TragarAiWeb.ConsoleLive do
           </div>
         </form>
 
-        <div :if={@detail} class="rounded-lg border border-base-300 p-3 max-h-[72vh] overflow-y-auto space-y-3">
+        <div
+          :if={@detail}
+          class="rounded-lg border border-base-300 p-3 max-h-[72vh] overflow-y-auto space-y-3"
+        >
           <%!-- Header: title + status + POD --%>
           <div class="flex items-center justify-between gap-2">
             <h4 class="text-sm font-medium truncate">{@detail_title}</h4>
@@ -829,7 +832,9 @@ defmodule TragarAiWeb.ConsoleLive do
               <li :for={it <- items} class="text-[11px] border-l-2 border-base-300 pl-2">
                 {it["description"]}
                 <span class="text-base-content/50">
-                  — qty {it["quantity"]}, {it["total_weight"]}kg, {it["length"]}×{it["width"]}×{it["height"]}
+                  — qty {it["quantity"]}, {it["total_weight"]}kg, {it["length"]}×{it["width"]}×{it[
+                    "height"
+                  ]}
                 </span>
               </li>
             </ul>

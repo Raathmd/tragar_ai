@@ -2,8 +2,29 @@
 
 The quote workflow is exposed two ways, both behind the same gates:
 
-- **MCP** (for Freddy): **`POST /mcp`** (JSON-RPC 2.0) — tools `quote_workflow`, `quote_intake`. This is the URL registered in Freshdesk. **Only this needs to be public.**
+- **Ticket auto-answer** (Freshdesk automation → us): **`POST /api/tickets/answer`** — send a created ticket's content; Tragar AI interprets it, fetches the facts via the read tools, composes an answer, and posts it back as a private note for the agent.
+- **MCP** (for Freddy, optional/disabled for now): **`POST /mcp`** (JSON-RPC 2.0) — tools `quote_workflow`, `quote_intake`.
 - **REST** (optional/internal): `GET /api/quotes/workflow`, `POST /api/quotes/intake`
+
+## Ticket auto-answer (the active inbound flow)
+
+Freshdesk **Automations** (Admin → Workflows → Automations → "Ticket creation") run
+a **Trigger Webhook** action on new tickets:
+
+- **URL:** `https://<your-domain>/api/tickets/answer`
+- **Method:** POST, **Content:** JSON, **Auth:** Bearer `TRAGAR_API_KEY`
+- **Body:**
+  ```json
+  {"ticket_id": "{{ticket.id}}", "subject": "{{ticket.subject}}",
+   "description": "{{ticket.description_text}}", "post_reply": true}
+  ```
+
+Our app then: derives the requester's account (Freshdesk Company `cf_account`),
+runs the assist loop (Core AI interprets → read tools fetch the live fact → Core
+AI phrases), and posts the drafted answer onto the ticket as a **private note**
+(agent reviews/relays — `post_reply:false` to only return it in the response;
+`private:false` to post a public reply). The answer is also in the JSON response:
+`{ticket_id, account, answer, resolved, intent, source}`.
 
 Both `/mcp` and `/api/*` run through the same `:api` pipeline, so all the gates
 below apply to either.
