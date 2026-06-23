@@ -23,4 +23,28 @@ defmodule TragarAi.QuoteIntake do
       define :get_session, action: :read, get_by: [:ticket_id]
     end
   end
+
+  @doc """
+  The machine-readable quote workflow descriptor, enriched with the live
+  FreightWare service types. Shared by the REST endpoint and the MCP tool.
+  """
+  def workflow do
+    TragarAi.QuoteIntake.Flow.workflow(allowed_values: %{"service" => service_values()})
+  end
+
+  defp service_values do
+    case TragarAi.Freight.service_types() do
+      {:ok, types} when is_list(types) ->
+        Enum.map(types, fn t ->
+          %{
+            "code" => t["code"],
+            "label" => t["name"] || t["description"],
+            "class" => t["service_class"]
+          }
+        end)
+
+      _ ->
+        []
+    end
+  end
 end

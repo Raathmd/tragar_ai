@@ -32,6 +32,9 @@ defmodule TragarAiWeb.Router do
 
     get "/quotes/workflow", QuoteIntakeController, :workflow
     post "/quotes/intake", QuoteIntakeController, :intake
+
+    # MCP server (JSON-RPC) exposing the quote workflow as tools for Freddy.
+    post "/mcp", McpController, :rpc
   end
 
   # Ash admin UI for browsing interactions (dev only until real auth is added).
