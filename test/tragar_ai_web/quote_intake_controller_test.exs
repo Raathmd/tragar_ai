@@ -28,12 +28,25 @@ defmodule TragarAiWeb.QuoteIntakeControllerTest do
       end
     end)
 
+    # Freshdesk: the ticket's requester company maps to account ITD02.
+    Req.Test.stub(TragarAi.Freshdesk.Client, fn conn ->
+      cond do
+        String.contains?(conn.request_path, "/companies/") ->
+          Req.Test.json(conn, %{"id" => 10, "custom_fields" => %{"cf_account" => "ITD02"}})
+
+        String.contains?(conn.request_path, "/tickets/") ->
+          Req.Test.json(conn, %{"id" => 1, "company_id" => 10})
+
+        true ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+      end
+    end)
+
     :ok
   end
 
-  test "starts a guided quote conversation from a Freshdesk ticket", %{conn: conn} do
+  test "starts a guided quote conversation, deriving the account from Freshdesk", %{conn: conn} do
     body = %{
-      "account" => "ITD02",
       "ticket_id" => "FD-#{System.unique_integer([:positive])}",
       "message" => "I want to ship pallets"
     }
@@ -42,6 +55,7 @@ defmodule TragarAiWeb.QuoteIntakeControllerTest do
     resp = json_response(conn, 200)
 
     assert resp["status"] == "collecting"
+    assert resp["account"] == "ITD02"
     assert resp["reply"] =~ "service"
     refute resp["complete"]
   end
@@ -50,16 +64,16 @@ defmodule TragarAiWeb.QuoteIntakeControllerTest do
     resp = conn |> get(~p"/api/quotes/workflow") |> json_response(200)
 
     assert resp["name"] == "create_quote"
-    assert resp["account_source"] == "freshdesk_request_body"
+    assert resp["account_source"] == "derived_from_freshdesk_ticket_company"
     keys = Enum.map(resp["steps"], & &1["key"])
     assert keys == ["service", "collection", "delivery", "goods"]
     assert Enum.all?(resp["steps"], &Map.has_key?(&1, "freightware_fields"))
     assert resp["runner"]["endpoint"] =~ "/api/quotes/intake"
   end
 
-  test "requires an account in the body", %{conn: conn} do
-    conn = post(conn, ~p"/api/quotes/intake", %{"ticket_id" => "FD-1"})
-    assert json_response(conn, 400)["error"] =~ "account"
+  test "requires a ticket_id", %{conn: conn} do
+    conn = post(conn, ~p"/api/quotes/intake", %{"message" => "hi"})
+    assert json_response(conn, 400)["error"] =~ "ticket_id"
   end
 
   describe "bearer auth (when a key is configured)" do

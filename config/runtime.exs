@@ -70,6 +70,13 @@ if config_env() != :test do
   # call /api/* . We mint this; the admin stores it in Freshdesk's Action
   # Authentication. When unset, /api is open (local dev only); prod must set it.
   config :tragar_ai, :api_key, System.get_env("TRAGAR_API_KEY")
+
+  # The Freshdesk Company custom-field key that holds the customer's FreightWare
+  # account code(s). The quote-intake gate derives the account from this — a
+  # requester whose company has no code is refused.
+  if field = System.get_env("FRESHDESK_ACCOUNT_FIELD") do
+    config :tragar_ai, :freshdesk_account_field, field
+  end
 end
 
 if config_env() == :prod do

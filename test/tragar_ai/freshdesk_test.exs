@@ -3,12 +3,12 @@ defmodule TragarAi.FreshdeskTest do
 
   alias TragarAi.Freshdesk
 
+  # A Freshdesk client whose ticket's requester company carries two account codes.
   defmodule FakeClient do
-    # Records notes posted back so the test can assert on them.
-    def start, do: Agent.start_link(fn -> [] end)
+    def get_ticket(_id), do: {:ok, %{"id" => 1, "company_id" => 10}}
 
-    def get_ticket(_id),
-      do: {:ok, %{"id" => 1, "custom_fields" => %{"cf_account" => "ITD02"}}}
+    def get_company(10),
+      do: {:ok, %{"id" => 10, "custom_fields" => %{"cf_account" => "ITD01, ITD02"}}}
 
     def add_note(_ticket_id, attrs) do
       if pid = Process.get(:notes), do: Agent.update(pid, &[attrs | &1])
@@ -16,40 +16,51 @@ defmodule TragarAi.FreshdeskTest do
     end
 
     def create_ticket(attrs), do: {:ok, Map.put(attrs, :id, 555)}
+  end
 
-    defmodule FreightWare do
-      def create_quote(_), do: {:ok, %{"quote_number" => "Q42"}}
-    end
+  defmodule NoCompanyClient do
+    def get_ticket(_id), do: {:ok, %{"id" => 2, "company_id" => nil}}
   end
 
   defmodule NoAccountClient do
-    def get_ticket(_id), do: {:ok, %{"id" => 2, "custom_fields" => %{}}}
-    def add_note(_, _), do: {:ok, %{}}
+    def get_ticket(_id), do: {:ok, %{"id" => 3, "company_id" => 11}}
+    def get_company(11), do: {:ok, %{"id" => 11, "custom_fields" => %{}}}
   end
 
-  test "account_for/1 reads the account custom field" do
-    assert Freshdesk.account_for(%{"custom_fields" => %{"cf_account" => "ITD02"}}) == "ITD02"
-    assert Freshdesk.account_for(%{"company_name" => "ACME"}) == "ACME"
-    assert Freshdesk.account_for(%{"custom_fields" => %{}}) == nil
+  # A verifier + FreightWare for the run_quote bridge test.
+  defmodule OneAccountFD do
+    def accounts_for_requester(_ticket, _opts \\ []), do: {:ok, ["ITD02"]}
   end
 
-  test "run_quote derives the account, runs the flow, and posts the reply back" do
+  describe "accounts_for_requester/2 (the authorization gate)" do
+    test "returns the requester company's account code(s), upper-cased + split" do
+      assert {:ok, ["ITD01", "ITD02"]} =
+               Freshdesk.accounts_for_requester("t1", client: FakeClient)
+    end
+
+    test "refuses a requester with no linked company" do
+      assert {:error, :requester_not_linked} =
+               Freshdesk.accounts_for_requester("t2", client: NoCompanyClient)
+    end
+
+    test "refuses when the company carries no account code" do
+      assert {:error, :company_has_no_account} =
+               Freshdesk.accounts_for_requester("t3", client: NoAccountClient)
+    end
+  end
+
+  test "run_quote derives the account via Freshdesk and posts the reply back" do
     {:ok, pid} = Agent.start_link(fn -> [] end)
     Process.put(:notes, pid)
     tid = "FD-#{System.unique_integer([:positive])}"
 
-    {:ok, r} = Freshdesk.run_quote(tid, "I need a quote", client: FakeClient)
+    {:ok, r} =
+      Freshdesk.run_quote(tid, "I need a quote", client: FakeClient, freshdesk: OneAccountFD)
 
     assert r.account == "ITD02"
     assert r.reply =~ "service"
-    # The reply was posted to the ticket as a private note.
     assert [%{body: body, private: true}] = Agent.get(pid, & &1)
     assert body =~ "service"
-  end
-
-  test "run_quote errors when no account is on the ticket" do
-    assert {:error, :account_not_found_on_ticket} =
-             Freshdesk.run_quote("FD-x", "hi", client: NoAccountClient)
   end
 
   test "create_test_ticket builds a tagged test ticket" do

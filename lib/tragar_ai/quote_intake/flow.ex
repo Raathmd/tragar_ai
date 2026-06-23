@@ -75,9 +75,10 @@ defmodule TragarAi.QuoteIntake.Flow do
     %{
       "name" => "create_quote",
       "description" =>
-        "Guided FreightWare quote creation for a Tragar account. The account is supplied " <>
-          "by Freshdesk in the request body; ask the customer each step in order, then submit.",
-      "account_source" => "freshdesk_request_body",
+        "Guided FreightWare quote creation for a Tragar account. The account is NOT supplied by " <>
+          "the caller — it is derived from the ticket requester's Freshdesk Company (a requester " <>
+          "not linked to an account is refused). Ask the customer each step in order, then submit.",
+      "account_source" => "derived_from_freshdesk_ticket_company",
       "steps" =>
         Enum.with_index(@slots, 1)
         |> Enum.map(fn {s, i} ->

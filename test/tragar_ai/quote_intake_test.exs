@@ -76,6 +76,19 @@ defmodule TragarAi.QuoteIntakeTest do
     def create_quote(_), do: {:ok, %{"quote_number" => "Q1"}}
   end
 
+  # Requester verifiers (the account-derivation gate).
+  defmodule OneAccountFD do
+    def accounts_for_requester(_t, _o \\ []), do: {:ok, ["ITD02"]}
+  end
+
+  defmodule MultiAccountFD do
+    def accounts_for_requester(_t, _o \\ []), do: {:ok, ["ITD01", "ITD02"]}
+  end
+
+  defmodule NoAccountFD do
+    def accounts_for_requester(_t, _o \\ []), do: {:error, :requester_not_linked}
+  end
+
   describe "Flow (pure)" do
     test "next_unfilled walks slots in order; address slots need a resolved site" do
       assert Flow.next_unfilled(%{}) == "service"
@@ -137,9 +150,13 @@ defmodule TragarAi.QuoteIntakeTest do
     end
   end
 
-  # Pass the fake FreightWare on every turn so site search + rating hit the fake.
+  # Pass the fakes on every turn so derivation, site search and rating hit fakes.
   defp step(base, msg),
-    do: Server.handle(Map.put(base, :message, msg), freightware: FakeFreightWare)
+    do:
+      Server.handle(Map.put(base, :message, msg),
+        freightware: FakeFreightWare,
+        freshdesk: OneAccountFD
+      )
 
   describe "Server (guided conversation)" do
     test "search+confirm sites, resolve service code, rate, and create the quote" do
@@ -180,7 +197,13 @@ defmodule TragarAi.QuoteIntakeTest do
     test "ranks the closest site first using all the words the user gave" do
       tid = "T-#{System.unique_integer([:positive])}"
       base = %{ticket_id: tid, account: "ITD02"}
-      run = fn msg -> Server.handle(Map.put(base, :message, msg), freightware: MultiSiteFW) end
+
+      run = fn msg ->
+        Server.handle(Map.put(base, :message, msg),
+          freightware: MultiSiteFW,
+          freshdesk: OneAccountFD
+        )
+      end
 
       run.("quote")
       run.("Economy")
@@ -193,7 +216,13 @@ defmodule TragarAi.QuoteIntakeTest do
     test "asks for the postal code when the chosen site has none (required to rate)" do
       tid = "T-#{System.unique_integer([:positive])}"
       base = %{ticket_id: tid, account: "ITD02"}
-      run = fn msg -> Server.handle(Map.put(base, :message, msg), freightware: NoPostalFW) end
+
+      run = fn msg ->
+        Server.handle(Map.put(base, :message, msg),
+          freightware: NoPostalFW,
+          freshdesk: OneAccountFD
+        )
+      end
 
       run.("quote")
       run.("Economy")
@@ -204,6 +233,35 @@ defmodule TragarAi.QuoteIntakeTest do
       # Supplying it advances to the delivery question.
       {:ok, d} = run.("0063")
       assert d.reply =~ "delivering"
+    end
+
+    test "derives the account from Freshdesk; refuses a requester with no account" do
+      base = %{ticket_id: "T-#{System.unique_integer([:positive])}"}
+
+      {:ok, r} = Server.handle(Map.put(base, :message, "quote"), freshdesk: NoAccountFD)
+      assert r.status == "refused"
+      assert r.complete
+      assert r.reply =~ "couldn't find a Tragar account"
+    end
+
+    test "asks which account when the requester is entitled to several" do
+      base = %{ticket_id: "T-#{System.unique_integer([:positive])}"}
+
+      run = fn msg ->
+        Server.handle(Map.put(base, :message, msg),
+          freightware: FakeFreightWare,
+          freshdesk: MultiAccountFD
+        )
+      end
+
+      {:ok, r0} = run.("quote")
+      assert r0.status == "choosing_account"
+      assert r0.reply =~ "Which account"
+      assert r0.reply =~ "ITD01" and r0.reply =~ "ITD02"
+
+      # Picking #2 selects ITD02 and moves on to the service question.
+      {:ok, r1} = run.("2")
+      assert r1.reply =~ "service"
     end
 
     test "REJECT cancels the request" do

@@ -13,7 +13,6 @@ defmodule TragarAi.QuoteIntake.Server do
 
   @type input :: %{
           required(:ticket_id) => String.t(),
-          required(:account) => String.t(),
           optional(:message) => String.t(),
           optional(:requester_email) => String.t()
         }
@@ -21,22 +20,35 @@ defmodule TragarAi.QuoteIntake.Server do
   @doc """
   Handle one inbound message for a ticket. Returns a map the controller renders
   as JSON: `reply` is the text to post back to the customer.
+
+  The account is NEVER taken from the caller — on the first message we derive the
+  requester's entitled account(s) from Freshdesk. No linked account → refused.
   """
   @spec handle(input(), keyword()) :: {:ok, map()} | {:error, term()}
-  def handle(%{ticket_id: ticket_id, account: account} = input, opts \\ []) do
+  def handle(%{ticket_id: ticket_id} = input, opts \\ []) do
     fw = Keyword.get(opts, :freightware, TragarAi.Freight)
+    fd = Keyword.get(opts, :freshdesk, TragarAi.Freshdesk)
     message = Map.get(input, :message, "") || ""
 
     case load(ticket_id) do
-      nil -> open(ticket_id, account, input, message)
+      nil -> open(ticket_id, input, message, fd)
+      %{status: "choosing_account"} = s -> choose_account(s, message)
       %{status: "collecting"} = s -> collect(s, message, fw)
       %{status: "ready"} = s -> confirm(s, message, fw)
       %{status: status} = s -> {:ok, result(s, "This quote request is already #{status}.", true)}
     end
   end
 
-  # First message on a ticket — greet and ask the opening question.
-  defp open(ticket_id, account, input, message) do
+  # First message — verify the requester and derive their entitled account(s).
+  defp open(ticket_id, input, message, fd) do
+    case fd.accounts_for_requester(ticket_id) do
+      {:ok, [account]} -> start_collecting(ticket_id, account, input, message)
+      {:ok, [_ | _] = accounts} -> start_choosing(ticket_id, accounts, input, message)
+      _ -> {:ok, refusal(ticket_id)}
+    end
+  end
+
+  defp start_collecting(ticket_id, account, input, message) do
     reply = Flow.opening_question()
 
     upsert(%{
@@ -48,11 +60,83 @@ defmodule TragarAi.QuoteIntake.Server do
       request_text: message,
       last_reply: reply
     })
-    |> case do
-      {:ok, s} -> {:ok, result(s, reply, false)}
-      err -> err
+    |> finish(reply)
+  end
+
+  # The requester is entitled to more than one account — ask which to quote under.
+  defp start_choosing(ticket_id, accounts, input, message) do
+    reply =
+      "Which account should I quote under?\n#{numbered_accounts(accounts)}\nReply with the number."
+
+    upsert(%{
+      ticket_id: ticket_id,
+      # Provisional until the customer picks one of `accounts`.
+      account_reference: "PENDING",
+      requester_email: input[:requester_email],
+      status: "choosing_account",
+      slots: %{"_accounts" => accounts},
+      request_text: message,
+      last_reply: reply
+    })
+    |> finish(reply)
+  end
+
+  defp choose_account(session, message) do
+    accounts = session.slots["_accounts"] || []
+
+    case pick_account(message, accounts) do
+      {:ok, account} ->
+        reply = Flow.opening_question()
+
+        save(session, %{
+          account_reference: account,
+          status: "collecting",
+          slots: Map.delete(session.slots, "_accounts"),
+          last_reply: reply
+        })
+        |> ok(reply, false)
+
+      :error ->
+        reply = "Please reply with the number of the account.\n#{numbered_accounts(accounts)}"
+        {:ok, result(session, reply, false)}
     end
   end
+
+  defp pick_account(message, accounts) do
+    t = String.trim(message)
+
+    cond do
+      Regex.match?(~r/^\d+$/, t) ->
+        case Enum.at(accounts, String.to_integer(t) - 1) do
+          nil -> :error
+          a -> {:ok, a}
+        end
+
+      a = Enum.find(accounts, &(String.upcase(&1) == String.upcase(t))) ->
+        {:ok, a}
+
+      true ->
+        :error
+    end
+  end
+
+  defp numbered_accounts(accounts),
+    do: accounts |> Enum.with_index(1) |> Enum.map_join("\n", fn {a, i} -> "#{i}. #{a}" end)
+
+  defp refusal(ticket_id) do
+    %{
+      ticket_id: ticket_id,
+      account: nil,
+      status: "refused",
+      complete: true,
+      reply:
+        "I couldn't find a Tragar account linked to your email, so I can't raise a quote here. " <>
+          "Please contact Tragar support to get set up."
+    }
+  end
+
+  defp finish({:ok, session}, reply), do: {:ok, result(session, reply, false)}
+  defp finish(err, _reply), do: err
 
   # Mid-conversation — resolve a pending postal code, then a pending site
   # selection, otherwise answer the current slot.

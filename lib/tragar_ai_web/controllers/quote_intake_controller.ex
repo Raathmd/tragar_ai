@@ -43,23 +43,24 @@ defmodule TragarAiWeb.QuoteIntakeController do
   end
 
   def intake(conn, params) do
-    with {:ok, account} <- require_param(params, "account"),
-         {:ok, ticket_id} <- require_param(params, "ticket_id") do
-      input = %{
-        ticket_id: to_string(ticket_id),
-        account: to_string(account),
-        message: params["message"] || "",
-        requester_email: params["requester_email"]
-      }
+    # The account is NOT accepted from the body — the Server derives the
+    # requester's entitled account(s) from Freshdesk using the ticket_id.
+    case require_param(params, "ticket_id") do
+      {:ok, ticket_id} ->
+        input = %{
+          ticket_id: to_string(ticket_id),
+          message: params["message"] || "",
+          requester_email: params["requester_email"]
+        }
 
-      case Server.handle(input) do
-        {:ok, result} ->
-          json(conn, result)
+        case Server.handle(input) do
+          {:ok, result} ->
+            json(conn, result)
 
-        {:error, reason} ->
-          conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(reason)})
-      end
-    else
+          {:error, reason} ->
+            conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(reason)})
+        end
+
       {:missing, field} ->
         conn |> put_status(:bad_request) |> json(%{error: "#{field} is required"})
     end
