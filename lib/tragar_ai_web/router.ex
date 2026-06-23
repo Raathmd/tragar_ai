@@ -33,8 +33,13 @@ defmodule TragarAiWeb.Router do
 
     get "/quotes/workflow", QuoteIntakeController, :workflow
     post "/quotes/intake", QuoteIntakeController, :intake
+  end
 
-    # MCP server (JSON-RPC) exposing the quote workflow as tools for Freddy.
+  # MCP server (JSON-RPC) at the conventional `/mcp` path — same `:api` gates
+  # (IP allowlist → bearer → session). This is the URL registered in Freshdesk.
+  scope "/", TragarAiWeb do
+    pipe_through :api
+
     post "/mcp", McpController, :rpc
   end
 

@@ -1,12 +1,14 @@
 # Freshdesk ↔ Tragar quote-intake: setup & security
 
-The quote workflow is exposed two ways, both on the `/api` surface and behind the
-same gates:
+The quote workflow is exposed two ways, both behind the same gates:
 
-- **REST**: `GET /api/quotes/workflow`, `POST /api/quotes/intake`
-- **MCP** (for Freddy): `POST /api/mcp` (JSON-RPC 2.0) — tools `quote_workflow`, `quote_intake`
+- **MCP** (for Freddy): **`POST /mcp`** (JSON-RPC 2.0) — tools `quote_workflow`, `quote_intake`. This is the URL registered in Freshdesk. **Only this needs to be public.**
+- **REST** (optional/internal): `GET /api/quotes/workflow`, `POST /api/quotes/intake`
 
-## Security gates (all enforced on `/api/*`)
+Both `/mcp` and `/api/*` run through the same `:api` pipeline, so all the gates
+below apply to either.
+
+## Security gates
 
 | Gate | Question | Mechanism |
 |---|---|---|
@@ -49,7 +51,7 @@ CIDRs; ranges shown as `x-y` are a contiguous block (e.g. `44.206.73.232-239` =
 ## Register the MCP server in Freshdesk
 
 1. **AI Agent Studio → MCP Gateway** → add a **Remote / HTTP MCP server**.
-2. **URL:** `https://<your-public-host>/api/mcp` (Freddy is cloud-hosted — must be a public HTTPS URL; use `ngrok http 4000` for testing).
+2. **URL:** `https://<your-domain>/mcp` (Freddy is cloud-hosted — must be a public HTTPS URL; use `ngrok http 4000` for testing).
 3. **Authentication:** **Bearer Token** = `TRAGAR_API_KEY`.
 4. Save & connect — Freshworks discovers `quote_workflow` + `quote_intake`.
 5. In the Agent's workflow, call `quote_intake` with `ticket_id = {{ticket.id}}` and the customer message; post the tool's `reply` back; loop until `structuredContent.complete`.
@@ -79,8 +81,8 @@ Suitable all-in-one boxes (available in SA): **Sophos XGS 87/107**, **FortiGate
 
 ### Firewall rules
 1. **Published service (reverse proxy / VIP / WAF):**
-   - Public hostname: `tools.tragar.co.za` → internal `http(s)://<tragar-ai-host>:4000`
-   - **Path allowlist:** forward **only** `/api/` (and `/api/mcp`). Block `/console`, `/admin`, `/dev`, `/`.
+   - Public hostname: `<your-domain>` (the existing app host, `PHX_HOST`) → internal `http(s)://<tragar-ai-host>:4000`
+   - **Path allowlist:** forward **only** `/mcp`. Block `/console`, `/admin`, `/dev`, `/api/`, `/`.
    - **TLS:** terminate at the appliance (Let's Encrypt or a purchased cert for the hostname). Inbound **443 only**.
 2. **Source-IP policy (the key control):** allow inbound to that service **only from
    Freshworks NAT egress IPs** (your region's set — see list above). Deny all other sources.
@@ -103,7 +105,7 @@ If the appliance already enforces the Freshworks source-IP policy, the app's
 
 1. Install `cloudflared` on (or near) the Tragar AI host; create a tunnel to a Cloudflare hostname.
 2. Cloudflare config:
-   - Route **only** `/api/*` to `http://localhost:4000`; TLS is automatic at Cloudflare.
+   - Route **only** `/mcp` to `http://localhost:4000`; TLS is automatic at Cloudflare.
    - **WAF rule:** allow only Freshworks NAT IPs; block the rest.
 3. App env:
 ```
@@ -113,6 +115,5 @@ TRAGAR_API_KEY=<bearer>
 No inbound firewall ports are opened; the box stays fully private.
 
 ## Either way — register in Freshdesk
-Use the public hostname for the MCP server URL: `https://tools.tragar.co.za/api/mcp`
-(Option A) or `https://<name>.<cloudflare-domain>/api/mcp` (Option B), with Bearer
-auth = `TRAGAR_API_KEY`.
+MCP server URL = **`https://<your-domain>/mcp`** (the existing app host for Option A,
+or the Cloudflare hostname for Option B), with Bearer auth = `TRAGAR_API_KEY`.

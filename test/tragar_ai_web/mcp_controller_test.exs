@@ -45,7 +45,7 @@ defmodule TragarAiWeb.McpControllerTest do
       Enum.reduce(headers, build_conn(), fn {k, v}, c -> put_req_header(c, k, v) end)
 
     body = %{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}
-    post(conn, ~p"/api/mcp", body)
+    post(conn, ~p"/mcp", body)
   end
 
   test "tool calls require an MCP session (must initialize first)" do
