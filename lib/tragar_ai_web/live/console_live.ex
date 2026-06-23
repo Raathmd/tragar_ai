@@ -687,19 +687,33 @@ defmodule TragarAiWeb.ConsoleLive do
         </div>
 
         <div class="rounded-lg border border-base-300 divide-y divide-base-200 max-h-[64vh] overflow-y-auto">
-          <button
+          <div
             :for={w <- @search_results}
-            type="button"
-            phx-click="prompt_waybill"
-            phx-value-number={w.number}
-            class="w-full p-2 text-left hover:bg-base-200"
+            class="w-full p-2 flex items-center justify-between gap-2 hover:bg-base-200"
           >
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-xs font-medium">{w.number}</span>
+            <button
+              type="button"
+              phx-click="prompt_waybill"
+              phx-value-number={w.number}
+              class="text-left flex-1 min-w-0"
+            >
+              <div class="text-xs font-medium">{w.number}</div>
+              <div class="text-[11px] text-base-content/50 truncate">{w.consignee} · {w.date}</div>
+            </button>
+            <div class="flex items-center gap-1 shrink-0">
               <span class="badge badge-xs badge-ghost">{w.status}</span>
+              <a
+                :if={w.pod_url}
+                href={w.pod_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-xs btn-outline btn-primary"
+                title="View proof of delivery"
+              >
+                View
+              </a>
             </div>
-            <div class="text-[11px] text-base-content/50">{w.consignee} · {w.date}</div>
-          </button>
+          </div>
           <div :if={@search_results == [] and @search_meta} class="p-3 text-xs text-base-content/60">
             No {@search_meta.status} waybills in the window.
           </div>
@@ -1223,7 +1237,8 @@ defmodule TragarAiWeb.ConsoleLive do
       number: w["waybill_number"],
       status: humanize_status(w["status_code"] || w["status"]),
       consignee: w["consignee_name"] || w["consignee"],
-      date: w["waybill_date"] || w["eta"]
+      date: w["waybill_date"] || w["eta"],
+      pod_url: blank_to_nil(w["pod_image_url"])
     }
   end
 
