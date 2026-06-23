@@ -55,6 +55,27 @@ defmodule TragarAi.QuoteIntakeTest do
     end
   end
 
+  defmodule NoPostalFW do
+    # A site that comes back without a postal code.
+    def search_sites(_q),
+      do:
+        {:ok,
+         [
+           %{
+             "site_code" => "I902",
+             "site_name" => "ITALTILE MENLYN",
+             "suburb" => "MENLYN",
+             "city" => "PRETORIA",
+             "post_code" => "",
+             "account_reference" => "ITD01"
+           }
+         ]}
+
+    def resolve_service_type(_), do: {:ok, %{"code" => "ECO"}}
+    def quick_quote(_), do: {:ok, []}
+    def create_quote(_), do: {:ok, %{"quote_number" => "Q1"}}
+  end
+
   describe "Flow (pure)" do
     test "next_unfilled walks slots in order; address slots need a resolved site" do
       assert Flow.next_unfilled(%{}) == "service"
@@ -167,6 +188,22 @@ defmodule TragarAi.QuoteIntakeTest do
 
       # I905 matches italtile + bryanston + 2191 → ranked #1 over the other Italtiles.
       assert r.reply =~ "1. I905"
+    end
+
+    test "asks for the postal code when the chosen site has none (required to rate)" do
+      tid = "T-#{System.unique_integer([:positive])}"
+      base = %{ticket_id: tid, account: "ITD02"}
+      run = fn msg -> Server.handle(Map.put(base, :message, msg), freightware: NoPostalFW) end
+
+      run.("quote")
+      run.("Economy")
+      run.("Italtile Menlyn")
+      {:ok, p} = run.("1")
+      assert p.reply =~ "postal code"
+
+      # Supplying it advances to the delivery question.
+      {:ok, d} = run.("0063")
+      assert d.reply =~ "delivering"
     end
 
     test "REJECT cancels the request" do

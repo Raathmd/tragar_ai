@@ -54,13 +54,13 @@ defmodule TragarAi.QuoteIntake.Server do
     end
   end
 
-  # Mid-conversation — either resolve a pending site selection, or answer the
-  # current slot (address slots trigger a site search + confirm).
+  # Mid-conversation — resolve a pending postal code, then a pending site
+  # selection, otherwise answer the current slot.
   defp collect(session, message, fw) do
-    if session.slots["_pending"] do
-      resolve_selection(session, message, fw)
-    else
-      answer_current(session, message, fw)
+    cond do
+      session.slots["_pending_postal"] -> apply_postal(session, message, fw)
+      session.slots["_pending"] -> resolve_selection(session, message, fw)
+      true -> answer_current(session, message, fw)
     end
   end
 
@@ -138,12 +138,49 @@ defmodule TragarAi.QuoteIntake.Server do
     case parse_pick(message, slots["_candidates"] || []) do
       {:ok, site} ->
         slots = slots |> Map.put(key, site) |> Map.delete("_pending") |> Map.delete("_candidates")
-        proceed(session, slots, fw)
+        # Postal code is required to rate — if the chosen site has none, ask.
+        if blank?(site["post_code"]),
+          do: ask_postal(session, key, slots),
+          else: proceed(session, slots, fw)
 
       :refine ->
         offer_sites(session, key, message, fw)
     end
   end
+
+  # The chosen site has no postal code — FreightWare can't rate without it.
+  defp ask_postal(session, key, slots) do
+    site = slots[key]
+
+    reply =
+      "What's the postal code for #{key} at #{site["name"] || site["site_code"]}? (FreightWare needs it to rate.)"
+
+    save(session, %{slots: Map.put(slots, "_pending_postal", key), last_reply: reply})
+    |> ok(reply, false)
+  end
+
+  defp apply_postal(session, message, fw) do
+    key = session.slots["_pending_postal"]
+    postal = extract_postal(message)
+
+    if postal do
+      site = session.slots[key] |> Map.put("post_code", postal)
+      slots = session.slots |> Map.put(key, site) |> Map.delete("_pending_postal")
+      proceed(session, slots, fw)
+    else
+      reply = "I need a 4-digit postal code to rate. What's the postal code?"
+      save(session, %{slots: session.slots, last_reply: reply}) |> ok(reply, false)
+    end
+  end
+
+  defp extract_postal(message) do
+    case Regex.run(~r/\b(\d{4})\b/, message) do
+      [_, code] -> code
+      _ -> nil
+    end
+  end
+
+  defp blank?(v), do: not (is_binary(v) and String.trim(v) != "")
 
   # Ask the next question, or finalize once every slot is filled.
   defp proceed(session, slots, fw) do
