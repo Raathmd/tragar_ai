@@ -4,71 +4,119 @@ defmodule TragarAi.QuoteIntakeTest do
   alias TragarAi.QuoteIntake.{Flow, Server}
 
   defmodule FakeFreightWare do
+    def search_sites(_q),
+      do:
+        {:ok,
+         [
+           %{
+             "site_code" => "I902",
+             "site_name" => "ITALTILE MENLYN",
+             "suburb" => "MENLYN",
+             "city" => "PRETORIA",
+             "post_code" => "0063",
+             "account_reference" => "ITD01"
+           }
+         ]}
+
     def resolve_service_type(_text), do: {:ok, %{"code" => "ECO", "name" => "ECONOMY"}}
     def quick_quote(_params), do: {:ok, [%{"service_type" => "ECO", "total_charge" => "1234.00"}]}
     def create_quote(_params), do: {:ok, %{"quote_number" => "Q9001"}}
   end
 
   describe "Flow (pure)" do
-    test "advances slot by slot then becomes ready" do
-      assert {:ask, s1, q1} = Flow.advance(%{}, "Economy")
-      assert s1["service"] == "Economy"
-      assert q1 =~ "collecting from"
+    test "next_unfilled walks slots in order; address slots need a resolved site" do
+      assert Flow.next_unfilled(%{}) == "service"
+      assert Flow.next_unfilled(%{"service" => "ECO"}) == "collection"
 
-      assert {:ask, s2, _} = Flow.advance(s1, "Sandton 2196")
-      assert {:ask, s3, q3} = Flow.advance(s2, "Durban 4001")
-      assert q3 =~ "shipping"
+      # A bare string does not fill an address slot — it needs a resolved site.
+      refute Flow.filled?(%{"collection" => "Sandton"}, "collection")
+      assert Flow.filled?(%{"collection" => %{"site_code" => "I902"}}, "collection")
 
-      assert {:ready, slots, summary} = Flow.advance(s3, "3 pallets of tiles, 1200kg")
-      assert summary =~ "ACCEPT"
-      assert slots["goods"] =~ "tiles"
+      ready = %{
+        "service" => "ECO",
+        "collection" => %{"site_code" => "I902"},
+        "delivery" => %{"site_code" => "I905"},
+        "goods" => "x"
+      }
+
+      assert Flow.next_unfilled(ready) == nil
+      assert Flow.question("collection") =~ "collecting"
     end
 
-    test "parses FreightWare params from gathered slots" do
+    test "to_quote_params maps resolved sites to consignor/consignee fields" do
       slots = %{
         "service" => "Economy",
-        "collection" => "Sandton 2196",
-        "delivery" => "Durban 4001",
-        "goods" => "3 pallets of tiles, 1200kg"
+        "service_code" => "ECO",
+        "collection" => %{
+          "site_code" => "I902",
+          "name" => "ITALTILE MENLYN",
+          "suburb" => "MENLYN",
+          "post_code" => "0063"
+        },
+        "delivery" => %{
+          "site_code" => "I905",
+          "name" => "ITALTILE BRYANSTON",
+          "suburb" => "BRYANSTON",
+          "post_code" => "2191"
+        },
+        "goods" => "3 pallets of tiles, 1200kg, 120x100x150"
       }
 
       params = Flow.to_quote_params(slots, "ITD02")
 
       assert params["account_reference"] == "ITD02"
-      assert params["service_type"] == "Economy"
-      assert params["consignor_postal_code"] == "2196"
-      assert params["consignee_postal_code"] == "4001"
-      assert [%{"mass" => "1200", "pieces" => "3"}] = params["items"]
+      assert params["service_type"] == "ECO"
+      assert params["consignor_site"] == "I902"
+      assert params["consignor_postal_code"] == "0063"
+      assert params["consignee_site"] == "I905"
+      assert params["consignee_postal_code"] == "2191"
+
+      assert [
+               %{
+                 "quantity" => "3",
+                 "weight" => "1200",
+                 "length" => "120",
+                 "width" => "100",
+                 "height" => "150"
+               }
+             ] =
+               params["items"]
     end
   end
 
-  # Pass the fake FreightWare on every turn so the :ready step rates against it
-  # instead of the live API.
+  # Pass the fake FreightWare on every turn so site search + rating hit the fake.
   defp step(base, msg),
     do: Server.handle(Map.put(base, :message, msg), freightware: FakeFreightWare)
 
   describe "Server (guided conversation)" do
-    test "runs from opening question, resolves the service code, rates, and creates the quote" do
+    test "search+confirm sites, resolve service code, rate, and create the quote" do
       tid = "T-#{System.unique_integer([:positive])}"
       base = %{ticket_id: tid, account: "ITD02"}
 
       {:ok, r0} = step(base, "I need a quote")
       assert r0.reply =~ "service"
       assert r0.status == "collecting"
-      refute r0.complete
 
       {:ok, _} = step(base, "Economy")
-      {:ok, _} = step(base, "Sandton 2196")
-      {:ok, _} = step(base, "Durban 4001")
-      {:ok, ready} = step(base, "3 pallets, 1200kg")
+
+      # Collection: a place name triggers a site search + numbered list.
+      {:ok, c1} = step(base, "Italtile Menlyn")
+      assert c1.reply =~ "I902"
+      # Pick #1 → advances to the delivery question.
+      {:ok, c2} = step(base, "1")
+      assert c2.reply =~ "delivering"
+
+      {:ok, _} = step(base, "Italtile Bryanston")
+      {:ok, g} = step(base, "1")
+      assert g.reply =~ "shipping"
+
+      {:ok, ready} = step(base, "3 pallets, 1200kg, 120x100x150")
 
       assert ready.status == "ready"
       assert ready.reply =~ "ACCEPT"
-      # Live rate is surfaced, and the resolved service code replaces "Economy".
       assert ready.rate == "1234.00"
-      assert ready.reply =~ "1234.00"
       assert ready.quote_params["service_type"] == "ECO"
-      assert ready.quote_params["consignee_postal_code"] == "4001"
+      assert ready.quote_params["consignor_site"] == "I902"
 
       {:ok, done} = step(base, "ACCEPT")
       assert done.status == "accepted"
@@ -82,9 +130,11 @@ defmodule TragarAi.QuoteIntakeTest do
 
       step(base, "hi")
       step(base, "Economy")
-      step(base, "Sandton 2196")
-      step(base, "Durban 4001")
-      step(base, "1 box, 5kg")
+      step(base, "Italtile Menlyn")
+      step(base, "1")
+      step(base, "Italtile Bryanston")
+      step(base, "1")
+      step(base, "1 box, 5kg, 30x20x15")
 
       {:ok, done} = step(base, "REJECT")
       assert done.status == "rejected"

@@ -23,28 +23,37 @@ defmodule TragarAi.QuoteIntake.Flow do
     },
     %{
       key: "collection",
-      question: "Where are we collecting from? Please give the suburb and postal code.",
+      question:
+        "Where are we collecting from? Give the site name (e.g. “Italtile Menlyn”) — I'll look it up in FreightWare and confirm.",
       required: true,
-      type: "address",
-      maps_to: ["consignorName", "consignorPostalCode"],
-      hint: "Suburb/town plus a 4-digit postal code."
+      type: "site",
+      maps_to: ["consignorSite", "consignorSuburb", "consignorCity", "consignorPostalCode"],
+      hint: "A site name or reference; resolved to a FreightWare site via the address lookup."
     },
     %{
       key: "delivery",
-      question: "Where are we delivering to? Suburb and postal code, please.",
+      question: "Where are we delivering to? Give the site name — I'll look it up and confirm.",
       required: true,
-      type: "address",
-      maps_to: ["consigneeName", "consigneePostalCode"],
-      hint: "Suburb/town plus a 4-digit postal code."
+      type: "site",
+      maps_to: ["consigneeSite", "consigneeSuburb", "consigneeCity", "consigneePostalCode"],
+      hint: "A site name or reference; resolved to a FreightWare site via the address lookup."
     },
     %{
       key: "goods",
       question:
-        "What are you shipping? Tell me the contents, number of items, and total mass (kg).",
+        "What are you shipping? Give the contents, number of items, total mass in kg, and the " <>
+          "dimensions per item as L×W×H in cm (e.g. 120×100×150). FreightWare needs all four to rate.",
       required: true,
       type: "freight",
-      maps_to: ["Items[].description", "Items[].pieces", "Items[].mass"],
-      hint: "Contents, number of pieces, and total mass in kilograms."
+      maps_to: [
+        "Items[].description",
+        "Items[].quantity",
+        "Items[].totalWeight",
+        "Items[].length",
+        "Items[].width",
+        "Items[].height"
+      ],
+      hint: "Contents, number of pieces, total mass (kg), and L×W×H (cm) — all required to rate."
     }
   ]
 
@@ -92,24 +101,28 @@ defmodule TragarAi.QuoteIntake.Flow do
     }
   end
 
+  @doc "The first slot not yet filled, or nil when the quote is ready."
+  def next_unfilled(slots), do: Enum.find(slot_keys(), &(not filled?(slots, &1)))
+
+  @doc "The question text for a slot key."
+  def question(key), do: Enum.find(@slots, &(&1.key == key)).question
+
+  @doc "Collection/delivery are resolved to a FreightWare site, not a bare string."
+  def address_slot?(key), do: key in ["collection", "delivery"]
+
   @doc """
-  Record the customer's answer to the slot we were awaiting, then return the
-  next question — or, once everything is gathered, a confirmation summary.
-
-  Returns `{:ask, slots, question}` or `{:ready, slots, summary}`.
+  Is a slot filled? String slots need a non-blank value; address slots need a
+  resolved site map (with a `site_code`).
   """
-  def advance(slots, message) do
-    slots =
-      case next_unfilled(slots) do
-        nil -> slots
-        key -> Map.put(slots, key, String.trim(message))
-      end
-
-    case next_unfilled(slots) do
-      nil -> {:ready, slots, summary(slots)}
-      key -> {:ask, slots, question(key)}
+  def filled?(slots, key) do
+    case Map.get(slots, key) do
+      %{} = site when key in ["collection", "delivery"] -> present?(site["site_code"])
+      v when key in ["collection", "delivery"] -> match?(%{}, v)
+      v -> not blank?(v)
     end
   end
+
+  defp present?(v), do: is_binary(v) and String.trim(v) != ""
 
   @doc "Interpret a confirmation reply once a quote is ready."
   def decision(message) do
@@ -129,10 +142,17 @@ defmodule TragarAi.QuoteIntake.Flow do
   def ready_summary(slots, rate) do
     price = if rate, do: " The estimated rate is R #{rate}.", else: ""
 
-    "Here's your quote request — from #{slots["collection"]} to #{slots["delivery"]}, " <>
-      "#{slots["service"]}, #{slots["goods"]}.#{price} " <>
+    "Here's your quote request — from #{place_label(slots["collection"])} to " <>
+      "#{place_label(slots["delivery"])}, #{slots["service"]}, #{slots["goods"]}.#{price} " <>
       "Reply ACCEPT to create the quote in FreightWare, or REJECT to cancel."
   end
+
+  @doc "Human label for a resolved site or a bare string."
+  def place_label(%{} = site),
+    do: "#{site["name"] || site["site_name"]} (#{site["site_code"]})"
+
+  def place_label(text) when is_binary(text), do: text
+  def place_label(_), do: "?"
 
   @doc "Assemble FreightWare quote params from the gathered slots."
   def to_quote_params(slots, account) do
@@ -140,32 +160,39 @@ defmodule TragarAi.QuoteIntake.Flow do
       "account_reference" => account,
       # Prefer the resolved FreightWare service code over the customer's words.
       "service_type" => slots["service_code"] || slots["service"],
-      "consignor_name" => name_part(slots["collection"]),
-      "consignor_postal_code" => postal(slots["collection"]),
-      "consignee_name" => name_part(slots["delivery"]),
-      "consignee_postal_code" => postal(slots["delivery"]),
       "items" => [
         %{
           "description" => slots["goods"],
-          "pieces" => pieces(slots["goods"]),
-          "mass" => mass(slots["goods"])
+          "quantity" => pieces(slots["goods"]),
+          "weight" => mass(slots["goods"]),
+          "length" => dim(slots["goods"], 0),
+          "width" => dim(slots["goods"], 1),
+          "height" => dim(slots["goods"], 2)
         }
       ]
     }
+    |> Map.merge(party_fields("consignor", slots["collection"]))
+    |> Map.merge(party_fields("consignee", slots["delivery"]))
   end
+
+  # A resolved site → full FreightWare address fields; a bare string → best-effort
+  # name + postal (fallback when no site was confirmed).
+  defp party_fields(prefix, %{} = site) do
+    %{
+      "#{prefix}_site" => site["site_code"],
+      "#{prefix}_name" => site["name"] || site["site_name"],
+      "#{prefix}_suburb" => site["suburb"],
+      "#{prefix}_city" => site["city"],
+      "#{prefix}_postal_code" => site["post_code"] || site["postal_code"]
+    }
+  end
+
+  defp party_fields(prefix, text) when is_binary(text),
+    do: %{"#{prefix}_name" => name_part(text), "#{prefix}_postal_code" => postal(text)}
+
+  defp party_fields(_prefix, _), do: %{}
 
   # ── internals ────────────────────────────────────────────────────────────────
-
-  defp next_unfilled(slots) do
-    Enum.find(slot_keys(), fn key -> blank?(Map.get(slots, key)) end)
-  end
-
-  defp question(key), do: Enum.find(@slots, &(&1.key == key)).question
-
-  defp summary(slots) do
-    "Here's your quote request — from #{slots["collection"]} to #{slots["delivery"]}, " <>
-      "#{slots["service"]}, #{slots["goods"]}. Reply ACCEPT to create the quote in FreightWare, or REJECT to cancel."
-  end
 
   defp blank?(nil), do: true
   defp blank?(v) when is_binary(v), do: String.trim(v) == ""
@@ -196,6 +223,16 @@ defmodule TragarAi.QuoteIntake.Flow do
   defp pieces(text) do
     case Regex.run(~r/(\d+)\s*(?:item|piece|box|pallet|parcel|carton)/i, text) do
       [_, n] -> n
+      _ -> nil
+    end
+  end
+
+  # Dimensions written as L×W×H (or LxWxH), in cm.
+  defp dim(nil, _i), do: nil
+
+  defp dim(text, i) do
+    case Regex.run(~r/(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)/i, text) do
+      [_, l, w, h] -> Enum.at([l, w, h], i)
       _ -> nil
     end
   end

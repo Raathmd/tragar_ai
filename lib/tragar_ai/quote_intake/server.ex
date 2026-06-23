@@ -54,15 +54,116 @@ defmodule TragarAi.QuoteIntake.Server do
     end
   end
 
-  # Mid-conversation — record the answer, ask the next question or finalize.
+  # Mid-conversation — either resolve a pending site selection, or answer the
+  # current slot (address slots trigger a site search + confirm).
   defp collect(session, message, fw) do
-    case Flow.advance(session.slots, message) do
-      {:ask, slots, question} ->
-        save(session, %{slots: slots, last_reply: question})
-        |> ok(question, false)
+    if session.slots["_pending"] do
+      resolve_selection(session, message, fw)
+    else
+      answer_current(session, message, fw)
+    end
+  end
 
-      {:ready, slots, _summary} ->
+  defp answer_current(session, message, fw) do
+    slots = session.slots
+
+    case Flow.next_unfilled(slots) do
+      nil ->
         finalize(session, slots, fw)
+
+      key ->
+        if Flow.address_slot?(key) do
+          offer_sites(session, key, message, fw)
+        else
+          proceed(session, Map.put(slots, key, String.trim(message)), fw)
+        end
+    end
+  end
+
+  # Search FreightWare sites for the customer's place and offer the matches.
+  defp offer_sites(session, key, query, fw) do
+    case safe(fn -> fw.search_sites(query) end) do
+      {:ok, [_ | _] = sites} ->
+        candidates = sites |> Enum.take(5) |> Enum.map(&site_brief/1)
+        slots = session.slots |> Map.put("_pending", key) |> Map.put("_candidates", candidates)
+
+        reply =
+          "I found these #{key} sites for “#{query}”:\n#{numbered(candidates)}\n" <>
+            "Reply with the number, or type a different name."
+
+        save(session, %{slots: slots, last_reply: reply}) |> ok(reply, false)
+
+      _ ->
+        reply =
+          "I couldn't find a #{key} site matching “#{query}”. " <>
+            "Try the site name or its reference (e.g. I905)."
+
+        save(session, %{slots: session.slots, last_reply: reply}) |> ok(reply, false)
+    end
+  end
+
+  # The customer picked from the offered sites (or typed a new name to re-search).
+  defp resolve_selection(session, message, fw) do
+    slots = session.slots
+    key = slots["_pending"]
+
+    case parse_pick(message, slots["_candidates"] || []) do
+      {:ok, site} ->
+        slots = slots |> Map.put(key, site) |> Map.delete("_pending") |> Map.delete("_candidates")
+        proceed(session, slots, fw)
+
+      :refine ->
+        offer_sites(session, key, message, fw)
+    end
+  end
+
+  # Ask the next question, or finalize once every slot is filled.
+  defp proceed(session, slots, fw) do
+    case Flow.next_unfilled(slots) do
+      nil ->
+        finalize(session, slots, fw)
+
+      next ->
+        q = Flow.question(next)
+        save(session, %{slots: slots, last_reply: q}) |> ok(q, false)
+    end
+  end
+
+  defp site_brief(s) do
+    %{
+      "site_code" => s["site_code"],
+      "name" => s["site_name"],
+      "suburb" => s["suburb"],
+      "city" => s["city"],
+      "post_code" => s["post_code"],
+      "account_reference" => s["account_reference"]
+    }
+  end
+
+  defp numbered(candidates) do
+    candidates
+    |> Enum.with_index(1)
+    |> Enum.map_join("\n", fn {c, i} ->
+      "#{i}. #{c["site_code"]} — #{c["name"]}, #{c["suburb"]} #{c["post_code"]}"
+    end)
+  end
+
+  defp parse_pick(message, candidates) do
+    t = String.trim(message)
+
+    cond do
+      Regex.match?(~r/^\d+$/, t) ->
+        case Enum.at(candidates, String.to_integer(t) - 1) do
+          nil -> :refine
+          site -> {:ok, site}
+        end
+
+      site =
+          Enum.find(candidates, &(String.downcase(&1["site_code"] || "") == String.downcase(t))) ->
+        {:ok, site}
+
+      true ->
+        :refine
     end
   end
 
