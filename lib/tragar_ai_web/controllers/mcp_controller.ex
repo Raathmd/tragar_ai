@@ -20,6 +20,7 @@ defmodule TragarAiWeb.McpController do
 
   use TragarAiWeb, :controller
 
+  alias TragarAi.Assist.Scope
   alias TragarAi.QuoteIntake
   alias TragarAi.QuoteIntake.Server
 
@@ -142,9 +143,19 @@ defmodule TragarAiWeb.McpController do
       %{
         "name" => t["name"],
         "description" => "[#{t["source"]}] #{t["description"]}",
-        "inputSchema" => t["parameters"]
+        "inputSchema" => put_scope_arg(t["parameters"])
       }
     end
+  end
+
+  # Account-scoped facts need a validated scope: a ticket_id we resolve to the
+  # requester's account(s) via Freshdesk (never a caller-supplied account).
+  defp put_scope_arg(schema) do
+    put_in(schema, ["properties", "ticket_id"], %{
+      "type" => "string",
+      "description" =>
+        "Freshdesk ticket id — required to read account-scoped facts (waybill/quote/invoice)."
+    })
   end
 
   defp read_tool_names, do: Enum.map(read_tools(), & &1["name"])
@@ -180,14 +191,46 @@ defmodule TragarAiWeb.McpController do
     end
   end
 
-  # Execute a read tool: fetch the live fact for the entity, return it as facts.
+  # Execute a read tool: fetch the live fact and enforce the validated account
+  # scope (from the ticket_id) — facts off the requester's account are refused.
   defp run_read_tool(conn, name, args) do
     intent = String.to_existing_atom(name)
     entities = entities_from(args)
+    accounts = authorized_accounts(args)
 
-    case TragarAi.Adapters.fetch(intent, entities) do
-      {:ok, facts} -> {:ok, conn, tool_text(Jason.encode!(facts), facts)}
-      {:error, reason} -> {:ok, conn, tool_error("#{name}: #{inspect(reason)}")}
+    cond do
+      Map.has_key?(entities, :account) and
+          not Scope.account_allowed?(entities[:account], accounts) ->
+        {:ok, conn, tool_error("Not authorized for that account.")}
+
+      true ->
+        case TragarAi.Adapters.fetch(intent, entities) do
+          {:ok, facts} ->
+            if Scope.within?(facts, accounts) do
+              {:ok, conn, tool_text(Jason.encode!(facts), facts)}
+            else
+              {:ok, conn,
+               tool_error(
+                 "Not authorized: that record is outside the ticket's account (pass a ticket_id)."
+               )}
+            end
+
+          {:error, reason} ->
+            {:ok, conn, tool_error("#{name}: #{inspect(reason)}")}
+        end
+    end
+  end
+
+  defp authorized_accounts(args) do
+    case args["ticket_id"] do
+      tid when is_binary(tid) and tid != "" ->
+        case TragarAi.Freshdesk.accounts_for_requester(tid) do
+          {:ok, accounts} when is_list(accounts) -> accounts
+          _ -> []
+        end
+
+      _ ->
+        []
     end
   end
 

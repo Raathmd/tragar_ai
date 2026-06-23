@@ -23,6 +23,24 @@ defmodule TragarAiWeb.McpControllerTest do
             }
           })
 
+        String.contains?(conn.request_path, "/trackAndTrace") ->
+          Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
+
+        String.contains?(conn.request_path, "/waybills/") ->
+          Req.Test.json(conn, %{
+            "response" => %{
+              "esWaybills" => %{
+                "Waybills" => [
+                  %{
+                    "waybillNumber" => "WBX",
+                    "accountReference" => "ITD02",
+                    "statusDescription" => "In transit"
+                  }
+                ]
+              }
+            }
+          })
+
         true ->
           conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
       end
@@ -100,5 +118,31 @@ defmodule TragarAiWeb.McpControllerTest do
     assert hd(result["content"])["text"] =~ "service"
     assert result["structuredContent"]["status"] == "collecting"
     assert result["structuredContent"]["account"] == "ITD02"
+  end
+
+  test "read tools enforce account scope from the ticket" do
+    init = rpc("initialize", %{"protocolVersion" => "2025-06-18", "capabilities" => %{}})
+    [session] = get_resp_header(init, "mcp-session-id")
+    hdr = [{"mcp-session-id", session}]
+
+    # No ticket_id → no validated scope → an account-bearing fact is refused.
+    no_scope =
+      rpc("tools/call", %{"name" => "load_status", "arguments" => %{"waybill" => "WBX"}}, hdr)
+      |> json_response(200)
+
+    assert no_scope["result"]["isError"]
+    assert hd(no_scope["result"]["content"])["text"] =~ "Not authorized"
+
+    # With a ticket whose company maps to ITD02 (= the waybill's account), allowed.
+    scoped =
+      rpc(
+        "tools/call",
+        %{"name" => "load_status", "arguments" => %{"waybill" => "WBX", "ticket_id" => "55"}},
+        hdr
+      )
+      |> json_response(200)
+
+    refute scoped["result"]["isError"]
+    assert hd(scoped["result"]["content"])["text"] =~ "WBX"
   end
 end

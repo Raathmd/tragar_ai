@@ -19,9 +19,12 @@ defmodule TragarAi.Assist.TicketResponder do
   def respond(ticket_id, content, opts \\ []) when is_binary(content) do
     fd = Keyword.get(opts, :freshdesk, TragarAi.Freshdesk)
     client = Keyword.get(opts, :client, TragarAi.Freshdesk.Client)
-    account = account_for(ticket_id, fd)
+    accounts = accounts_for(ticket_id, fd)
+    account = List.first(accounts)
 
-    context = %{demo: false, intent: nil, entities: entities(account)}
+    # `:accounts` enforces scope in the Engine — facts must be on the requester's
+    # account, so a ticket can't pull another account's records.
+    context = %{demo: false, intent: nil, accounts: accounts, entities: entities(account)}
 
     case Engine.answer(content, context) do
       {:ok, interaction} ->
@@ -42,12 +45,11 @@ defmodule TragarAi.Assist.TicketResponder do
     end
   end
 
-  # Scope facts to the requester's account when Freshdesk links one (best-effort —
-  # a general read-only answer can still be composed without it).
-  defp account_for(ticket_id, fd) do
+  # The requester's authorized account(s) (the validated scope).
+  defp accounts_for(ticket_id, fd) do
     case fd.accounts_for_requester(ticket_id) do
-      {:ok, [acc | _]} -> acc
-      _ -> nil
+      {:ok, accounts} when is_list(accounts) -> accounts
+      _ -> []
     end
   end
 

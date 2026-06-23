@@ -13,6 +13,7 @@ defmodule TragarAi.Assist.Engine do
   """
 
   alias TragarAi.Assist
+  alias TragarAi.Assist.Scope
   alias TragarAi.Assist.Validator
   alias TragarAi.Adapters
   alias TragarAi.CoreAI
@@ -78,25 +79,19 @@ defmodule TragarAi.Assist.Engine do
 
     case result do
       {:ok, facts} ->
-        # Phrase answers the original question from the facts (e.g. amendability
-        # from a status), so the model interprets the facts, not just restates them.
-        {:ok, draft} = CoreAI.phrase(intent, facts, %{question: question})
-        Logger.info("[assist] phrase #{intent} -> #{inspect(draft)}")
-
-        phrase_entry =
-          ai_entry("CoreAI.phrase", %{"intent" => to_string(intent)}, %{"answer" => draft}, true)
-
-        create(%{
-          question: question,
-          intent: to_string(intent),
-          entities: stringify(entities),
-          facts: facts,
-          source: source,
-          tool_log: log ++ [fetch_entry, phrase_entry],
-          draft_answer: draft,
-          status: :drafted,
-          agent: context[:agent]
-        })
+        if out_of_scope?(facts, context) do
+          scope_refused(question, intent, entities, context, log ++ [fetch_entry])
+        else
+          phrase_and_create(
+            question,
+            intent,
+            entities,
+            facts,
+            source,
+            context,
+            log ++ [fetch_entry]
+          )
+        end
 
       {:error, reason} when reason in [:not_found, :missing_waybill] ->
         # Reference isn't an entity in Tragar — prompt back for a valid one.
@@ -111,6 +106,52 @@ defmodule TragarAi.Assist.Engine do
           fetch_failure(reason, intent) ++ [tool_log: log ++ [fetch_entry]]
         )
     end
+  end
+
+  # Refuse facts outside the validated account scope (only when one is supplied;
+  # the trusted console passes no `:accounts` and is unrestricted).
+  defp out_of_scope?(facts, context) do
+    case context[:accounts] do
+      accounts when is_list(accounts) and accounts != [] -> not Scope.within?(facts, accounts)
+      _ -> false
+    end
+  end
+
+  defp scope_refused(question, intent, entities, context, log) do
+    fail(
+      question,
+      intent,
+      entities,
+      context,
+      error: "out_of_scope",
+      draft:
+        "That record isn't on the requester's account, so I can't share its details. " <>
+          "Please confirm the reference with the customer.",
+      tool_log: log
+    )
+  end
+
+  # `log` already includes the fetch entry. Phrase answers the original question
+  # from the facts (e.g. amendability from a status), so the model interprets the
+  # facts, not just restates them.
+  defp phrase_and_create(question, intent, entities, facts, source, context, log) do
+    {:ok, draft} = CoreAI.phrase(intent, facts, %{question: question})
+    Logger.info("[assist] phrase #{intent} -> #{inspect(draft)}")
+
+    phrase_entry =
+      ai_entry("CoreAI.phrase", %{"intent" => to_string(intent)}, %{"answer" => draft}, true)
+
+    create(%{
+      question: question,
+      intent: to_string(intent),
+      entities: stringify(entities),
+      facts: facts,
+      source: source,
+      tool_log: log ++ [phrase_entry],
+      draft_answer: draft,
+      status: :drafted,
+      agent: context[:agent]
+    })
   end
 
   # The AI asks the user for what it needs (logged as a CoreAI.clarify call).
