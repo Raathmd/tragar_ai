@@ -8,10 +8,16 @@ defmodule TragarAiWeb.Plugs.IpAllowlist do
 
     * `:api_allowed_ips` — list of CIDR strings (IPv4/IPv6). Empty/unset → allow
       all (local dev). Set `TRAGAR_API_ALLOWED_IPS` to a comma-separated list.
-    * `:api_trust_forwarded` — when behind a proxy/LB, set `TRAGAR_API_TRUST_XFF=1`
-      so the client IP is read from the **right-most** `X-Forwarded-For` entry
-      (the hop your trusted proxy appended). Off by default so a client can't
-      spoof the header when we're directly exposed.
+    * `:api_client_ip_header` — when behind a tunnel/edge that sets the real
+      client IP in a header (e.g. Cloudflare's `CF-Connecting-IP`), set
+      `TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip`. The edge overwrites this
+      header, so the client can't spoof it (as long as the edge is the only path).
+    * `:api_trust_forwarded` — alternatively, when behind a plain proxy/LB, set
+      `TRAGAR_API_TRUST_XFF=1` to read the **right-most** `X-Forwarded-For` entry
+      (the hop your trusted proxy appended).
+
+  With neither set we use the socket peer (`remote_ip`) — correct when directly
+  exposed, so a client can't spoof a header.
   """
 
   import Plug.Conn
@@ -32,20 +38,24 @@ defmodule TragarAiWeb.Plugs.IpAllowlist do
   # ── client IP ─────────────────────────────────────────────────────────────────
 
   defp client_ip(conn) do
-    if Application.get_env(:tragar_ai, :api_trust_forwarded, false) do
-      forwarded_ip(conn) || conn.remote_ip
-    else
-      conn.remote_ip
+    cond do
+      header = Application.get_env(:tragar_ai, :api_client_ip_header) ->
+        header_ip(conn, header) || conn.remote_ip
+
+      Application.get_env(:tragar_ai, :api_trust_forwarded, false) ->
+        header_ip(conn, "x-forwarded-for") || conn.remote_ip
+
+      true ->
+        conn.remote_ip
     end
   end
 
-  defp forwarded_ip(conn) do
-    case get_req_header(conn, "x-forwarded-for") do
-      [xff | _] ->
-        xff |> String.split(",") |> List.last() |> String.trim() |> parse_ip()
-
-      _ ->
-        nil
+  # Take the right-most entry (the hop the trusted edge/proxy set). For
+  # single-value headers like CF-Connecting-IP this is just the value.
+  defp header_ip(conn, header) do
+    case get_req_header(conn, String.downcase(header)) do
+      [value | _] -> value |> String.split(",") |> List.last() |> String.trim() |> parse_ip()
+      _ -> nil
     end
   end
 

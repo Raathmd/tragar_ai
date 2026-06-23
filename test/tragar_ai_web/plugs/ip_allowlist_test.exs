@@ -12,6 +12,7 @@ defmodule TragarAiWeb.Plugs.IpAllowlistTest do
     on_exit(fn ->
       Application.delete_env(:tragar_ai, :api_allowed_ips)
       Application.delete_env(:tragar_ai, :api_trust_forwarded)
+      Application.delete_env(:tragar_ai, :api_client_ip_header)
     end)
   end
 
@@ -28,6 +29,18 @@ defmodule TragarAiWeb.Plugs.IpAllowlistTest do
     blocked = IpAllowlist.call(conn_from({8, 8, 8, 8}), [])
     assert blocked.halted
     assert blocked.status == 403
+  end
+
+  test "behind an edge, reads the real client IP from the configured header (e.g. CF-Connecting-IP)" do
+    Application.put_env(:tragar_ai, :api_allowed_ips, ["203.0.113.0/24"])
+    Application.put_env(:tragar_ai, :api_client_ip_header, "cf-connecting-ip")
+
+    # Socket peer is the tunnel (not allowed), but the edge header carries the real client.
+    allowed = conn_from({127, 0, 0, 1}, [{"cf-connecting-ip", "203.0.113.9"}])
+    refute IpAllowlist.call(allowed, []).halted
+
+    blocked = conn_from({127, 0, 0, 1}, [{"cf-connecting-ip", "8.8.8.8"}])
+    assert IpAllowlist.call(blocked, []).halted
   end
 
   test "with proxy trust, uses the right-most X-Forwarded-For entry" do

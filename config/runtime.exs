@@ -84,6 +84,12 @@ if config_env() != :test do
          :api_trust_forwarded,
          System.get_env("TRAGAR_API_TRUST_XFF") in ~w(1 true yes)
 
+  # Behind a tunnel/edge that sets the real client IP (e.g. Cloudflare's
+  # CF-Connecting-IP), name the header here so the allowlist reads the true IP.
+  if header = System.get_env("TRAGAR_API_CLIENT_IP_HEADER") do
+    config :tragar_ai, :api_client_ip_header, header
+  end
+
   # The Freshdesk Company custom-field key that holds the customer's FreightWare
   # account code(s). The quote-intake gate derives the account from this — a
   # requester whose company has no code is refused.

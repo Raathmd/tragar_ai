@@ -23,7 +23,8 @@ request body — it's derived from the verified requester.
 ```
 TRAGAR_API_KEY=<random secret>            # the bearer Freddy sends; mint with: openssl rand -hex 32
 TRAGAR_API_ALLOWED_IPS=<csv of CIDRs>     # Freshworks egress (see below). Unset = allow all (dev only)
-TRAGAR_API_TRUST_XFF=1                     # ONLY when behind a proxy/LB (reads right-most X-Forwarded-For)
+TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip   # behind Cloudflare Tunnel — read real client IP from this header
+TRAGAR_API_TRUST_XFF=1                     # alternative: plain proxy/LB (reads right-most X-Forwarded-For)
 FRESHDESK_DOMAIN=<sub>                      # e.g. "tragar"  → https://tragar.freshdesk.com
 FRESHDESK_API_KEY=<freshdesk agent key>    # our app -> Freshdesk (read ticket / post reply)
 FRESHDESK_ACCOUNT_FIELD=cf_account         # Company custom field holding the account code(s)
