@@ -776,6 +776,16 @@ defmodule TragarAiWeb.ConsoleLive do
             </div>
           </dl>
 
+          <a
+            :if={@detail["pod_image_url"]}
+            href={@detail["pod_image_url"]}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-xs btn-outline btn-primary mt-2"
+          >
+            📄 View POD →
+          </a>
+
           <%= if (events = @detail["events"]) not in [nil, []] do %>
             <div class="mt-3">
               <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
@@ -1343,7 +1353,7 @@ defmodule TragarAiWeb.ConsoleLive do
   # Flatten facts into draggable {label, value, snippet} fields.
   defp surfaced_fields(%{facts: facts}) when is_map(facts) do
     scalars =
-      for {k, v} <- facts, k not in ~w(events last_event pod waybill_number), scalar?(v) do
+      for {k, v} <- facts, k not in ~w(events last_event pod waybill_number pod_image_url), scalar?(v) do
         field(k, v)
       end
 
