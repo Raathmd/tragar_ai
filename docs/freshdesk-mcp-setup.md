@@ -58,3 +58,61 @@ CIDRs; ranges shown as `x-y` are a contiguous block (e.g. `44.206.73.232-239` =
 
 - Tag each **Company** with custom field `cf_account` = the FreightWare account code(s) (`ITD02`, or `ITD01, ITD02` for multiple — the flow then asks which).
 - Add customer emails as **Contacts** in that Company (auto-associate by domain, or manually). A requester with no linked Company/account is refused.
+
+---
+
+# Exposing `/api` from on-prem — firewall / DMZ spec
+
+The MCP endpoint must be reachable from Freshworks' cloud (Freddy → our MCP). Two
+ways; pick one. The app's own gates (IP allowlist → bearer → MCP session → email)
+run **behind** whichever you choose, as defense-in-depth.
+
+## Option A — Firewall / DMZ appliance (full on-prem ownership)
+
+### Spec to hand a reseller / IT provider
+> "NGFW to **publish a single internal HTTPS app** to the internet, **restricted by
+> source IP**, with **reverse-proxy / WAF** and a **DMZ** segment — small office."
+
+Suitable all-in-one boxes (available in SA): **Sophos XGS 87/107**, **FortiGate
+40F/60F/70F**, **SonicWall TZ**, or **MikroTik + a Caddy/nginx reverse-proxy host**
+(budget). Buy box **+ subscription/licence** (enables WAF/IPS/updates).
+
+### Firewall rules
+1. **Published service (reverse proxy / VIP / WAF):**
+   - Public hostname: `quotes.tragar.co.za` → internal `http(s)://<tragar-ai-host>:4000`
+   - **Path allowlist:** forward **only** `/api/` (and `/api/mcp`). Block `/console`, `/admin`, `/dev`, `/`.
+   - **TLS:** terminate at the appliance (Let's Encrypt or a purchased cert for the hostname). Inbound **443 only**.
+2. **Source-IP policy (the key control):** allow inbound to that service **only from
+   Freshworks NAT egress IPs** (your region's set — see list above). Deny all other sources.
+3. **DMZ segmentation:** publish from a DMZ zone; the only path from DMZ → internal LAN
+   is to `<tragar-ai-host>:4000`. No other internal access from the published service.
+4. (Optional) Rate-limit the published service to blunt abuse.
+
+### App env behind the appliance (so its IP allowlist sees the real client)
+The appliance reverse-proxies, so set the forwarded-IP header on it and tell the app:
+```
+TRAGAR_API_TRUST_XFF=1                  # appliance sets X-Forwarded-For with the client IP
+# (or) TRAGAR_API_CLIENT_IP_HEADER=<header the appliance uses>
+TRAGAR_API_ALLOWED_IPS=<Freshworks NAT CIDRs>   # belt-and-braces; the appliance is primary
+TRAGAR_API_KEY=<bearer>
+```
+If the appliance already enforces the Freshworks source-IP policy, the app's
+`TRAGAR_API_ALLOWED_IPS` is optional (redundant defense) — but harmless to keep.
+
+## Option B — Cloudflare Tunnel (no inbound ports, no hardware)
+
+1. Install `cloudflared` on (or near) the Tragar AI host; create a tunnel to a Cloudflare hostname.
+2. Cloudflare config:
+   - Route **only** `/api/*` to `http://localhost:4000`; TLS is automatic at Cloudflare.
+   - **WAF rule:** allow only Freshworks NAT IPs; block the rest.
+3. App env:
+```
+TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip    # real client IP from Cloudflare
+TRAGAR_API_KEY=<bearer>
+```
+No inbound firewall ports are opened; the box stays fully private.
+
+## Either way — register in Freshdesk
+Use the public hostname for the MCP server URL: `https://quotes.tragar.co.za/api/mcp`
+(Option A) or `https://<name>.<cloudflare-domain>/api/mcp` (Option B), with Bearer
+auth = `TRAGAR_API_KEY`.
