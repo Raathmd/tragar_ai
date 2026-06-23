@@ -15,7 +15,11 @@ defmodule TragarAiWeb.McpControllerTest do
         String.contains?(conn.request_path, "/serviceTypes") ->
           Req.Test.json(conn, %{
             "response" => %{
-              "esServiceTypes" => %{"ServiceTypes" => [%{"code" => "ECO", "name" => "Economy"}]}
+              "esServiceTypes" => %{
+                "ServiceTypes" => [
+                  %{"serviceTypeCode" => "ECO", "serviceTypeDescription" => "Economy"}
+                ]
+              }
             }
           })
 
@@ -60,10 +64,21 @@ defmodule TragarAiWeb.McpControllerTest do
     [session] = get_resp_header(init, "mcp-session-id")
     hdr = [{"mcp-session-id", session}]
 
-    # tools/list
+    # tools/list — quote tools plus the read/fact tools.
     tools = rpc("tools/list", %{}, hdr) |> json_response(200)
     names = Enum.map(tools["result"]["tools"], & &1["name"])
     assert "quote_workflow" in names and "quote_intake" in names
+
+    assert "load_status" in names and "pod" in names and "quote_lookup" in names and
+             "service_types" in names
+
+    # A read tool returns the live facts.
+    st =
+      rpc("tools/call", %{"name" => "service_types", "arguments" => %{}}, hdr)
+      |> json_response(200)
+
+    refute st["result"]["isError"]
+    assert hd(st["result"]["content"])["text"] =~ "Economy"
 
     # quote_intake derives the account from Freshdesk and asks the first question.
     call =

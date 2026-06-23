@@ -105,7 +105,12 @@ defmodule TragarAiWeb.McpController do
 
   # ── Tools ─────────────────────────────────────────────────────────────────────
 
-  defp tools do
+  # Entity arguments a read tool may take (whitelist — avoids atom injection).
+  @entity_keys ~w(waybill account quote ticket_id)
+
+  defp tools, do: quote_tools() ++ read_tools()
+
+  defp quote_tools do
     [
       %{
         "name" => "quote_workflow",
@@ -128,6 +133,21 @@ defmodule TragarAiWeb.McpController do
       }
     ]
   end
+
+  # The read/fact tools, generated from the single source of truth
+  # (`Assist.Tools.schema`): waybill status, ETA, POD, tracking, quote lookup,
+  # account/invoice, service types, etc. Each returns the live facts.
+  defp read_tools do
+    for t <- TragarAi.Assist.Tools.schema(), t["action"] == "read" do
+      %{
+        "name" => t["name"],
+        "description" => "[#{t["source"]}] #{t["description"]}",
+        "inputSchema" => t["parameters"]
+      }
+    end
+  end
+
+  defp read_tool_names, do: Enum.map(read_tools(), & &1["name"])
 
   defp call_tool(conn, "quote_workflow", _args),
     do: {:ok, conn, tool_text(Jason.encode!(QuoteIntake.workflow()))}
@@ -152,7 +172,30 @@ defmodule TragarAiWeb.McpController do
   defp call_tool(conn, "quote_intake", _args),
     do: {:ok, conn, tool_error("ticket_id is required")}
 
-  defp call_tool(conn, name, _args), do: {:error, conn, -32602, "Unknown tool: #{name}"}
+  defp call_tool(conn, name, args) do
+    if name in read_tool_names() do
+      run_read_tool(conn, name, args)
+    else
+      {:error, conn, -32602, "Unknown tool: #{name}"}
+    end
+  end
+
+  # Execute a read tool: fetch the live fact for the entity, return it as facts.
+  defp run_read_tool(conn, name, args) do
+    intent = String.to_existing_atom(name)
+    entities = entities_from(args)
+
+    case TragarAi.Adapters.fetch(intent, entities) do
+      {:ok, facts} -> {:ok, conn, tool_text(Jason.encode!(facts), facts)}
+      {:error, reason} -> {:ok, conn, tool_error("#{name}: #{inspect(reason)}")}
+    end
+  end
+
+  defp entities_from(args) do
+    for {k, v} <- args, k in @entity_keys, is_binary(v), into: %{} do
+      {String.to_existing_atom(k), v}
+    end
+  end
 
   # ── Shapes ────────────────────────────────────────────────────────────────────
 
