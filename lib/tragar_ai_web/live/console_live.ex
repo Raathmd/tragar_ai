@@ -1019,19 +1019,16 @@ defmodule TragarAiWeb.ConsoleLive do
     cond do
       is_nil(intent) -> {:error, :unknown_type}
       demo -> TragarAi.Demo.fetch(intent, entities)
-      # Quotes: fetch the full live quote (parties, items, sundries, total) rather
+      # Fetch the full live record (incl. pod_image_url, items, sundries) rather
       # than the reduced domain shape the cache/adapter returns.
-      type == "quote" -> quote_detail(key)
+      type == "quote" -> ok_map(TragarAi.Freight.get_quote(key))
+      type == "shipment" -> ok_map(TragarAi.Freight.get_waybill(key))
       true -> TragarAi.Adapters.fetch(intent, entities)
     end
   end
 
-  defp quote_detail(key) do
-    case TragarAi.Freight.get_quote(key) do
-      {:ok, q} when is_map(q) -> {:ok, q}
-      _ -> {:error, :not_found}
-    end
-  end
+  defp ok_map({:ok, m}) when is_map(m), do: {:ok, m}
+  defp ok_map(_), do: {:error, :not_found}
 
   defp detail_label("shipment"), do: "Waybill"
   defp detail_label("quote"), do: "Quote"
