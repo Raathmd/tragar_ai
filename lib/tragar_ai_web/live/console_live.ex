@@ -635,8 +635,9 @@ defmodule TragarAiWeb.ConsoleLive do
           <button
             :for={q <- @quote_results}
             type="button"
-            phx-click="prompt_quote"
-            phx-value-number={q.number}
+            phx-click="show_detail"
+            phx-value-type="quote"
+            phx-value-key={q.number}
             class="w-full p-2 text-left hover:bg-base-200"
           >
             <div class="flex items-center justify-between gap-2">
@@ -789,6 +790,36 @@ defmodule TragarAiWeb.ConsoleLive do
                   <div class="whitespace-pre-line">{e["event_description"]}</div>
                 </li>
               </ol>
+            </div>
+          <% end %>
+
+          <%= if (items = @detail["items"]) not in [nil, []] do %>
+            <div class="mt-3">
+              <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
+                Items ({length(items)})
+              </div>
+              <ul class="space-y-1">
+                <li :for={it <- items} class="text-[11px] border-l-2 border-base-300 pl-2">
+                  {it["description"]}
+                  <span class="text-base-content/50">
+                    — qty {it["quantity"]}, {it["total_weight"]}kg, {it["length"]}×{it["width"]}×{it["height"]}
+                  </span>
+                </li>
+              </ul>
+            </div>
+          <% end %>
+
+          <%= if (sundries = @detail["sundries"]) not in [nil, []] do %>
+            <div class="mt-3">
+              <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
+                Charges ({length(sundries)})
+              </div>
+              <ul class="space-y-1">
+                <li :for={s <- sundries} class="flex justify-between gap-3 text-[11px]">
+                  <span class="text-base-content/60">{s["sundry_description"]}</span>
+                  <span class="text-right">{money(s["sundry_charge"])}</span>
+                </li>
+              </ul>
             </div>
           <% end %>
 
@@ -978,7 +1009,17 @@ defmodule TragarAiWeb.ConsoleLive do
     cond do
       is_nil(intent) -> {:error, :unknown_type}
       demo -> TragarAi.Demo.fetch(intent, entities)
+      # Quotes: fetch the full live quote (parties, items, sundries, total) rather
+      # than the reduced domain shape the cache/adapter returns.
+      type == "quote" -> quote_detail(key)
       true -> TragarAi.Adapters.fetch(intent, entities)
+    end
+  end
+
+  defp quote_detail(key) do
+    case TragarAi.Freight.get_quote(key) do
+      {:ok, q} when is_map(q) -> {:ok, q}
+      _ -> {:error, :not_found}
     end
   end
 
@@ -1248,12 +1289,16 @@ defmodule TragarAiWeb.ConsoleLive do
   defp quote_summary(q) do
     %{
       number: q["quote_number"],
-      status: q["status"] || q["status_code"],
-      amount: q["charged_amount"],
-      consignee: q["consignee"] || q["consignee_name"],
+      status: humanize_status(q["status_description"] || q["status"] || q["status_code"]),
+      amount: money(q["total"] || q["charged_amount"]),
+      consignee: q["consignee_name"] || q["consignee"],
       date: q["quote_date"]
     }
   end
+
+  defp money(nil), do: ""
+  defp money(n) when is_number(n), do: "R #{:erlang.float_to_binary(n * 1.0, decimals: 2)}"
+  defp money(n), do: to_string(n)
 
   defp reset_chat_state(socket) do
     assign(socket,

@@ -294,12 +294,43 @@ defmodule TragarAi.Freight.Normalize do
         |> quote_entity()
         |> attach("items", Map.get(items, q["quoteNumber"], []), &quote_item/1)
         |> attach("sundries", Map.get(sundries, q["serviceType"], []), &sundry/1)
+        |> put_quote_total()
       end)
 
     %{"quotes" => quotes, "paging" => paging_of(es, "qtPaging")}
   end
 
   def quotes(_), do: %{"quotes" => [], "paging" => nil}
+
+  # A created quote often has chargedAmount 0 with the real charges in sundries —
+  # surface a computed `total` (freight + tax + sundries) for display.
+  defp put_quote_total(quote) do
+    charged = num(quote["charged_amount"])
+
+    total =
+      if charged > 0 do
+        charged
+      else
+        sundry_total =
+          (quote["sundries"] || [])
+          |> Enum.reduce(0, fn s, acc -> acc + num(s["sundry_charge"]) end)
+
+        num(quote["freight_charge"]) + num(quote["tax_amount"]) + sundry_total
+      end
+
+    Map.put(quote, "total", Float.round(total * 1.0, 2))
+  end
+
+  defp num(n) when is_number(n), do: n
+
+  defp num(n) when is_binary(n) do
+    case Float.parse(n) do
+      {f, _} -> f
+      _ -> 0
+    end
+  end
+
+  defp num(_), do: 0
 
   @doc "Waybills search/detail: returns %{\"waybills\" => [...], \"paging\" => %{}}."
   def waybills(%{"esWaybills" => es}) do
