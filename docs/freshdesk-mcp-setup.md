@@ -79,7 +79,7 @@ Suitable all-in-one boxes (available in SA): **Sophos XGS 87/107**, **FortiGate
 
 ### Firewall rules
 1. **Published service (reverse proxy / VIP / WAF):**
-   - Public hostname: `quotes.tragar.co.za` → internal `http(s)://<tragar-ai-host>:4000`
+   - Public hostname: `tools.tragar.co.za` → internal `http(s)://<tragar-ai-host>:4000`
    - **Path allowlist:** forward **only** `/api/` (and `/api/mcp`). Block `/console`, `/admin`, `/dev`, `/`.
    - **TLS:** terminate at the appliance (Let's Encrypt or a purchased cert for the hostname). Inbound **443 only**.
 2. **Source-IP policy (the key control):** allow inbound to that service **only from
@@ -113,6 +113,6 @@ TRAGAR_API_KEY=<bearer>
 No inbound firewall ports are opened; the box stays fully private.
 
 ## Either way — register in Freshdesk
-Use the public hostname for the MCP server URL: `https://quotes.tragar.co.za/api/mcp`
+Use the public hostname for the MCP server URL: `https://tools.tragar.co.za/api/mcp`
 (Option A) or `https://<name>.<cloudflare-domain>/api/mcp` (Option B), with Bearer
 auth = `TRAGAR_API_KEY`.
