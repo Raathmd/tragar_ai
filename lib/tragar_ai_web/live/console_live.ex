@@ -778,9 +778,39 @@ defmodule TragarAiWeb.ConsoleLive do
           </div>
         </form>
 
-        <div :if={@detail} class="rounded-lg border border-base-300 p-3 max-h-[72vh] overflow-y-auto">
-          <h4 class="text-xs font-medium mb-1">{@detail_title}</h4>
-          <dl class="text-xs">
+        <div :if={@detail} class="rounded-lg border border-base-300 p-3 max-h-[72vh] overflow-y-auto space-y-3">
+          <%!-- Header: title + status + POD --%>
+          <div class="flex items-center justify-between gap-2">
+            <h4 class="text-sm font-medium truncate">{@detail_title}</h4>
+            <div class="flex items-center gap-1 shrink-0">
+              <span :if={detail_status(@detail)} class="badge badge-sm badge-ghost">
+                {detail_status(@detail)}
+              </span>
+              <a
+                :if={@detail["pod_image_url"]}
+                href={@detail["pod_image_url"]}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-xs btn-outline btn-primary"
+                title="View proof of delivery"
+              >
+                View POD
+              </a>
+            </div>
+          </div>
+
+          <%!-- Collection / Delivery --%>
+          <div :for={{role, label} <- [{"consignor", "Collection"}, {"consignee", "Delivery"}]}>
+            <div :if={party_address(@detail, role)} class="rounded border border-base-200 p-2">
+              <div class="text-[10px] font-semibold uppercase tracking-wide text-base-content/50">
+                {label}
+              </div>
+              <div class="text-xs">{party_address(@detail, role)}</div>
+            </div>
+          </div>
+
+          <%!-- Key facts --%>
+          <dl :if={surfaced_fields(%{facts: @detail}) != []} class="text-xs">
             <div
               :for={f <- surfaced_fields(%{facts: @detail})}
               class="flex justify-between gap-3 border-b border-base-200 py-1"
@@ -790,64 +820,53 @@ defmodule TragarAiWeb.ConsoleLive do
             </div>
           </dl>
 
-          <a
-            :if={@detail["pod_image_url"]}
-            href={@detail["pod_image_url"]}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="btn btn-xs btn-outline btn-primary mt-2"
-          >
-            📄 View POD →
-          </a>
-
-          <%= if (events = @detail["events"]) not in [nil, []] do %>
-            <div class="mt-3">
-              <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
-                Tracking ({length(events)})
-              </div>
-              <ol class="space-y-1">
-                <li
-                  :for={e <- Enum.reverse(events)}
-                  class="text-[11px] border-l-2 border-base-300 pl-2"
-                >
-                  <div class="text-base-content/50">{e["event_date"]} {e["event_time"]}</div>
-                  <div class="whitespace-pre-line">{e["event_description"]}</div>
-                </li>
-              </ol>
+          <%!-- Items (quotes) --%>
+          <div :if={(items = @detail["items"]) not in [nil, []]}>
+            <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
+              Items ({length(items)})
             </div>
-          <% end %>
+            <ul class="space-y-1">
+              <li :for={it <- items} class="text-[11px] border-l-2 border-base-300 pl-2">
+                {it["description"]}
+                <span class="text-base-content/50">
+                  — qty {it["quantity"]}, {it["total_weight"]}kg, {it["length"]}×{it["width"]}×{it["height"]}
+                </span>
+              </li>
+            </ul>
+          </div>
 
-          <%= if (items = @detail["items"]) not in [nil, []] do %>
-            <div class="mt-3">
-              <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
-                Items ({length(items)})
-              </div>
-              <ul class="space-y-1">
-                <li :for={it <- items} class="text-[11px] border-l-2 border-base-300 pl-2">
-                  {it["description"]}
-                  <span class="text-base-content/50">
-                    — qty {it["quantity"]}, {it["total_weight"]}kg, {it["length"]}×{it["width"]}×{it["height"]}
-                  </span>
-                </li>
-              </ul>
+          <%!-- Charges (quotes) --%>
+          <div :if={(sundries = @detail["sundries"]) not in [nil, []]}>
+            <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
+              Charges ({length(sundries)})
             </div>
-          <% end %>
+            <ul class="space-y-1">
+              <li :for={s <- sundries} class="flex justify-between gap-3 text-[11px]">
+                <span class="text-base-content/60">{s["sundry_description"]}</span>
+                <span class="text-right">{money(s["sundry_charge"])}</span>
+              </li>
+            </ul>
+          </div>
 
-          <%= if (sundries = @detail["sundries"]) not in [nil, []] do %>
-            <div class="mt-3">
-              <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
-                Charges ({length(sundries)})
-              </div>
-              <ul class="space-y-1">
-                <li :for={s <- sundries} class="flex justify-between gap-3 text-[11px]">
-                  <span class="text-base-content/60">{s["sundry_description"]}</span>
-                  <span class="text-right">{money(s["sundry_charge"])}</span>
-                </li>
-              </ul>
+          <%!-- Tracking events --%>
+          <div :if={(events = @detail["events"]) not in [nil, []]}>
+            <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50 mb-1">
+              Tracking ({length(events)})
             </div>
-          <% end %>
+            <ol class="space-y-1">
+              <li
+                :for={e <- Enum.reverse(events)}
+                class="text-[11px] border-l-2 border-base-300 pl-2"
+              >
+                <div class="text-base-content/50">{e["event_date"]} {e["event_time"]}</div>
+                <div class="whitespace-pre-line">
+                  {e["event_description"] || e["status_description"] || e["event_code"]}
+                </div>
+              </li>
+            </ol>
+          </div>
 
-          <details class="mt-3 text-[11px] text-base-content/60">
+          <details class="text-[11px] text-base-content/60">
             <summary class="cursor-pointer">Raw payload</summary>
             <pre class="bg-base-200 rounded p-2 mt-1 overflow-x-auto">{facts_text(@detail)}</pre>
           </details>
@@ -1036,13 +1055,30 @@ defmodule TragarAiWeb.ConsoleLive do
       # Fetch the full live record (incl. pod_image_url, items, sundries) rather
       # than the reduced domain shape the cache/adapter returns.
       type == "quote" -> ok_map(TragarAi.Freight.get_quote(key))
-      type == "shipment" -> ok_map(TragarAi.Freight.get_waybill(key))
+      type == "shipment" -> waybill_detail(key)
       true -> TragarAi.Adapters.fetch(intent, entities)
     end
   end
 
   defp ok_map({:ok, m}) when is_map(m), do: {:ok, m}
   defp ok_map(_), do: {:error, :not_found}
+
+  # The single-waybill fetch has no tracking — merge in trackAndTrace events.
+  defp waybill_detail(key) do
+    case TragarAi.Freight.get_waybill(key) do
+      {:ok, w} when is_map(w) ->
+        events =
+          case TragarAi.Freight.track_and_trace("waybills", key) do
+            {:ok, ev} when is_list(ev) -> ev
+            _ -> []
+          end
+
+        {:ok, Map.put(w, "events", events)}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
 
   defp detail_label("shipment"), do: "Waybill"
   defp detail_label("quote"), do: "Quote"
@@ -1364,8 +1400,10 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # Flatten facts into draggable {label, value, snippet} fields.
   defp surfaced_fields(%{facts: facts}) when is_map(facts) do
+    skip = ~w(events last_event pod waybill_number pod_image_url status status_code status_description)
+
     scalars =
-      for {k, v} <- facts, k not in ~w(events last_event pod waybill_number pod_image_url), scalar?(v) do
+      for {k, v} <- facts, k not in skip, not party_key?(k), scalar?(v) do
         field(k, v)
       end
 
@@ -1420,6 +1458,39 @@ defmodule TragarAiWeb.ConsoleLive do
   end
 
   defp pod_field(_), do: []
+
+  # Status for the detail header (waybill/quote/invoice).
+  defp detail_status(d) when is_map(d) do
+    case d["status_description"] || d["status"] || d["status_code"] do
+      v when is_binary(v) and v != "" -> humanize_status(v)
+      _ -> nil
+    end
+  end
+
+  defp detail_status(_), do: nil
+
+  defp party_key?(k) do
+    s = to_string(k)
+    String.starts_with?(s, "consignor_") or String.starts_with?(s, "consignee_")
+  end
+
+  # A consignor/consignee as one address line (name, street, suburb, city, postal, site).
+  defp party_address(d, role) when is_map(d) do
+    parts =
+      ["#{role}_name", "#{role}_street", "#{role}_suburb", "#{role}_city", "#{role}_postal_code"]
+      |> Enum.map(&d[&1])
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    site = d["#{role}_site"]
+
+    cond do
+      parts == [] -> nil
+      site in [nil, ""] -> Enum.join(parts, ", ")
+      true -> "#{Enum.join(parts, ", ")} (site #{site})"
+    end
+  end
+
+  defp party_address(_, _), do: nil
 
   defp humanize(key), do: key |> to_string() |> String.replace("_", " ") |> String.capitalize()
 
