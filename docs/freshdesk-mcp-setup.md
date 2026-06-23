@@ -103,16 +103,64 @@ If the appliance already enforces the Freshworks source-IP policy, the app's
 
 ## Option B — Cloudflare Tunnel (no inbound ports, no hardware)
 
-1. Install `cloudflared` on (or near) the Tragar AI host; create a tunnel to a Cloudflare hostname.
-2. Cloudflare config:
-   - Route **only** `/mcp` to `http://localhost:4000`; TLS is automatic at Cloudflare.
-   - **WAF rule:** allow only Freshworks NAT IPs; block the rest.
-3. App env:
+The Tragar AI host makes an **outbound** connection to Cloudflare; Cloudflare
+publishes `https://<your-domain>/mcp` and forwards it back down the tunnel. No
+inbound firewall ports are opened and the box stays fully private. TLS is handled
+by Cloudflare.
+
+### Prerequisites
+- A Cloudflare account with `tragar.co.za` added (its DNS managed by Cloudflare).
+- `cloudflared` installed on the Tragar AI host (or a host that can reach it):
+  `https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/`.
+
+### 1. Authenticate and create a named tunnel
+```bash
+cloudflared tunnel login                       # opens a browser to authorise the domain
+cloudflared tunnel create tragar-mcp           # prints a tunnel UUID + writes <UUID>.json creds
+cloudflared tunnel route dns tragar-mcp <your-domain>   # creates the DNS (CNAME) record
 ```
-TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip    # real client IP from Cloudflare
+
+### 2. Config — publish ONLY `/mcp`
+`/etc/cloudflared/config.yml`:
+```yaml
+tunnel: <UUID>
+credentials-file: /etc/cloudflared/<UUID>.json
+ingress:
+  - hostname: <your-domain>
+    path: /mcp
+    service: http://localhost:4000     # the Tragar AI app
+  - service: http_status:404            # everything else is not exposed
+```
+
+### 3. Run it as a service
+```bash
+cloudflared service install            # installs + starts the systemd service
+systemctl status cloudflared
+```
+
+### 4. Lock it to Freshworks at the Cloudflare edge
+In the Cloudflare dashboard → **Security → WAF → Custom rules**, add a rule on
+`<your-domain>/mcp`:
+- **Allow** when `ip.src` is in Freshworks' NAT egress ranges (your region — see list above).
+- **Block** all other source IPs.
+
+(Optionally add **Cloudflare Access** with a service token for a second credential
+on top of the bearer.)
+
+### 5. App env
+```
+TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip    # real client IP from Cloudflare (for our IP allowlist)
 TRAGAR_API_KEY=<bearer>
+# TRAGAR_API_ALLOWED_IPS=<Freshworks NAT CIDRs>  # optional belt-and-braces; Cloudflare WAF is primary
 ```
-No inbound firewall ports are opened; the box stays fully private.
+
+### Testing variant (no DNS/config)
+For a quick test you can skip the named tunnel:
+```bash
+cloudflared tunnel --url http://localhost:4000   # prints a temporary https://<random>.trycloudflare.com
+```
+Register `https://<random>.trycloudflare.com/mcp` in Freshdesk for the test, then
+switch to the named tunnel + WAF rule for production.
 
 ## Either way — register in Freshdesk
 MCP server URL = **`https://<your-domain>/mcp`** (the existing app host for Option A,
