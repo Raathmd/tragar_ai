@@ -71,6 +71,19 @@ if config_env() != :test do
   # Authentication. When unset, /api is open (local dev only); prod must set it.
   config :tragar_ai, :api_key, System.get_env("TRAGAR_API_KEY")
 
+  # IP allowlist for /api — restrict to Freshworks' egress CIDRs. Unset → allow
+  # all (local dev). Set TRAGAR_API_TRUST_XFF=1 when behind a proxy/LB so the
+  # client IP is read from X-Forwarded-For.
+  config :tragar_ai,
+         :api_allowed_ips,
+         (System.get_env("TRAGAR_API_ALLOWED_IPS") || "")
+         |> String.split(",", trim: true)
+         |> Enum.map(&String.trim/1)
+
+  config :tragar_ai,
+         :api_trust_forwarded,
+         System.get_env("TRAGAR_API_TRUST_XFF") in ~w(1 true yes)
+
   # The Freshdesk Company custom-field key that holds the customer's FreightWare
   # account code(s). The quote-intake gate derives the account from this — a
   # requester whose company has no code is refused.
