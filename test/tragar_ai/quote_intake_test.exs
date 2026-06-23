@@ -23,6 +23,38 @@ defmodule TragarAi.QuoteIntakeTest do
     def create_quote(_params), do: {:ok, %{"quote_number" => "Q9001"}}
   end
 
+  defmodule MultiSiteFW do
+    def search_sites(_q) do
+      {:ok,
+       [
+         %{
+           "site_code" => "I902",
+           "site_name" => "ITALTILE MENLYN",
+           "suburb" => "MENLYN",
+           "city" => "PRETORIA",
+           "post_code" => "0063",
+           "account_reference" => "ITD01"
+         },
+         %{
+           "site_code" => "I916",
+           "site_name" => "ITALTILE BOKSBURG",
+           "suburb" => "BARDENE",
+           "city" => "BOKSBURG",
+           "post_code" => "1459",
+           "account_reference" => "ITD01"
+         },
+         %{
+           "site_code" => "I905",
+           "site_name" => "ITALTILE BRYANSTON",
+           "suburb" => "BRYANSTON",
+           "city" => "JOHANNESBURG",
+           "post_code" => "2191",
+           "account_reference" => "ITD01"
+         }
+       ]}
+    end
+  end
+
   describe "Flow (pure)" do
     test "next_unfilled walks slots in order; address slots need a resolved site" do
       assert Flow.next_unfilled(%{}) == "service"
@@ -122,6 +154,19 @@ defmodule TragarAi.QuoteIntakeTest do
       assert done.status == "accepted"
       assert done.quote_number == "Q9001"
       assert done.complete
+    end
+
+    test "ranks the closest site first using all the words the user gave" do
+      tid = "T-#{System.unique_integer([:positive])}"
+      base = %{ticket_id: tid, account: "ITD02"}
+      run = fn msg -> Server.handle(Map.put(base, :message, msg), freightware: MultiSiteFW) end
+
+      run.("quote")
+      run.("Economy")
+      {:ok, r} = run.("Italtile Bryanston 2191")
+
+      # I905 matches italtile + bryanston + 2191 → ranked #1 over the other Italtiles.
+      assert r.reply =~ "1. I905"
     end
 
     test "REJECT cancels the request" do

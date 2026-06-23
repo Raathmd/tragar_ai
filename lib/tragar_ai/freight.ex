@@ -331,10 +331,20 @@ defmodule TragarAi.Freight do
           "serviceType" => params["service_type"],
           "collectionInstructions" => params["collection_instructions"] || "",
           "deliveryInstructions" => params["delivery_instructions"] || "",
+          "consignorSite" => params["consignor_site"],
           "consignorName" => params["consignor_name"],
+          "consignorBuilding" => params["consignor_building"],
+          "consignorStreet" => params["consignor_street"],
+          "consignorSuburb" => params["consignor_suburb"],
+          "consignorCity" => params["consignor_city"],
           "consignorPostalCode" =>
             params["collection_postal_code"] || params["consignor_postal_code"],
+          "consigneeSite" => params["consignee_site"],
           "consigneeName" => params["consignee_name"],
+          "consigneeBuilding" => params["consignee_building"],
+          "consigneeStreet" => params["consignee_street"],
+          "consigneeSuburb" => params["consignee_suburb"],
+          "consigneeCity" => params["consignee_city"],
           "consigneePostalCode" =>
             params["delivery_postal_code"] || params["consignee_postal_code"]
         }

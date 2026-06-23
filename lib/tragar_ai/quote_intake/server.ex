@@ -80,16 +80,17 @@ defmodule TragarAi.QuoteIntake.Server do
     end
   end
 
-  # Search FreightWare sites for the customer's place and offer the matches.
+  # Search FreightWare sites for the customer's place, keep the closest matches
+  # (ranked by how much of what they typed each site matches), and ask which one.
   defp offer_sites(session, key, query, fw) do
     case safe(fn -> fw.search_sites(query) end) do
       {:ok, [_ | _] = sites} ->
-        candidates = sites |> Enum.take(5) |> Enum.map(&site_brief/1)
+        candidates = sites |> rank_sites(query) |> Enum.take(5) |> Enum.map(&site_brief/1)
         slots = session.slots |> Map.put("_pending", key) |> Map.put("_candidates", candidates)
 
         reply =
           "I found these #{key} sites for “#{query}”:\n#{numbered(candidates)}\n" <>
-            "Reply with the number, or type a different name."
+            "Which one — reply with the number, or add more detail (suburb/postcode) to narrow it down."
 
         save(session, %{slots: slots, last_reply: reply}) |> ok(reply, false)
 
@@ -100,6 +101,33 @@ defmodule TragarAi.QuoteIntake.Server do
 
         save(session, %{slots: session.slots, last_reply: reply}) |> ok(reply, false)
     end
+  end
+
+  # Closest-first: score each site by how many of the user's words it matches
+  # (name, suburb, city, postcode, ref). Keep only matches; if none score, fall
+  # back to the raw result so we never dead-end.
+  defp rank_sites(sites, query) do
+    tokens = query |> String.downcase() |> String.split(~r/[^a-z0-9]+/, trim: true)
+
+    case sites |> Enum.map(&{site_score(&1, tokens), &1}) |> Enum.filter(&(elem(&1, 0) > 0)) do
+      [] -> sites
+      scored -> scored |> Enum.sort_by(&(-elem(&1, 0))) |> Enum.map(&elem(&1, 1))
+    end
+  end
+
+  defp site_score(site, tokens) do
+    hay =
+      [
+        site["site_name"],
+        site["suburb"],
+        site["city"],
+        site["post_code"],
+        site["site_code"],
+        site["account_reference"]
+      ]
+      |> Enum.map_join(" ", &(&1 |> to_string() |> String.downcase()))
+
+    Enum.count(tokens, &String.contains?(hay, &1))
   end
 
   # The customer picked from the offered sites (or typed a new name to re-search).
@@ -133,6 +161,8 @@ defmodule TragarAi.QuoteIntake.Server do
     %{
       "site_code" => s["site_code"],
       "name" => s["site_name"],
+      "building" => s["building"],
+      "street" => s["street"],
       "suburb" => s["suburb"],
       "city" => s["city"],
       "post_code" => s["post_code"],

@@ -181,6 +181,8 @@ defmodule TragarAi.QuoteIntake.Flow do
     %{
       "#{prefix}_site" => site["site_code"],
       "#{prefix}_name" => site["name"] || site["site_name"],
+      "#{prefix}_building" => site["building"],
+      "#{prefix}_street" => site["street"],
       "#{prefix}_suburb" => site["suburb"],
       "#{prefix}_city" => site["city"],
       "#{prefix}_postal_code" => site["post_code"] || site["postal_code"]
