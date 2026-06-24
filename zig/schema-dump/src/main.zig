@@ -11,8 +11,10 @@
 //! args 2..N (opt)  : table names to detail. If omitted, the built-in Pastel set
 //!                    is detailed. The full table list is always emitted.
 //!
-//! Send schema.json back so we can lock config.toml (exact columns, keys, and —
-//! since history is snapshot+row-hash — the natural keys for the upsert).
+//! Send schema.json back so we can lock config.toml: exact column names, the
+//! natural keys for the upsert, and — from the emitted index info — whether a
+//! transaction table has a monotonic column to watermark on (else we fall back
+//! to a per-DocumentType watermark).
 
 const std = @import("std");
 const odbc = @import("odbc.zig");
