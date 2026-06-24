@@ -23,9 +23,21 @@ zig/
   config.toml.example     # SENDER table map (names UNCONFIRMED — see file)
   sender.env.example      # SENDER secrets (Windows)
   receiver.env.example    # RECEIVER secrets (the mini)
+  schema-dump/            # x86-windows ODBC catalog dumper (built; run on Win10)
+    src/odbc.zig          #   hand-declared odbc32 bindings (stable ABI)
+    src/main.zig          #   SQLTables/SQLColumns/SQLPrimaryKeys/SQLStatistics -> JSON
   sender/                 # (next phase) x86-windows, links odbc32
-  receiver/               # (next phase) mini target, Postgres upsert
+  receiver/               # (next phase) mini target, libpq upsert
 ```
+
+## `schema-dump` — run this first
+
+`zig/schema-dump/` builds a 32-bit `schema-dump.exe` that dumps the live Pastel
+catalog as JSON, over the same ODBC path the sender will use. Build it anywhere
+with Zig 0.16 (`cd zig/schema-dump && zig build`), run it on the Win10 box
+(`schema-dump.exe "DSN=..." > schema.json`), and send back `schema.json`. See
+[docs/pastel-schema.md](docs/pastel-schema.md) for details. This locks the exact
+columns + natural keys in `config.toml`.
 
 ## Zig version — pinned to 0.16.0
 

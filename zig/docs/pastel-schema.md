@@ -30,28 +30,22 @@ Pastel driver).
 These names go into `config.toml`; **column** names and the incremental
 **watermark** still need live confirmation (below).
 
-## ⚠️ Watermark — the open design decision
+## Watermark — DECIDED: snapshot + row-hash
 
-The spec's incremental rule was *"pull WHERE record-number > watermark; watermark
-on the record number, not the transaction date."* That assumes each transaction
-table has a **single monotonically-increasing record id**. Pastel Partner's
-history tables are instead keyed by the **composite `(DocumentType,
-DocumentNumber)`**, and `DocumentNumber` is sequential only *within* a document
-type — there is no documented single global autoincrement column.
+The spec's incremental rule was *"pull WHERE record-number > watermark"*, which
+assumes each transaction table has a **single monotonically-increasing record
+id**. Pastel Partner's history tables are instead keyed by the **composite
+`(DocumentType, DocumentNumber)`**, and `DocumentNumber` is sequential only
+*within* a document type — there is no documented single global autoincrement
+column.
 
-So before building the reader we must confirm, from the live catalog, whether a
-usable monotonic column exists. Candidate strategies, in order of preference:
-
-1. **A real monotonic column** — if the live `X$Field` dump reveals an
-   auto/identity/timestamp-ish column on the history tables, watermark on it.
-2. **Composite watermark per `DocumentType`** — track the last `DocumentNumber`
-   seen per type and pull `> last` per type. Works if Pastel never reissues a
-   lower number for an existing type.
-3. **Snapshot + row-hash (treat like master)** — full pull + per-row hash diff.
-   Always correct, heavier; viable because the read model is small.
-
-Pick after seeing the dump. `config.toml`'s `watermark_cols` is a placeholder
-until then.
+**Decision: snapshot + per-row hash for all tables, history included.** The
+sender pulls the full set per table, hashes each row, and batches only rows whose
+hash changed vs the last load — no watermark column required. Always correct;
+heavier I/O per run, which is fine because the read model is small. `class` is
+retained only to drive the receiver's upsert semantics, and `keys` to drive
+`ON CONFLICT`. The dump below is still needed to lock the exact **column names**
+and **natural keys**.
 
 ## How to dump THIS install's catalog (so we lock columns + keys)
 
@@ -97,6 +91,22 @@ If easier, point Excel **Data → Get Data → From ODBC** at the Pastel DSN; th
 Navigator lists every table, and selecting one shows its columns. Export the
 table list + the six tables' columns.
 
-> If preferred, I can ship a tiny **`schema-dump`** Zig utility (same `odbc32`
-> `@cImport` the sender will use: `SQLTables` / `SQLColumns` / `SQLPrimaryKeys`
-> → JSON) that you compile + run once on the Windows box. Say the word.
+### Option D — the `schema-dump` utility (built — recommended)
+
+`zig/schema-dump/` is a tiny x86-windows tool (hand-declared `odbc32` bindings:
+`SQLTables`/`SQLColumns`/`SQLPrimaryKeys`/`SQLStatistics` → JSON). It uses the
+exact ODBC path the sender will, so running it also validates the DSN end-to-end.
+
+```bash
+# build (any machine with Zig 0.16 — cross-compiles to a 32-bit .exe):
+cd zig/schema-dump && zig build          # -> zig-out/bin/schema-dump.exe
+
+# run on the Windows 10 box, against the SAME 32-bit DSN the sender will use:
+schema-dump.exe "DSN=PastelData" > schema.json
+#   or DSN-less:
+schema-dump.exe "Driver={Pervasive ODBC Client Interface};ServerName=...;DBQ=..." > schema.json
+```
+
+It always lists every `TABLE`, and details columns + primary key + index
+segments for the built-in Pastel set (override by passing table names as extra
+args). Send `schema.json` back and we lock `config.toml`.
