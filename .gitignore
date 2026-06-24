@@ -38,3 +38,6 @@ npm-debug.log
 
 # Swift sidecar build artifacts
 /sidecar/.build/
+
+# Local secrets (loaded by config/runtime.exs in dev)
+.env

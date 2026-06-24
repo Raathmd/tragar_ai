@@ -1,5 +1,33 @@
 import Config
 
+# Load a local `.env` in dev so credentials can live in a (gitignored) file
+# instead of being exported each run. Real environment variables take precedence;
+# `.env` only fills what isn't already set. Not loaded in test/prod.
+if config_env() == :dev do
+  env_path = Path.expand("../.env", __DIR__)
+
+  if File.exists?(env_path) do
+    env_path
+    |> File.read!()
+    |> String.split("\n", trim: true)
+    |> Enum.each(fn line ->
+      line = String.trim(line)
+
+      unless line == "" or String.starts_with?(line, "#") do
+        case String.split(line, "=", parts: 2) do
+          [key, value] ->
+            key = String.trim(key)
+            value = value |> String.trim() |> String.trim("\"") |> String.trim("'")
+            if System.get_env(key) in [nil, ""], do: System.put_env(key, value)
+
+          _ ->
+            :ok
+        end
+      end
+    end)
+  end
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
