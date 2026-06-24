@@ -7,7 +7,7 @@
 //!   - the per-table monotonic sequence rules (gap / duplicate / in-order)
 //!   - the HTTP contract (paths, headers, status-code -> sender action)
 //!
-//! Zig version: pinned to 0.14.1 (see ../README.md). std-only, no external deps,
+//! Zig version: pinned to 0.16.0 (see ../README.md). std-only, no external deps,
 //! so it cross-compiles unchanged for `x86-windows` (sender) and the mini target
 //! (receiver).
 
@@ -49,16 +49,18 @@ pub fn keyFromBase64(b64: []const u8) ![key_len]u8 {
 }
 
 /// Encrypt `plaintext` into a fresh envelope. Caller owns the returned buffer.
-/// A random per-file nonce is drawn; the plaintext is never written in clear.
-pub fn seal(allocator: std.mem.Allocator, key: [key_len]u8, plaintext: []const u8) ![]u8 {
+/// The plaintext is never written in clear.
+///
+/// `nonce` MUST be a fresh, per-file random 24-byte value — reusing a nonce with
+/// the same key breaks confidentiality. The protocol module stays Io-free and
+/// deterministically testable by taking the nonce explicitly; the sender draws
+/// it via `std.Io.random(io, &nonce)` (Zig 0.16 routes CSPRNG through `Io`).
+pub fn seal(allocator: std.mem.Allocator, key: [key_len]u8, nonce: [nonce_len]u8, plaintext: []const u8) ![]u8 {
     const out = try allocator.alloc(u8, overhead + plaintext.len);
     errdefer allocator.free(out);
 
     @memcpy(out[0..MAGIC.len], &MAGIC);
     out[MAGIC.len] = VERSION;
-
-    var nonce: [nonce_len]u8 = undefined;
-    std.crypto.random.bytes(&nonce);
     @memcpy(out[header_len .. header_len + nonce_len], &nonce);
 
     const ct = out[header_len + nonce_len .. header_len + nonce_len + plaintext.len];
@@ -216,11 +218,12 @@ pub fn actionForStatus(status: u16) SenderAction {
 const testing = std.testing;
 
 const test_key: [key_len]u8 = [_]u8{0x42} ** key_len;
+const test_nonce: [nonce_len]u8 = [_]u8{0x24} ** nonce_len;
 
 test "envelope round-trip" {
     const a = testing.allocator;
     const pt = "{\"source\":\"pastel\"}\n{\"RecordNumber\":1}\n{\"RecordNumber\":2}";
-    const sealed = try seal(a, test_key, pt);
+    const sealed = try seal(a, test_key, test_nonce, pt);
     defer a.free(sealed);
 
     try testing.expect(sealed.len == overhead + pt.len);
@@ -234,7 +237,7 @@ test "envelope round-trip" {
 
 test "tamper: flipped ciphertext byte is rejected" {
     const a = testing.allocator;
-    const sealed = try seal(a, test_key, "hello world payload");
+    const sealed = try seal(a, test_key, test_nonce, "hello world payload");
     defer a.free(sealed);
     sealed[overhead] ^= 0x01; // flip first ciphertext byte
     try testing.expectError(error.AuthenticationFailed, open(a, test_key, sealed));
@@ -242,7 +245,7 @@ test "tamper: flipped ciphertext byte is rejected" {
 
 test "tamper: flipped version (AAD) is rejected" {
     const a = testing.allocator;
-    const sealed = try seal(a, test_key, "payload");
+    const sealed = try seal(a, test_key, test_nonce, "payload");
     defer a.free(sealed);
     sealed[MAGIC.len] = 2; // bump version -> UnsupportedVersion before tag check
     try testing.expectError(error.UnsupportedVersion, open(a, test_key, sealed));
@@ -250,7 +253,7 @@ test "tamper: flipped version (AAD) is rejected" {
 
 test "tamper: flipped tag byte is rejected" {
     const a = testing.allocator;
-    const sealed = try seal(a, test_key, "payload bytes here");
+    const sealed = try seal(a, test_key, test_nonce, "payload bytes here");
     defer a.free(sealed);
     sealed[sealed.len - 1] ^= 0xFF;
     try testing.expectError(error.AuthenticationFailed, open(a, test_key, sealed));
@@ -258,7 +261,7 @@ test "tamper: flipped tag byte is rejected" {
 
 test "wrong key is rejected" {
     const a = testing.allocator;
-    const sealed = try seal(a, test_key, "secret");
+    const sealed = try seal(a, test_key, test_nonce, "secret");
     defer a.free(sealed);
     const other: [key_len]u8 = [_]u8{0x99} ** key_len;
     try testing.expectError(error.AuthenticationFailed, open(a, other, sealed));

@@ -5,7 +5,7 @@ const std = @import("std");
 // module from this directory (see ../README.md). Targets Zig 0.16.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
     // Public module dependents (sender/receiver) import as "protocol".
     _ = b.addModule("protocol", .{

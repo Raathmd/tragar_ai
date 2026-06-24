@@ -43,16 +43,23 @@ zig/
   `std.mem` / `std.base64`), so the protocol module is unaffected. It **does**
   reshape the next phase — see [I/O interface note](#io-interface-note-next-phase).
 
-> ⚠️ The protocol module is written for 0.16 but has **not** been compile-checked
-> here (no Zig toolchain in this environment). First action on a machine with
-> Zig 0.16: `cd zig/shared && zig build test`, then paste the printed
-> `.fingerprint` into `build.zig.zon`.
+> ✅ Compile-verified on **Zig 0.16.0**: `zig build test` → 11/11 tests pass;
+> `zig fmt --check` clean; and the protocol cross-compiles for all three real
+> targets — `x86-windows` (32-bit sender), `aarch64-macos` and `x86_64-macos`
+> (the mini). The `.fingerprint` in `build.zig.zon` is the real toolchain-issued
+> value.
 
 Run the shared tests:
 
 ```bash
-cd zig/shared && zig build test
+cd zig/shared && zig build test --summary all
 ```
+
+**0.16 note — randomness through `Io`:** 0.16 removed `std.crypto.random`; CSPRNG
+now routes through the `Io` interface (`std.Io.random(io, &buf)`). To keep the
+protocol module pure and deterministically testable, `seal()` takes the 24-byte
+nonce **as a parameter** (standard for AEAD libraries); the sender draws a fresh
+random nonce per file via its `Io` and passes it in.
 
 ### I/O interface note (next phase)
 
