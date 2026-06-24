@@ -16,11 +16,11 @@ is empty on the `:5001` UAT instance. No request parameter changes it.
 ## Note for Dovetail
 
 > On the UAT instance `http://tragar-db.dovetail.co.za:5001/WebServices/web`, the
-> login call authenticates the `TragarWeb` user (JHB branch) but returns:
+> login call authenticates the configured user (JHB branch) but returns:
 >
 > ```
 > POST /FreightWare/V2/system/auth/login
-> {"request":{"username":"TragarWeb","password":"***","station":"JHB"}}
+> {"request":{"username":"<DOVETAIL_USERNAME>","password":"<DOVETAIL_PASSWORD>","station":"<DOVETAIL_STATION>"}}
 >
 > HTTP/1.1 400
 > {"response":{"esErrors":{"Errors":[
@@ -36,9 +36,10 @@ is empty on the `:5001` UAT instance. No request parameter changes it.
 
 Credentials are **not** stored in the repo — pass them via env:
 
+Set `DOVETAIL_BASE_URL`, `DOVETAIL_USERNAME`, `DOVETAIL_PASSWORD`, `DOVETAIL_STATION`
+in `.env` (gitignored) or the shell, then:
+
 ```bash
-DOVETAIL_BASE_URL=http://tragar-db.dovetail.co.za:5001/WebServices/web \
-DOVETAIL_USERNAME=TragarWeb DOVETAIL_PASSWORD=*** DOVETAIL_STATION=JHB \
 mix tragar.fw_auth
 ```
 

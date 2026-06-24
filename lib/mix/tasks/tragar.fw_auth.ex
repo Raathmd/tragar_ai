@@ -4,8 +4,8 @@ defmodule Mix.Tasks.Tragar.FwAuth do
   Verify FreightWare auth end to end. Reads credentials from env (never stored in
   the repo) and prints the session token on success or the FreightWare error.
 
-      DOVETAIL_BASE_URL=http://tragar-db.dovetail.co.za:5001/WebServices/web \\
-      DOVETAIL_USERNAME=TragarWeb DOVETAIL_PASSWORD=*** DOVETAIL_STATION=JHB \\
+  Set the `DOVETAIL_*` vars (in `.env` or the shell) and run:
+
       mix tragar.fw_auth
   """
   use Mix.Task
