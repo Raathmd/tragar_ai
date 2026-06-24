@@ -1,0 +1,42 @@
+# Tragar AI on the mini: app + Postgres. Secrets come from .env (gitignored).
+# Deploy pulls the image from GHCR and runs migrations before starting.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: tragar_ai_prod
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    # Override with a pinned tag on deploy, e.g. IMAGE=ghcr.io/raathmd/tragar_ai:<sha>
+    image: ${IMAGE:-ghcr.io/raathmd/tragar_ai:latest}
+    env_file: .env
+    environment:
+      PHX_SERVER: "true"
+      PHX_HOST: ${PHX_HOST:-localhost}
+      DATABASE_URL: ${DATABASE_URL:-ecto://postgres:postgres@db/tragar_ai_prod}
+      # SECRET_KEY_BASE comes from .env (mix phx.gen.secret).
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  pgdata:

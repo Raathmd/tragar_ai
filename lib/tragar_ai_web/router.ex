@@ -18,6 +18,11 @@ defmodule TragarAiWeb.Router do
     plug TragarAiWeb.Plugs.ApiAuth
   end
 
+  # Unauthenticated health probe (Docker healthcheck + deploy gate).
+  scope "/", TragarAiWeb do
+    get "/health", HealthController, :index
+  end
+
   scope "/", TragarAiWeb do
     pipe_through :browser
 
