@@ -30,22 +30,26 @@ Pastel driver).
 These names go into `config.toml`; **column** names and the incremental
 **watermark** still need live confirmation (below).
 
-## Watermark — DECIDED: snapshot + row-hash
+## Watermark — DECIDED: monotonic-if-exists, else per-type (confirm vs dump)
 
 The spec's incremental rule was *"pull WHERE record-number > watermark"*, which
 assumes each transaction table has a **single monotonically-increasing record
 id**. Pastel Partner's history tables are instead keyed by the **composite
 `(DocumentType, DocumentNumber)`**, and `DocumentNumber` is sequential only
-*within* a document type — there is no documented single global autoincrement
+*within* a document type — there is no *documented* single global autoincrement
 column.
 
-**Decision: snapshot + per-row hash for all tables, history included.** The
-sender pulls the full set per table, hashes each row, and batches only rows whose
-hash changed vs the last load — no watermark column required. Always correct;
-heavier I/O per run, which is fine because the read model is small. `class` is
-retained only to drive the receiver's upsert semantics, and `keys` to drive
-`ON CONFLICT`. The dump below is still needed to lock the exact **column names**
-and **natural keys**.
+**Decision (final pick confirmed against the dump):**
+1. If the dump reveals a real monotonic column on a history table → watermark on
+   it (closest to the original spec).
+2. Otherwise → **composite watermark per `DocumentType`**: track the last
+   `DocumentNumber` per type and pull `> last` per type.
+3. Last resort, if neither holds → snapshot + per-row hash (as masters use).
+
+Master tables always use snapshot + per-row hash. `class` drives the receiver's
+upsert semantics; `keys` drive `ON CONFLICT`. The `INDEX_NAME`/`NON_UNIQUE`
+columns in the dump's `indexes` arrays are exactly what tell us whether case (1)
+applies — that's why `schema-dump` includes `SQLStatistics`.
 
 ## How to dump THIS install's catalog (so we lock columns + keys)
 

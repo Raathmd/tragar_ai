@@ -20,13 +20,14 @@ name = "pastel"            # the <source> segment in batch_id ("<source>:<table>
 batch_max_rows = 5000      # bounded read — Pervasive Workgroup connection ceiling; users are live
 status_poll = true         # GET /ingest/status after a run to record processing outcomes
 
-# Extraction strategy (DECIDED): snapshot + per-row hash for ALL tables, history
-# included. Pastel keys history by the composite (DocumentType, DocumentNumber)
-# with no single monotonic record id, so there's no reliable watermark column;
-# instead the sender pulls the full set, hashes each row, and only batches rows
-# whose hash changed vs the last load. `class` still drives RECEIVER upsert
-# semantics; `keys` are the natural keys for ON CONFLICT. Heavier I/O per run,
-# always correct — viable because the read model is small.
+# Extraction strategy (DECIDED, confirmed against the dump):
+#   transaction tables -> INCREMENTAL by watermark. Prefer a true monotonic
+#     column IF the schema-dump reveals one (`watermark_cols = ["<that col>"]`);
+#     otherwise fall back to the composite per-DocumentType watermark below
+#     (track last DocumentNumber per DocumentType, pull WHERE > last).
+#   master tables       -> snapshot + per-row hash (diff vs last loaded hash).
+#   row-hash on history is the last-resort fallback if neither watermark holds.
+# `class` drives RECEIVER upsert semantics; `keys` are the natural ON CONFLICT key.
 
 # ── transaction streams (append-mostly posted documents) ────────────────────
 [[table]]
@@ -34,26 +35,26 @@ name           = "HistoryHeader"               # logical stream -> <table> in ba
 class          = "transaction"
 odbc_table     = "HistoryHeader"               # acchisth.dat (confirmed name)
 keys           = ["DocumentType", "DocumentNumber"]   # composite document key
+watermark_cols = ["DocumentType", "DocumentNumber"]   # per-type fallback; replace with monotonic col if dump shows one
 trim_keys      = ["CustomerCode"]              # space-padded; TRIM before batching
-row_hash_cols  = []                            # [] = hash all selected columns
 
 [[table]]
 name           = "HistoryLines"                # acchistl.dat (confirmed name)
 class          = "transaction"
 odbc_table     = "HistoryLines"
 keys           = ["DocumentType", "DocumentNumber", "LineNumber"]  # TODO confirm line key col
+watermark_cols = ["DocumentType", "DocumentNumber"]                # per-type fallback; see above
 trim_keys      = []
-row_hash_cols  = []
 
 # OpenItem holds receipts / payments / allocations that HistoryHeader excludes.
 # Include only if the read model needs them — keys TBD from the live catalog.
 # [[table]]
-# name          = "OpenItem"
-# class         = "transaction"
-# odbc_table    = "OpenItem"
-# keys          = []                            # TODO
-# trim_keys     = ["CustomerCode"]
-# row_hash_cols = []
+# name           = "OpenItem"
+# class          = "transaction"
+# odbc_table     = "OpenItem"
+# keys           = []                           # TODO
+# watermark_cols = []                           # TODO
+# trim_keys      = ["CustomerCode"]
 
 # ── master streams ──────────────────────────────────────────────────────────
 # Full snapshot + per-row hash; diff vs last loaded hash so unchanged rows no-op.
