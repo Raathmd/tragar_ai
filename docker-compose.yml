@@ -38,5 +38,30 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # ── Core AI model sidecar (ML workload) ─────────────────────────────────────
+  # Serves the Core AI contract: POST /interpret and /phrase. Disabled by default
+  # (the app runs in :stub mode) — enable with `--profile ai` once the model is
+  # ready, and set CORE_AI_MODE=http + CORE_AI_URL=http://coreai:8080 in .env.
+  coreai:
+    profiles: ["ai"]
+    image: ${COREAI_IMAGE:-ghcr.io/raathmd/tragar-coreai:latest}
+    restart: unless-stopped
+    volumes:
+      - models:/models # model weights live in a volume, not the image
+    environment:
+      MODEL_DIR: /models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    # If the mini has an NVIDIA GPU, uncomment to expose it:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+
 volumes:
   pgdata:
+  models:
