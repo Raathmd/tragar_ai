@@ -1,0 +1,58 @@
+==============================================================================
+  PASTEL SCHEMA DUMP  -  simple instructions
+==============================================================================
+
+What this does
+--------------
+It reads the STRUCTURE of your Pastel database (table and column names) and
+saves it to a small text file called  schema.json . It does NOT change, move,
+or delete anything in Pastel. It only reads.
+
+You do NOT need to install anything.
+
+
+What's in this folder
+----------------------
+  1. Dump Pastel Schema.bat       <- the main one you double-click
+  2. Open 32-bit ODBC Admin.bat   <- only needed the first time, to set up
+                                      the connection (see below)
+  3. schema-dump.exe              <- the program (leave it here)
+  4. READ ME FIRST.txt            <- this file
+
+
+How to run it
+-------------
+STEP 1.  Copy this WHOLE folder onto the Windows computer that has Pastel
+         installed (a USB stick or a shared drive is fine). Keep all the
+         files together in one folder.
+
+STEP 2.  Double-click   "Dump Pastel Schema.bat"
+         - It lists the data sources it can find.
+         - Type the data-source name and press Enter.
+         - When it says SUCCESS, a file called  schema.json  appears in this
+           folder and the folder pops open with it highlighted.
+
+STEP 3.  Email the  schema.json  file to:   raathmd@gmail.com
+
+
+First time only: setting up the connection
+------------------------------------------
+If Step 2 shows "(none found)" or gives an error, the database connection
+hasn't been set up yet. Do this once:
+
+  a. Double-click   "Open 32-bit ODBC Admin.bat"
+  b. Click the  "System DSN"  tab, then  "Add".
+  c. Choose the Pastel / Pervasive / Actian Zen driver and click Finish.
+  d. Point it at your Pastel company data and give it a NAME you'll remember
+     (for example: Pastel). Click OK.
+  e. Now go back and run  "Dump Pastel Schema.bat"  and type that name.
+
+(The driver is 32-bit, which is why we use the special 32-bit ODBC admin
+ above instead of the one in Control Panel.)
+
+
+If you get stuck
+----------------
+Don't worry, nothing is broken - Pastel is untouched. Just take a photo or
+screenshot of the window and send it to  raathmd@gmail.com  and we'll help.
+==============================================================================

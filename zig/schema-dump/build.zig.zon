@@ -1,0 +1,12 @@
+.{
+    .name = .tragar_pastel_schema_dump,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0x223d00b3ef232dfa,
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

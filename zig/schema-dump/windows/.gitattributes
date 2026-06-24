@@ -1,0 +1,5 @@
+# Windows end-user bundle: keep CRLF for the files they double-click,
+# and never let git "fix" the prebuilt 32-bit executable.
+*.bat   text eol=crlf
+*.txt   text eol=crlf
+*.exe   binary
