@@ -64,21 +64,28 @@ config :tragar_ai, TragarAiWeb.Endpoint,
 if config_env() != :test do
   dovetail_env = System.get_env("DOVETAIL_ENV", "uat")
 
-  # FreightWare (source 1) — read-only live facts: load/consignment status, ETA,
-  # waybill lookup. Hosted on Tragar's Dovetail servers.
+  # FreightWare (source 1) — read-only live facts. `DOVETAIL_ENV` (uat|prod)
+  # selects the credential set: per-env `DOVETAIL_UAT_*` / `DOVETAIL_PROD_*` are
+  # tried first, then the generic `DOVETAIL_*` as a fallback. So you can keep
+  # both sets in .env and switch with one flag.
+  dt = fn key ->
+    System.get_env("DOVETAIL_#{String.upcase(dovetail_env)}_#{key}") ||
+      System.get_env("DOVETAIL_#{key}")
+  end
+
   config :tragar_ai, TragarAi.Dovetail.Client,
     env: dovetail_env,
     base_url:
-      System.get_env("DOVETAIL_BASE_URL") ||
+      dt.("BASE_URL") ||
         if(dovetail_env == "prod",
           do: "https://tragar-db.dovetail.co.za/WebServices/web",
           else: "https://tragar-db.dovetail.co.za/WebServicesUAT/web"
         ),
-    username: System.get_env("DOVETAIL_USERNAME"),
-    password: System.get_env("DOVETAIL_PASSWORD"),
-    station: System.get_env("DOVETAIL_STATION"),
+    username: dt.("USERNAME"),
+    password: dt.("PASSWORD"),
+    station: dt.("STATION"),
     pod_image_base:
-      System.get_env("DOVETAIL_POD_IMAGE_BASE") ||
+      dt.("POD_IMAGE_BASE") ||
         "https://tragar-db.dovetail.co.za/FWO_UAT/views/viewImage.html"
 
   # Freshdesk (source 6) — read-only ticket context + the customer a question is
