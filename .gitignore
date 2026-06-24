@@ -41,3 +41,7 @@ npm-debug.log
 
 # Local secrets (loaded by config/runtime.exs in dev)
 .env
+
+# Zig build artifacts (zig/ Pastel ingestion programs)
+/zig/**/.zig-cache/
+/zig/**/zig-out/
