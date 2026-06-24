@@ -119,12 +119,15 @@ Confirmed:
 - **Postgres access** → **link `libpq`** (`@cImport` `libpq-fe.h`) — robust
   COPY/binary handling; loopback so no TLS.
 
-**Remaining blocker — the live Pastel table list.** `config.toml.example` is a
-*model*, not verified. Before building the SENDER's ODBC reader we need an
-ODBC-catalog dump from the live install (`SQLTables` / `SQLColumns`) to confirm:
-real transaction/master table names, the **monotonic record-number column** per
-transaction table, and the **natural key columns**. Please provide that (or a
-DSN we can introspect) and confirm the table list.
+**Remaining blocker — the live Pastel column/key + watermark details.** Target
+is **Sage 50c Pastel Partner v19.4.7** on **Actian Zen / Pervasive PSQL**, sender
+host **Windows 10 Pro 22H2** (32-bit `odbc32` driver → `x86-windows` build). The
+documented table *names* are now in `config.toml.example`, but the incremental
+**watermark column** for the history tables is an open design decision (Pastel
+keys history by composite `DocumentType`+`DocumentNumber`, not a single monotonic
+id). See **[docs/pastel-schema.md](docs/pastel-schema.md)** for the findings and
+the exact dump procedure — run it on the Windows box and send the output to lock
+`config.toml`.
 
 Once the table list is confirmed we build out `sender/` (x86-windows, links
 `odbc32`) and `receiver/` (links `libpq`), the DDL (staging / read model /

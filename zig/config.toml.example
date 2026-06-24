@@ -1,13 +1,17 @@
 # Tragar Pastel SENDER — table map (config.toml).
 #
+# Target system: Sage 50c Pastel Partner v19.4.7  (Actian Zen / Pervasive PSQL).
+# ODBC driver: "Pervasive ODBC Client Interface" (32-bit) — schema defined by the
+# company dataset's DDFs (FILE.DDF / FIELD.DDF / INDEX.DDF).
+#
 # Secrets live in .env (see sender.env.example); this file holds the
 # NON-secret table list, classes, watermark columns, and keys.
 #
-# ⚠️ UNCONFIRMED: every table / column name below is a MODEL of the Pastel
-# schema, NOT verified against the live install. Before full build-out we must
-# inspect the real Pastel DB via the ODBC catalog (SQLTables / SQLColumns) to
-# get true table names, the monotonic record-number column per transaction
-# table, and the key columns. Do not trust these defaults.
+# Table NAMES below are the documented Pastel Partner ODBC names (verified against
+# Sage KB) — treat as a strong model, but COLUMN names and especially the
+# incremental WATERMARK column MUST still be confirmed against THIS install's
+# live catalog (see docs/pastel-schema.md for the dump procedure). Anything marked
+# TODO is unconfirmed.
 
 [source]
 name = "pastel"            # the <source> segment in batch_id ("<source>:<table>:<seq>")
@@ -17,50 +21,61 @@ batch_max_rows = 5000      # bounded read — Pervasive Workgroup connection cei
 status_poll = true         # GET /ingest/status after a run to record processing outcomes
 
 # ── transaction streams ─────────────────────────────────────────────────────
-# Append-only Pastel history/journal tables. Incremental pull WHERE
-# record_number_col > watermark. Watermark is the MONOTONIC RECORD NUMBER, never
-# the transaction date (backdated postings still get a higher record number).
+# Append-mostly posted-document tables. Pastel keys these by the COMPOSITE
+# (DocumentType, DocumentNumber) — NOT a single monotonic record number. The
+# spec's "watermark on the record number" therefore needs an explicit decision
+# (see docs/pastel-schema.md §"Watermark"); `watermark_cols` below is a PLACEHOLDER
+# pending that decision + live-catalog confirmation.
 
 [[table]]
-name              = "HistoryHeader"     # logical stream -> <table> in batch_id
-class             = "transaction"
-odbc_table        = "HistoryHeader"     # TODO: real Pervasive table name
-record_number_col = "RecordNumber"      # TODO: monotonic watermark column
-keys              = ["RecordNumber"]    # natural key for ON CONFLICT upsert
-trim_keys         = ["AccountID"]       # space-padded keys to TRIM before batching
+name           = "HistoryHeader"               # logical stream -> <table> in batch_id
+class          = "transaction"
+odbc_table     = "HistoryHeader"               # acchisth.dat (confirmed name)
+keys           = ["DocumentType", "DocumentNumber"]   # composite document key
+watermark_cols = ["DocumentType", "DocumentNumber"]   # TODO confirm monotonic strategy
+trim_keys      = ["CustomerCode"]              # space-padded; TRIM before batching
 
 [[table]]
-name              = "HistoryLines"
-class             = "transaction"
-odbc_table        = "HistoryLines"
-record_number_col = "RecordNumber"
-keys              = ["RecordNumber"]
-trim_keys         = ["AccountID"]
+name           = "HistoryLines"                # acchistl.dat (confirmed name)
+class          = "transaction"
+odbc_table     = "HistoryLines"
+keys           = ["DocumentType", "DocumentNumber", "LineNumber"]  # TODO confirm line key col
+watermark_cols = ["DocumentType", "DocumentNumber"]                # TODO
+trim_keys      = []
+
+# OpenItem holds receipts / payments / allocations that HistoryHeader excludes.
+# Include only if the read model needs them — keys TBD from the live catalog.
+# [[table]]
+# name           = "OpenItem"
+# class          = "transaction"
+# odbc_table     = "OpenItem"
+# keys           = []                           # TODO
+# watermark_cols = []                           # TODO
+# trim_keys      = ["CustomerCode"]
 
 # ── master streams ──────────────────────────────────────────────────────────
-# Customer / Supplier / LedgerMaster / Inventory etc. Full snapshot + per-row
-# hash; diff vs last loaded hash so unchanged rows no-op. Mutate in place.
+# Full snapshot + per-row hash; diff vs last loaded hash so unchanged rows no-op.
 
 [[table]]
-name          = "Customer"
+name          = "CustomerMaster"               # confirmed name; key CustomerCode (space-padded)
 class         = "master"
-odbc_table    = "CustomerMaster"        # TODO: real name
+odbc_table    = "CustomerMaster"
 keys          = ["CustomerCode"]
 trim_keys     = ["CustomerCode"]
-row_hash_cols = []                       # [] = hash all selected columns
+row_hash_cols = []                              # [] = hash all selected columns
 
 [[table]]
-name          = "Supplier"
+name          = "SupplierMaster"
 class         = "master"
 odbc_table    = "SupplierMaster"
-keys          = ["SupplierCode"]
+keys          = ["SupplierCode"]               # TODO confirm exact column name
 trim_keys     = ["SupplierCode"]
 row_hash_cols = []
 
 [[table]]
-name          = "Inventory"
+name          = "InventoryMaster"
 class         = "master"
 odbc_table    = "InventoryMaster"
-keys          = ["ItemCode"]
+keys          = ["ItemCode"]                    # TODO confirm exact column name
 trim_keys     = ["ItemCode"]
 row_hash_cols = []
