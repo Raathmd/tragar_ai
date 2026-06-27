@@ -1,4 +1,11 @@
-# ML model sidecars on the mini
+# ML model sidecars (legacy / optional)
+
+> **Not the current path.** The Studio runs **no Docker**, and the model now runs
+> as **Ollama/qwen3:30b talked to directly** (`CORE_AI_MODE=ollama`, with the
+> in-process stub as fallback). This doc describes the older Docker-Compose
+> sidecar option (`CORE_AI_MODE=http`); the `Dockerfile`/`coreai.yml` it referred
+> to have been removed. Kept for reference if a separate model service is ever
+> reintroduced. For deployment see [deploy-studio.md](deploy-studio.md).
 
 The app is already built as a **sidecar client**: `TragarAi.CoreAI` in `:http`
 mode POSTs to a model service over local HTTP. So an ML workload is just another
