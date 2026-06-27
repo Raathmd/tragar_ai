@@ -6,6 +6,8 @@ defmodule TragarAiWeb.ChatLiveTest do
   test "renders the chat and answers a prompt", %{conn: conn} do
     {:ok, view, html} = live(conn, ~p"/chat")
     assert html =~ "Local AI chat"
+    # The nav links back to the console (root).
+    assert view |> element(~s{nav a[href="/"]}) |> has_element?()
 
     html =
       view

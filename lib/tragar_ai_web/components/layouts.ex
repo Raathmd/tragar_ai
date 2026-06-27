@@ -12,6 +12,30 @@ defmodule TragarAiWeb.Layouts do
   embed_templates "layouts/*"
 
   @doc """
+  Top navigation between the internal LiveViews (Console ↔ Chat). Uses verified
+  routes so moving between them is live navigation, not a full page reload.
+
+  ## Examples
+
+      <Layouts.app_nav active={:console} />
+      <Layouts.app_nav active={:chat} />
+  """
+  attr :active, :atom, default: nil, doc: "the current page — :console or :chat"
+
+  def app_nav(assigns) do
+    ~H"""
+    <nav class="flex items-center gap-1">
+      <.link navigate={~p"/"} class={["btn btn-sm", (@active == :console && "btn-primary") || "btn-ghost"]}>
+        Console
+      </.link>
+      <.link navigate={~p"/chat"} class={["btn btn-sm", (@active == :chat && "btn-primary") || "btn-ghost"]}>
+        Chat
+      </.link>
+    </nav>
+    """
+  end
+
+  @doc """
   Renders your app layout.
 
   This function is typically invoked from every template,

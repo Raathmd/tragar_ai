@@ -46,6 +46,7 @@ defmodule TragarAiWeb.ChatLive do
     <div class="h-[100dvh] flex flex-col max-w-3xl mx-auto px-4">
       <%!-- Fixed top: header + the prompt --%>
       <div class="shrink-0 pt-4 pb-3 space-y-3 bg-base-100 border-b border-base-200">
+        <Layouts.app_nav active={:chat} />
         <header class="flex items-end justify-between gap-3">
           <div>
             <h1 class="text-xl font-semibold">Tragar · Local AI chat</h1>
