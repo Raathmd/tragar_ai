@@ -82,10 +82,30 @@ default, set `TRAGAR_APP_DIR` in the runner's environment.
 ## Day-to-day flow
 1. Open a PR → **CI** (`ci.yml`) runs `mix test`.
 2. Merge to `main` → **Deploy** (`deploy.yml`): `mix test` on ubuntu, then the
-   Studio runner runs `bin/deploy.sh` (reset to `origin/main` → `mix
-   assets.deploy` + `mix release` → migrate → `launchctl kickstart` → `/health`).
+   Studio runner runs `bin/deploy.sh`.
 3. If `/health` doesn't come up the job goes red; the previous release is still
    on disk for rollback.
+
+### Incremental builds
+`bin/deploy.sh` runs in the **persistent** app dir, so `_build/prod` survives
+between deploys and `mix release` only **recompiles the modules that changed** —
+not the whole project. It also skips the heavy optional steps unless the incoming
+commits touched the files that matter:
+
+| Step | Runs only when |
+|---|---|
+| `mix deps.get --only prod` | `mix.lock` changed |
+| `mix assets.deploy` | `assets/**`, `mix.exs`, or any `*.ex` / `*.heex` changed |
+| `TragarAi.Release.migrate` | a file under `priv/repo/migrations/` changed |
+| `mix release` (incremental compile) | always (only changed modules recompile) |
+
+If `main` has no new commits and a release already exists, it exits early without
+rebuilding or restarting. Force a clean, do-everything run with:
+```bash
+./bin/deploy.sh --full
+```
+(Use `--full` after changing toolchain versions or if `_build` ever gets into a
+bad state.)
 
 ## Operating the service
 ```bash
