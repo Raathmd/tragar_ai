@@ -91,6 +91,27 @@ defmodule TragarAi.CoreAI do
     end
   end
 
+  @doc """
+  Free-form reasoning over a question, *without* a grounded fact lookup — used by
+  the "reason freely" mode when validation or a lookup returns nothing. The answer
+  is explicitly ungrounded (the model is told not to fabricate Tragar specifics).
+  Falls back to the deterministic stub when qwen is down.
+  """
+  @spec reason(String.t(), map()) :: {:ok, String.t()} | {:error, term()}
+  def reason(question, context \\ %{}) when is_binary(question) do
+    case mode() do
+      :ollama ->
+        with_fallback(
+          fn -> ollama_reason(question, context) end,
+          fn -> {:ok, __MODULE__.Stub.reason(question)} end,
+          "reason"
+        )
+
+      _ ->
+        {:ok, __MODULE__.Stub.reason(question)}
+    end
+  end
+
   @doc "Whether the real local model is reachable (always true in stub mode)."
   @spec available?() :: boolean()
   def available? do
@@ -190,6 +211,18 @@ defmodule TragarAi.CoreAI do
     end
   end
 
+  defp ollama_reason(question, context) do
+    messages = [
+      %{role: "system", content: reason_system_prompt()},
+      %{role: "user", content: interpret_user_prompt(question, context)}
+    ]
+
+    case ollama_chat(messages, []) do
+      {:ok, content} -> {:ok, content |> strip_think() |> String.trim()}
+      {:error, _} = err -> err
+    end
+  end
+
   defp ollama_chat(messages, opts) do
     body =
       %{model: ollama_model(), messages: messages, stream: false, options: %{temperature: 0}}
@@ -265,6 +298,20 @@ defmodule TragarAi.CoreAI do
 
   defp phrase_user_prompt(intent, facts, _context),
     do: "Intent: #{intent}\nFacts (JSON):\n#{Jason.encode!(facts)}"
+
+  defp reason_system_prompt do
+    """
+    You are the Tragar support assistant. For THIS question there is no grounded
+    system fact available — either it isn't a Tragar lookup, or the lookup returned
+    nothing. Reason it through and give your most helpful answer anyway.
+
+    Rules:
+    - Do NOT fabricate waybill numbers, dates, statuses, prices, or account data.
+      If a specific record is needed, say it must be confirmed in the system.
+    - It is fine to explain, advise, translate, or reason generally.
+    - Be concise. Reply in the customer's language if it is evident.
+    """
+  end
 
   # ── HTTP (real sidecar) ─────────────────────────────────────────────────────
 

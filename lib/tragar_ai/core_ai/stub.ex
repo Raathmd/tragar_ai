@@ -136,6 +136,15 @@ defmodule TragarAi.CoreAI.Stub do
 
   def clarify(_other), do: capabilities_prompt()
 
+  @doc """
+  Free-form reasoning fallback. The deterministic stub can't actually reason, so
+  it says so plainly — real reasoning happens when qwen (`:ollama`) is running.
+  """
+  def reason(_question) do
+    "Free-reasoning needs the local model (qwen) running, and it isn't available " <>
+      "right now — so I can only answer from Tragar lookups. " <> capabilities_prompt()
+  end
+
   defp capabilities_prompt do
     "I couldn't match that to anything in Tragar. I can surface: a waybill (status, ETA, " <>
       "proof of delivery), a quote, an invoice or account balance, a customer, a vehicle, or our " <>

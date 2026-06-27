@@ -14,12 +14,17 @@ defmodule TragarAiWeb.ChatLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, turns: [], prompt: "", model: CoreAI.info())}
+    {:ok, assign(socket, turns: [], prompt: "", free_reasoning: false, model: CoreAI.info())}
   end
 
   @impl true
   def handle_event("draft", %{"message" => message}, socket) do
     {:noreply, assign(socket, prompt: message)}
+  end
+
+  @impl true
+  def handle_event("toggle_reasoning", _params, socket) do
+    {:noreply, assign(socket, free_reasoning: not socket.assigns.free_reasoning)}
   end
 
   @impl true
@@ -29,7 +34,7 @@ defmodule TragarAiWeb.ChatLive do
         {:noreply, socket}
 
       text ->
-        {:ok, interaction} = Engine.answer(text, %{})
+        {:ok, interaction} = Engine.answer(text, %{free_reasoning: socket.assigns.free_reasoning})
         turn = %{prompt: text, i: interaction}
         {:noreply, assign(socket, turns: socket.assigns.turns ++ [turn], prompt: "")}
     end
@@ -63,6 +68,19 @@ defmodule TragarAiWeb.ChatLive do
           >{@prompt}</textarea>
           <button class="btn btn-primary btn-lg" phx-disable-with="…">Send</button>
         </form>
+
+        <label class="flex items-center gap-2 text-xs cursor-pointer select-none w-fit">
+          <input
+            type="checkbox"
+            class="toggle toggle-sm toggle-primary"
+            phx-click="toggle_reasoning"
+            checked={@free_reasoning}
+          />
+          <span>
+            Reason freely
+            <span class="text-base-content/50">— answer even when no Tragar fact is found (ungrounded)</span>
+          </span>
+        </label>
       </div>
 
       <%!-- Scrollable conversation, newest first --%>
@@ -131,6 +149,7 @@ defmodule TragarAiWeb.ChatLive do
 
   defp status_class(:drafted), do: "badge-success"
   defp status_class(:relayed), do: "badge-success"
+  defp status_class(:reasoned), do: "badge-info"
   defp status_class(_), do: "badge-warning"
 
   defp present?(m) when is_map(m), do: map_size(m) > 0

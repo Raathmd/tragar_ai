@@ -41,18 +41,20 @@ defmodule TragarAi.Assist.Engine do
       {:error, reason} ->
         Logger.warning("[assist] interpret failed: #{inspect(reason)}")
 
-        fail(question, nil, %{}, context,
-          error: "interpret_failed:#{inspect(reason)}",
-          draft: "I couldn't interpret that question automatically — please answer it manually.",
-          tool_log: [
-            ai_entry(
-              "CoreAI.interpret",
-              %{"question" => question},
-              %{"error" => inspect(reason)},
-              false
-            )
-          ]
-        )
+        log = [
+          ai_entry("CoreAI.interpret", %{"question" => question}, %{"error" => inspect(reason)}, false)
+        ]
+
+        if reasoning?(context) do
+          reason_and_create(question, nil, %{}, context, {:interpret_failed, reason}, log)
+        else
+          fail(question, nil, %{}, context,
+            error: "interpret_failed:#{inspect(reason)}",
+            draft:
+              "I couldn't interpret that question automatically — please answer it manually.",
+            tool_log: log
+          )
+        end
     end
   end
 
@@ -154,20 +156,50 @@ defmodule TragarAi.Assist.Engine do
     })
   end
 
-  # The AI asks the user for what it needs (logged as a CoreAI.clarify call).
+  # No grounded fact was produced (unmatched, or the lookup returned nothing).
+  # By default the AI prompts the user back; in "reason freely" mode it instead
+  # reasons over the question directly rather than short-circuiting.
   defp clarify_fail(question, intent, entities, context, reason, log) do
-    {:ok, prompt} = CoreAI.clarify(reason)
-    Logger.info("[assist] clarify #{inspect(reason)} -> #{inspect(prompt)}")
+    if reasoning?(context) do
+      reason_and_create(question, intent, entities, context, reason, log)
+    else
+      {:ok, prompt} = CoreAI.clarify(reason)
+      Logger.info("[assist] clarify #{inspect(reason)} -> #{inspect(prompt)}")
+
+      entry =
+        ai_entry("CoreAI.clarify", %{"reason" => inspect(reason)}, %{"prompt" => prompt}, true)
+
+      fail(question, intent, entities, context,
+        error: error_code(reason),
+        draft: prompt,
+        tool_log: log ++ [entry]
+      )
+    end
+  end
+
+  # Ungrounded answer from the model — clearly marked `:reasoned`, no facts. Never
+  # reached for a scope refusal (that path stays a hard fail), so reasoning can't
+  # leak account-scoped data.
+  defp reason_and_create(question, intent, entities, context, reason, log) do
+    {:ok, answer} = CoreAI.reason(question, context)
+    Logger.info("[assist] reason #{inspect(reason)} -> #{inspect(answer)}")
 
     entry =
-      ai_entry("CoreAI.clarify", %{"reason" => inspect(reason)}, %{"prompt" => prompt}, true)
+      ai_entry("CoreAI.reason", %{"after" => inspect(reason)}, %{"answer" => answer}, true)
 
-    fail(question, intent, entities, context,
-      error: error_code(reason),
-      draft: prompt,
-      tool_log: log ++ [entry]
-    )
+    create(%{
+      question: question,
+      intent: intent && to_string(intent),
+      entities: stringify(entities),
+      source: "reasoning",
+      tool_log: log ++ [entry],
+      draft_answer: answer,
+      status: :reasoned,
+      agent: context[:agent]
+    })
   end
+
+  defp reasoning?(context), do: context[:free_reasoning] == true
 
   defp error_code(:not_understood), do: "not_understood"
   defp error_code(:not_found), do: "not_found"

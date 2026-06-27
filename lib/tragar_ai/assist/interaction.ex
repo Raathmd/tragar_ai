@@ -33,7 +33,7 @@ defmodule TragarAi.Assist.Interaction do
     attribute :final_answer, :string
 
     attribute :status, :atom,
-      constraints: [one_of: [:drafted, :relayed, :discarded, :failed]],
+      constraints: [one_of: [:drafted, :relayed, :discarded, :failed, :reasoned]],
       default: :drafted,
       allow_nil?: false
 
