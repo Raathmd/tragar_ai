@@ -3,6 +3,9 @@ defmodule TragarAiWeb.ChatLive do
   A plain chat with the local AI. Type a prompt; the assist loop runs (Core AI
   interprets → Elixir validates/fetches → Core AI phrases) and the answer plus the
   structured model output (intent, entities, source, trace) is shown below.
+
+  Layout: the prompt is pinned at the top; the conversation scrolls beneath it,
+  newest turn first.
   """
   use TragarAiWeb, :live_view
 
@@ -12,6 +15,11 @@ defmodule TragarAiWeb.ChatLive do
   @impl true
   def mount(_params, _session, socket) do
     {:ok, assign(socket, turns: [], prompt: "", model: CoreAI.info())}
+  end
+
+  @impl true
+  def handle_event("draft", %{"message" => message}, socket) do
+    {:noreply, assign(socket, prompt: message)}
   end
 
   @impl true
@@ -30,24 +38,41 @@ defmodule TragarAiWeb.ChatLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-3xl mx-auto p-4 lg:p-6 space-y-4">
-      <header class="flex items-end justify-between gap-3">
-        <div>
-          <h1 class="text-2xl font-semibold">Tragar · Local AI chat</h1>
-          <p class="text-sm text-base-content/60">
-            The local model interprets and phrases; Elixir validates and fetches the facts.
-          </p>
-        </div>
-        <span class="badge badge-ghost">model: {@model.label}</span>
-      </header>
+    <div class="h-[100dvh] flex flex-col max-w-3xl mx-auto px-4">
+      <%!-- Fixed top: header + the prompt --%>
+      <div class="shrink-0 pt-4 pb-3 space-y-3 bg-base-100 border-b border-base-200">
+        <header class="flex items-end justify-between gap-3">
+          <div>
+            <h1 class="text-xl font-semibold">Tragar · Local AI chat</h1>
+            <p class="text-xs text-base-content/60">
+              The local model interprets and phrases; Elixir validates and fetches the facts.
+            </p>
+          </div>
+          <span class="badge badge-ghost shrink-0">model: {@model.label}</span>
+        </header>
 
-      <div class="space-y-4">
+        <form phx-submit="send" phx-change="draft" class="flex items-end gap-2">
+          <textarea
+            id="chat-input"
+            name="message"
+            rows="3"
+            placeholder="Ask the local AI…   (Enter to send · Shift+Enter for a new line)"
+            class="textarea textarea-bordered flex-1 text-base leading-relaxed resize-none"
+            phx-hook=".SubmitOnEnter"
+            phx-mounted={JS.focus()}
+          >{@prompt}</textarea>
+          <button class="btn btn-primary btn-lg" phx-disable-with="…">Send</button>
+        </form>
+      </div>
+
+      <%!-- Scrollable conversation, newest first --%>
+      <div id="conversation" class="flex-1 overflow-y-auto py-4 space-y-4">
         <p :if={@turns == []} class="text-sm text-base-content/50 py-8 text-center">
           Ask something — e.g. <em>“Where is waybill 0006794936FC?”</em> or
           <em>“What service types do you offer?”</em>
         </p>
 
-        <div :for={turn <- @turns} class="space-y-1">
+        <div :for={turn <- Enum.reverse(@turns)} class="space-y-1">
           <div class="chat chat-end">
             <div class="chat-bubble chat-bubble-primary whitespace-pre-line">{turn.prompt}</div>
           </div>
@@ -87,19 +112,20 @@ defmodule TragarAiWeb.ChatLive do
           </div>
         </div>
       </div>
-
-      <form phx-submit="send" class="flex gap-2 sticky bottom-4 bg-base-100 pt-2">
-        <input
-          name="message"
-          value={@prompt}
-          placeholder="Ask the local AI…"
-          autocomplete="off"
-          class="input input-bordered flex-1"
-          phx-mounted={JS.focus()}
-        />
-        <button class="btn btn-primary" phx-disable-with="Thinking…">Send</button>
-      </form>
     </div>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".SubmitOnEnter">
+      export default {
+        mounted() {
+          this.el.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault()
+              this.el.form.requestSubmit()
+            }
+          })
+        }
+      }
+    </script>
     """
   end
 
