@@ -1,7 +1,7 @@
 defmodule TragarAi.CoreAI do
   @moduledoc """
-  The local model — the "Core AI", reached over local HTTP (the Swift sidecar on
-  the Mac). It has exactly two jobs and is never the authority on a fact:
+  The local model — the "Core AI". It has exactly two jobs and is never the
+  authority on a fact:
 
     * `interpret/2` — turn a free-form question into a **structured request**
       `%{intent: atom, entities: map, raw: question}`.
@@ -11,12 +11,20 @@ defmodule TragarAi.CoreAI do
   The model interprets and phrases; Elixir validates and fetches. The model
   never touches the source systems and never speaks to the customer directly.
 
-  Two modes (config `:mode`):
+  Modes (config `:mode`):
 
+    * `:ollama` — the real deployment. Talks **directly to Ollama** (qwen3:30b)
+      over `{base_url}/api/chat`: a structured-JSON `interpret` constrained to the
+      allowed intent set, and a grounded `phrase`. If Ollama/qwen is not running
+      (or errors), it **falls back to the deterministic stub** so the loop never
+      breaks — qwen is primary, the stub is the safety net.
+    * `:http` — POST to a separate model sidecar `{base_url}/interpret` and
+      `/phrase` (the optional `coreai/` service). Not used for qwen.
     * `:stub` — a deterministic, in-process rule/template interpreter+phraser, so
-      the whole loop runs end-to-end without a model. The contract is identical
-      to the real sidecar, so nothing downstream changes when the model arrives.
-    * `:http` — POST to the local sidecar `{base_url}/interpret` and `/phrase`.
+      the whole loop runs end-to-end without any model.
+
+  The contract is identical regardless of which provider answers, so nothing
+  downstream changes.
   """
 
   require Logger
@@ -27,8 +35,18 @@ defmodule TragarAi.CoreAI do
   @spec interpret(String.t(), map()) :: {:ok, request()} | {:error, term()}
   def interpret(question, context \\ %{}) when is_binary(question) do
     case mode() do
-      :http -> http_interpret(question, context)
-      _ -> {:ok, __MODULE__.Stub.interpret(question, context)}
+      :ollama ->
+        with_fallback(
+          fn -> ollama_interpret(question, context) end,
+          fn -> {:ok, __MODULE__.Stub.interpret(question, context)} end,
+          "interpret"
+        )
+
+      :http ->
+        http_interpret(question, context)
+
+      _ ->
+        {:ok, __MODULE__.Stub.interpret(question, context)}
     end
   end
 
@@ -36,8 +54,18 @@ defmodule TragarAi.CoreAI do
   @spec phrase(atom(), map(), map()) :: {:ok, String.t()} | {:error, term()}
   def phrase(intent, facts, context \\ %{}) do
     case mode() do
-      :http -> http_phrase(intent, facts, context)
-      _ -> {:ok, __MODULE__.Stub.phrase(intent, facts, context)}
+      :ollama ->
+        with_fallback(
+          fn -> ollama_phrase(intent, facts, context) end,
+          fn -> {:ok, __MODULE__.Stub.phrase(intent, facts, context)} end,
+          "phrase"
+        )
+
+      :http ->
+        http_phrase(intent, facts, context)
+
+      _ ->
+        {:ok, __MODULE__.Stub.phrase(intent, facts, context)}
     end
   end
 
@@ -48,8 +76,18 @@ defmodule TragarAi.CoreAI do
   @spec clarify(term()) :: {:ok, String.t()}
   def clarify(reason) do
     case mode() do
-      :http -> http_clarify(reason)
-      _ -> {:ok, __MODULE__.Stub.clarify(reason)}
+      :ollama ->
+        with_fallback(
+          fn -> ollama_phrase(:clarify, clarify_facts(reason), %{}) end,
+          fn -> {:ok, __MODULE__.Stub.clarify(reason)} end,
+          "clarify"
+        )
+
+      :http ->
+        http_clarify(reason)
+
+      _ ->
+        {:ok, __MODULE__.Stub.clarify(reason)}
     end
   end
 
@@ -57,6 +95,9 @@ defmodule TragarAi.CoreAI do
   @spec available?() :: boolean()
   def available? do
     case mode() do
+      :ollama ->
+        match?({:ok, %Req.Response{status: s}} when s in 200..499, Req.get(req(), url: "/api/tags"))
+
       :http ->
         match?({:ok, %Req.Response{status: s}} when s in 200..499, Req.get(req(), url: "/"))
 
@@ -81,6 +122,9 @@ defmodule TragarAi.CoreAI do
 
     {provider, label} =
       case mode do
+        :ollama ->
+          {"Ollama", "#{model || "qwen3:30b"} · Ollama (→ stub fallback)"}
+
         :http ->
           prov = if base && String.contains?(base, "11434"), do: "Ollama", else: "sidecar"
           {prov, "#{model || "local model"} · #{prov}"}
@@ -91,6 +135,136 @@ defmodule TragarAi.CoreAI do
 
     %{mode: mode, label: label, model: model, provider: provider, base_url: base}
   end
+
+  # ── Ollama (qwen3:30b, direct) ──────────────────────────────────────────────
+
+  # Run the primary; on any error/exception, log and use the deterministic
+  # fallback. This is what makes the stub the safety net when qwen is down.
+  defp with_fallback(primary, fallback, what) do
+    case safe(primary) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, reason} ->
+        Logger.warning("CoreAI #{what}: qwen/Ollama unavailable (#{inspect(reason)}); using fallback")
+        fallback.()
+    end
+  end
+
+  defp safe(fun) do
+    fun.()
+  rescue
+    e -> {:error, e}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  defp ollama_interpret(question, context) do
+    messages = [
+      %{role: "system", content: interpret_system_prompt()},
+      %{role: "user", content: interpret_user_prompt(question, context)}
+    ]
+
+    # `format: "json"` constrains the decode grammar — the content is valid JSON,
+    # so there is no thinking-tag preamble to strip.
+    with {:ok, content} <- ollama_chat(messages, format: "json"),
+         {:ok, body} <- Jason.decode(content) do
+      {name, args} = parse_interpret(body)
+
+      {:ok, %{intent: constrain_intent(name), entities: atomize_entities(args), raw: question}}
+    else
+      {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp ollama_phrase(intent, facts, context) do
+    messages = [
+      %{role: "system", content: phrase_system_prompt()},
+      %{role: "user", content: phrase_user_prompt(intent, facts, context)}
+    ]
+
+    case ollama_chat(messages, []) do
+      {:ok, content} -> {:ok, content |> strip_think() |> String.trim()}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp ollama_chat(messages, opts) do
+    body =
+      %{model: ollama_model(), messages: messages, stream: false, options: %{temperature: 0}}
+      |> maybe_put(:format, Keyword.get(opts, :format))
+
+    case Req.post(req(), url: "/api/chat", json: body) do
+      {:ok, %Req.Response{status: 200, body: %{"message" => %{"content" => content}}}}
+      when is_binary(content) ->
+        {:ok, content}
+
+      {:ok, %Req.Response{status: status, body: rbody}} ->
+        {:error, {:http_error, status, rbody}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp ollama_model, do: Keyword.get(config(), :model) || "qwen3:30b"
+
+  defp maybe_put(map, _k, nil), do: map
+  defp maybe_put(map, k, v), do: Map.put(map, k, v)
+
+  # Some thinking models emit a <think>…</think> preamble in free-text replies.
+  defp strip_think(text), do: Regex.replace(~r/<think>.*?<\/think>/s, text, "")
+
+  # The model picks from the validator's allowed intents (the source of truth),
+  # not an open-ended set. We list each intent and the entity it requires.
+  defp interpret_system_prompt do
+    intents =
+      TragarAi.Assist.Validator.required()
+      |> Enum.sort()
+      |> Enum.map_join("\n", fn {intent, req} ->
+        needs = if req == [], do: "", else: " — needs #{Enum.map_join(req, ", ", &to_string/1)}"
+        "  - #{intent}#{needs}"
+      end)
+
+    """
+    You classify a customer's logistics question for Tragar (a South African
+    courier). If the question is not in English, translate it first, then classify.
+
+    Respond with ONLY a JSON object — no prose, no markdown, no code fences:
+    {"intent": "<one intent>", "entities": {"waybill": "...", "account": "...", "quote": "...", "ticket_id": "..."}}
+
+    Include an entity key ONLY if you actually found its value in the question.
+    Valid intents (pick exactly one):
+    #{intents}
+
+    If the question matches no intent, respond {"intent": "unknown", "entities": {}}.
+    """
+  end
+
+  defp interpret_user_prompt(question, context) when context == %{},
+    do: question
+
+  defp interpret_user_prompt(question, context),
+    do: "Context: #{Jason.encode!(context)}\nQuestion: #{question}"
+
+  defp phrase_system_prompt do
+    """
+    You are a support assistant for Tragar, a South African logistics company.
+    Turn the given facts into a clear, concise, friendly answer for the customer.
+
+    Rules:
+    - Use ONLY the facts provided. Never invent waybill numbers, dates, statuses,
+      prices, or any detail that is not in the facts.
+    - Keep it to a few sentences. No markdown headings, no preamble.
+    - If the facts indicate missing information or a not-found result, say so
+      plainly and ask for what you need.
+    - Reply in the customer's language if it is evident from the question.
+    """
+  end
+
+  defp phrase_user_prompt(intent, facts, _context),
+    do: "Intent: #{intent}\nFacts (JSON):\n#{Jason.encode!(facts)}"
 
   # ── HTTP (real sidecar) ─────────────────────────────────────────────────────
 

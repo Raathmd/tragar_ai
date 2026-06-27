@@ -100,12 +100,15 @@ if config_env() != :test do
     email: System.get_env("VANTAGE_EMAIL"),
     password: System.get_env("VANTAGE_PASSWORD")
 
-  # Core AI (the local model sidecar). Default stays :stub; set CORE_AI_MODE=http
-  # and CORE_AI_URL to use a running local model.
+  # Core AI (the local model). On the mini set CORE_AI_MODE=ollama to talk
+  # directly to Ollama/qwen3:30b at CORE_AI_URL; if qwen is down it falls back to
+  # the in-process stub automatically. (:http targets the optional coreai sidecar;
+  # :stub is the deterministic in-process responder — the default.)
   config :tragar_ai, TragarAi.CoreAI,
     mode: String.to_atom(System.get_env("CORE_AI_MODE") || "stub"),
     model: System.get_env("CORE_AI_MODEL"),
-    base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434"
+    base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434",
+    receive_timeout: String.to_integer(System.get_env("CORE_AI_TIMEOUT_MS") || "120000")
 
   # Inbound API auth — the bearer token Freddy (Freshdesk AI Agent) must send to
   # call /api/* . We mint this; the admin stores it in Freshdesk's Action

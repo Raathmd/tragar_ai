@@ -1,5 +1,10 @@
 # Tragar Core AI sidecar
 
+> **Not the qwen path.** On the mini the app talks **directly to Ollama/qwen3:30b**
+> (`CORE_AI_MODE=ollama`), and falls back to the in-process stub if qwen is down.
+> This sidecar is an **optional** alternative provider (`CORE_AI_MODE=http`) — use
+> it only if you want a separate model service in front of the app.
+
 A model service that the Phoenix app calls in `CORE_AI_MODE=http`. Implements the
 contract (see [`../docs/ml-sidecar.md`](../docs/ml-sidecar.md)):
 
