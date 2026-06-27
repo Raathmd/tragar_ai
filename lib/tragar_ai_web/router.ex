@@ -30,6 +30,9 @@ defmodule TragarAiWeb.Router do
 
     # Phase 1 — the support-assist agent console.
     live "/console", ConsoleLive
+
+    # Plain chat with the local AI.
+    live "/chat", ChatLive
   end
 
   # Freshdesk-facing API: guided quote intake from a ticket.
