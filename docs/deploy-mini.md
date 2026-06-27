@@ -11,6 +11,73 @@ push → GitHub Actions: test → build image → push to GHCR
         → docker compose pull → migrate → up -d → /health check
 ```
 
+> **Two runtimes.** The Docker/CI flow below is the containerised option. The
+> **Mac Studio** currently runs the app as a **native Mix release supervised by
+> launchd** — see the next section for how to start/stop/inspect it there.
+
+## Running the native prod release on the Studio (launchd)
+
+The Studio runs the compiled release directly (not Docker), supervised by a
+LaunchAgent so it restarts on crash and at login.
+
+| Thing | Path |
+|---|---|
+| App dir | `/Users/tragarai/apps/tragar_ai` |
+| Release binary | `_build/prod/rel/tragar_ai/bin/tragar_ai` |
+| Env file (secrets) | `/Users/tragarai/apps/tragar_ai/.env.prod` |
+| Start wrapper | `bin/start_prod.sh` (sources `.env.prod`, waits for Postgres, execs the release) |
+| LaunchAgent | `com.tragar.tragar_ai` (`KeepAlive` → auto-restart) |
+
+Run these **on the Studio as the `tragarai` user**. If you're over SSH rather
+than at the desktop, `$(id -u)` must be that user's GUI session UID (usually `501`).
+
+### Start / stop / restart (preferred — keeps launchd supervision)
+```bash
+# start (load) the service
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tragar.tragar_ai.plist
+
+# restart (or start if already loaded)
+launchctl kickstart -k gui/$(id -u)/com.tragar.tragar_ai
+
+# status
+launchctl print gui/$(id -u)/com.tragar.tragar_ai | grep -i state
+
+# stop (unload)
+launchctl bootout gui/$(id -u)/com.tragar.tragar_ai
+```
+
+### Run it by hand (foreground, for debugging — no auto-restart)
+```bash
+# bootout the service first so it doesn't fight for the port
+/Users/tragarai/apps/tragar_ai/bin/start_prod.sh
+```
+
+### Direct release control
+```bash
+cd /Users/tragarai/apps/tragar_ai
+set -a; source .env.prod; set +a        # DATABASE_URL, SECRET_KEY_BASE, PHX_SERVER, PORT…
+
+_build/prod/rel/tragar_ai/bin/tragar_ai daemon   # background
+_build/prod/rel/tragar_ai/bin/tragar_ai remote   # IEx into the running node
+_build/prod/rel/tragar_ai/bin/tragar_ai stop
+```
+
+### Migrate (on each new release, before/at first start)
+```bash
+_build/prod/rel/tragar_ai/bin/tragar_ai eval "TragarAi.Release.migrate"
+```
+
+### Gotchas
+- **`PHX_SERVER=true`** must be in `.env.prod` or the release boots but the web
+  endpoint never listens (`runtime.exs`). It binds `0.0.0.0:$PORT` (default 4000).
+- Office-LAN users reach it over **plain HTTP** by `.local`/private IP;
+  `force_ssl` excludes those hosts (`TragarAiWeb.SSLExclude`) so they aren't
+  301'd to the Tailscale HTTPS host. Tailnet traffic still upgrades to HTTPS.
+- Don't run the launchd service **and** a manual `start`/`daemon` at once — they'd
+  both bind the port. `launchctl bootout` first.
+- Logs go where the plist's `StandardOutPath`/`StandardErrorPath` point; `remote`
+  gives a live console into the node.
+
 ## One-time setup on the mini
 
 ### 1. Install Docker
