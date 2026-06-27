@@ -41,6 +41,8 @@ npm-debug.log
 
 # Local secrets (loaded by config/runtime.exs in dev)
 .env
+# Prod/other env files hold live secrets — never commit them.
+.env.*
 
 # Zig build artifacts (zig/ Pastel ingestion programs)
 /zig/**/.zig-cache/
