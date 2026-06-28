@@ -50,16 +50,17 @@ defmodule TragarAiWeb.ChatLive do
       text ->
         id = socket.assigns.next_id
         free = socket.assigns.free_reasoning
-        turn = %{id: id, prompt: text, i: nil, error: false}
+        lv = self()
+        turn = %{id: id, prompt: text, i: nil, error: false, stream: ""}
+        context = %{free_reasoning: free, on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end}
 
         socket =
           socket
           |> update(:turns, &(&1 ++ [turn]))
           |> assign(prompt: "", next_id: id + 1)
-          # Run the (slow) loop off the LiveView process; result arrives in handle_async.
-          |> start_async({:answer, id}, fn ->
-            Engine.answer(text, %{free_reasoning: free})
-          end)
+          # Off the LiveView process: tokens stream in via {:chunk,...}; the final
+          # interaction (status/source/trace) arrives in handle_async.
+          |> start_async({:answer, id}, fn -> Engine.answer(text, context) end)
 
         {:noreply, socket}
     end
@@ -73,6 +74,12 @@ defmodule TragarAiWeb.ChatLive do
   def handle_async({:answer, id}, {:exit, reason}, socket) do
     Logger.error("[chat] answer crashed: #{inspect(reason)}")
     {:noreply, update(socket, :turns, &put_turn(&1, id, fn t -> %{t | error: true} end))}
+  end
+
+  @impl true
+  def handle_info({:chunk, id, chunk}, socket) do
+    {:noreply,
+     update(socket, :turns, &put_turn(&1, id, fn t -> %{t | stream: t.stream <> chunk} end))}
   end
 
   defp put_turn(turns, id, fun),
@@ -177,6 +184,10 @@ defmodule TragarAiWeb.ChatLive do
               <% turn.error -> %>
                 <div class="chat-bubble chat-bubble-error">
                   Something went wrong answering that — please try again.
+                </div>
+              <% turn.stream != "" -> %>
+                <div class="chat-bubble whitespace-pre-line">
+                  {turn.stream}<span class="loading loading-dots loading-xs align-middle ml-1"></span>
                 </div>
               <% true -> %>
                 <div class="chat-bubble">

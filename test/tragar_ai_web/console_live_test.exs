@@ -51,8 +51,8 @@ defmodule TragarAiWeb.ConsoleLiveTest do
   test "asking drafts an answer the agent can relay", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
-    html =
-      view |> form("form[phx-submit=ask]", %{question: "Where is load 4821?"}) |> render_submit()
+    view |> form("form[phx-submit=ask]", %{question: "Where is load 4821?"}) |> render_submit()
+    html = render_async(view, 5000)
 
     assert html =~ "In transit"
     assert html =~ "FreightWare"
@@ -71,11 +71,11 @@ defmodule TragarAiWeb.ConsoleLiveTest do
   test "a general query resolves the customer name to an account (demo)", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
-    html =
-      view
-      |> form("form[phx-submit=ask]", %{question: "Does Acme have an open invoice?", demo: "true"})
-      |> render_submit()
+    view
+    |> form("form[phx-submit=ask]", %{question: "Does Acme have an open invoice?", demo: "true"})
+    |> render_submit()
 
+    html = render_async(view, 5000)
     assert html =~ "INV-55012"
     assert html =~ "Outstanding"
   end
@@ -91,43 +91,41 @@ defmodule TragarAiWeb.ConsoleLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "Acme Distributors"
+    assert render_async(view, 5000) =~ "Acme Distributors"
   end
 
   test "an unrecognized query offers grounded, clickable suggestions", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
-    html =
-      view
-      |> form("form[phx-submit=ask]", %{question: "What's the weather like?", demo: "true"})
-      |> render_submit()
+    view
+    |> form("form[phx-submit=ask]", %{question: "What's the weather like?", demo: "true"})
+    |> render_submit()
 
+    html = render_async(view, 5000)
     assert html =~ "match that to anything in Tragar"
     assert html =~ "Track a waybill"
 
     # Clicking a suggestion runs that query and resolves it.
-    html = view |> element("button", "Track a waybill") |> render_click()
-    assert html =~ "In transit"
+    view |> element("button", "Track a waybill") |> render_click()
+    assert render_async(view, 5000) =~ "In transit"
   end
 
   test "a clarifying chat resolves the intent across turns", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
     # Turn 1: invoice intent but no account → the AI asks back.
-    html =
-      view
-      |> form("form[phx-submit=ask]", %{question: "Is there an invoice?", demo: "true"})
-      |> render_submit()
+    view
+    |> form("form[phx-submit=ask]", %{question: "Is there an invoice?", demo: "true"})
+    |> render_submit()
 
-    assert html =~ "account number"
+    assert render_async(view, 5000) =~ "account number"
 
     # Turn 2: supply the account → the carried intent now resolves.
-    html =
-      view
-      |> form("form[phx-submit=ask]", %{question: "ACC1001", demo: "true"})
-      |> render_submit()
+    view
+    |> form("form[phx-submit=ask]", %{question: "ACC1001", demo: "true"})
+    |> render_submit()
 
-    assert html =~ "INV-55012"
+    assert render_async(view, 5000) =~ "INV-55012"
   end
 
   test "a waybill-search query lists account-scoped waybills in the Search tab", %{conn: conn} do
@@ -163,9 +161,9 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     {:ok, view, _html} = live(conn, ~p"/console")
 
     view |> element(~s|button[phx-value-id="55"]|) |> render_click()
-    html = view |> element("button", "Draft reply") |> render_click()
+    view |> element("button", "Draft reply") |> render_click()
 
-    # Reply mode shows the relay form for the customer email.
-    assert html =~ "Relay to customer"
+    # Reply mode shows the relay form for the customer email (after the async loop).
+    assert render_async(view, 5000) =~ "Relay to customer"
   end
 end

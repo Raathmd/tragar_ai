@@ -50,22 +50,30 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  @doc "Phrase fetched facts into a clear draft answer."
-  @spec phrase(atom(), map(), map()) :: {:ok, String.t()} | {:error, term()}
-  def phrase(intent, facts, context \\ %{}) do
+  @doc """
+  Phrase fetched facts into a clear draft answer. Pass `on_chunk` (a 1-arity fun)
+  to stream the answer token-by-token (Ollama only); without it, returns the full
+  answer. Non-Ollama providers emit the whole text as a single chunk.
+  """
+  @spec phrase(atom(), map(), map(), (String.t() -> any) | nil) ::
+          {:ok, String.t()} | {:error, term()}
+  def phrase(intent, facts, context \\ %{}, on_chunk \\ nil) do
     case mode() do
       :ollama ->
         with_fallback(
-          fn -> ollama_phrase(intent, facts, context) end,
-          fn -> {:ok, __MODULE__.Stub.phrase(intent, facts, context)} end,
+          fn -> ollama_phrase(intent, facts, context, on_chunk) end,
+          fn -> single_chunk(__MODULE__.Stub.phrase(intent, facts, context), on_chunk) end,
           "phrase"
         )
 
       :http ->
-        http_phrase(intent, facts, context)
+        case http_phrase(intent, facts, context) do
+          {:ok, text} -> single_chunk(text, on_chunk)
+          err -> err
+        end
 
       _ ->
-        {:ok, __MODULE__.Stub.phrase(intent, facts, context)}
+        single_chunk(__MODULE__.Stub.phrase(intent, facts, context), on_chunk)
     end
   end
 
@@ -78,7 +86,7 @@ defmodule TragarAi.CoreAI do
     case mode() do
       :ollama ->
         with_fallback(
-          fn -> ollama_phrase(:clarify, clarify_facts(reason), %{}) end,
+          fn -> ollama_phrase(:clarify, clarify_facts(reason), %{}, nil) end,
           fn -> {:ok, __MODULE__.Stub.clarify(reason)} end,
           "clarify"
         )
@@ -97,18 +105,19 @@ defmodule TragarAi.CoreAI do
   is explicitly ungrounded (the model is told not to fabricate Tragar specifics).
   Falls back to the deterministic stub when qwen is down.
   """
-  @spec reason(String.t(), map()) :: {:ok, String.t()} | {:error, term()}
-  def reason(question, context \\ %{}) when is_binary(question) do
+  @spec reason(String.t(), map(), (String.t() -> any) | nil) ::
+          {:ok, String.t()} | {:error, term()}
+  def reason(question, context \\ %{}, on_chunk \\ nil) when is_binary(question) do
     case mode() do
       :ollama ->
         with_fallback(
-          fn -> ollama_reason(question, context) end,
-          fn -> {:ok, __MODULE__.Stub.reason(question)} end,
+          fn -> ollama_reason(question, context, on_chunk) end,
+          fn -> single_chunk(__MODULE__.Stub.reason(question), on_chunk) end,
           "reason"
         )
 
       _ ->
-        {:ok, __MODULE__.Stub.reason(question)}
+        single_chunk(__MODULE__.Stub.reason(question), on_chunk)
     end
   end
 
@@ -205,28 +214,47 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  defp ollama_phrase(intent, facts, context) do
-    messages = [
+  defp ollama_phrase(intent, facts, context, on_chunk) do
+    [
       %{role: "system", content: phrase_system_prompt()},
       %{role: "user", content: phrase_user_prompt(intent, facts, context)}
     ]
+    |> ollama_generate(on_chunk)
+  end
 
-    case ollama_chat(messages, []) do
+  defp ollama_reason(question, context, on_chunk) do
+    [
+      %{role: "system", content: reason_system_prompt()},
+      %{role: "user", content: interpret_user_prompt(question, context)}
+    ]
+    |> ollama_generate(on_chunk)
+  end
+
+  # Stream when an on_chunk sink is given; otherwise one-shot. If streaming
+  # errors mid-flight, fall back to a normal (non-stream) call so the caller
+  # still gets a real qwen answer rather than the stub.
+  defp ollama_generate(messages, on_chunk) do
+    result =
+      if is_function(on_chunk, 1) do
+        case ollama_chat_stream(messages, on_chunk) do
+          {:ok, _} = ok -> ok
+          {:error, _} -> ollama_chat(messages, [])
+        end
+      else
+        ollama_chat(messages, [])
+      end
+
+    case result do
       {:ok, content} -> {:ok, content |> strip_think() |> String.trim()}
       {:error, _} = err -> err
     end
   end
 
-  defp ollama_reason(question, context) do
-    messages = [
-      %{role: "system", content: reason_system_prompt()},
-      %{role: "user", content: interpret_user_prompt(question, context)}
-    ]
-
-    case ollama_chat(messages, []) do
-      {:ok, content} -> {:ok, content |> strip_think() |> String.trim()}
-      {:error, _} = err -> err
-    end
+  # Emit a one-shot value as a single chunk (non-Ollama providers / fallbacks),
+  # so the UI still renders it even though it isn't token-streamed.
+  defp single_chunk(text, on_chunk) when is_binary(text) do
+    if is_function(on_chunk, 1), do: on_chunk.(text)
+    {:ok, text}
   end
 
   defp ollama_chat(messages, opts) do
@@ -244,6 +272,65 @@ defmodule TragarAi.CoreAI do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # Streaming chat: Ollama returns NDJSON (one JSON object per line, each with a
+  # `message.content` token). We buffer across HTTP chunks, emit each token via
+  # on_chunk, and return the full accumulated text. `think: false` asks qwen3 not
+  # to emit a reasoning preamble. The `into` fun runs in THIS process, so the
+  # cross-chunk line buffer + accumulator live in the process dictionary.
+  defp ollama_chat_stream(messages, on_chunk) do
+    body = %{
+      model: ollama_model(),
+      messages: messages,
+      stream: true,
+      think: false,
+      options: %{temperature: 0}
+    }
+
+    Process.put({__MODULE__, :buf}, "")
+    Process.put({__MODULE__, :acc}, "")
+
+    result =
+      Req.post(req(),
+        url: "/api/chat",
+        json: body,
+        into: fn {:data, data}, {req, resp} ->
+          consume_stream(data, on_chunk)
+          {:cont, {req, resp}}
+        end
+      )
+
+    acc = Process.get({__MODULE__, :acc}, "")
+    Process.delete({__MODULE__, :buf})
+    Process.delete({__MODULE__, :acc})
+
+    case result do
+      {:ok, %Req.Response{status: 200}} -> {:ok, acc}
+      {:ok, %Req.Response{status: status, body: body}} -> {:error, {:http_error, status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp consume_stream(data, on_chunk) do
+    buf = Process.get({__MODULE__, :buf}, "") <> data
+    parts = String.split(buf, "\n")
+    {complete, [rest]} = Enum.split(parts, length(parts) - 1)
+    Process.put({__MODULE__, :buf}, rest)
+    Enum.each(complete, &handle_stream_line(&1, on_chunk))
+  end
+
+  defp handle_stream_line("", _on_chunk), do: :ok
+
+  defp handle_stream_line(line, on_chunk) do
+    case Jason.decode(line) do
+      {:ok, %{"message" => %{"content" => chunk}}} when is_binary(chunk) and chunk != "" ->
+        Process.put({__MODULE__, :acc}, Process.get({__MODULE__, :acc}, "") <> chunk)
+        on_chunk.(chunk)
+
+      _ ->
+        :ok
     end
   end
 

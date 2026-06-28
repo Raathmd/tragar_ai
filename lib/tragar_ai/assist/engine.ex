@@ -145,7 +145,9 @@ defmodule TragarAi.Assist.Engine do
   # from the facts (e.g. amendability from a status), so the model interprets the
   # facts, not just restates them.
   defp phrase_and_create(question, intent, entities, facts, source, context, log) do
-    {:ok, draft} = CoreAI.phrase(intent, facts, %{question: question})
+    # `on_chunk` (set only by the live UIs) streams the answer; ticket/quote
+    # callers don't pass it, so they get the full answer in one shot.
+    {:ok, draft} = CoreAI.phrase(intent, facts, %{question: question}, context[:on_chunk])
     Logger.info("[assist] phrase #{intent} -> #{inspect(draft)}")
 
     phrase_entry =
@@ -192,7 +194,7 @@ defmodule TragarAi.Assist.Engine do
   # reached for a scope refusal (that path stays a hard fail), so reasoning can't
   # leak account-scoped data.
   defp reason_and_create(question, intent, entities, context, reason, log) do
-    {:ok, answer} = CoreAI.reason(question, context)
+    {:ok, answer} = CoreAI.reason(question, context, context[:on_chunk])
     Logger.info("[assist] reason #{inspect(reason)} -> #{inspect(answer)}")
 
     entry =
