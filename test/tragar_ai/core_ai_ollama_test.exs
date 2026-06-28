@@ -6,7 +6,12 @@ defmodule TragarAi.CoreAIOllamaTest do
 
   setup do
     original = Application.get_env(:tragar_ai, CoreAI)
-    on_exit(fn -> Application.put_env(:tragar_ai, CoreAI, original) end)
+
+    on_exit(fn ->
+      Application.put_env(:tragar_ai, CoreAI, original)
+      :persistent_term.erase({CoreAI, :active_reason_model})
+    end)
+
     :ok
   end
 
@@ -93,6 +98,71 @@ defmodule TragarAi.CoreAIOllamaTest do
     assert full == "Out for delivery."
     assert_received {:tok, "Out for "}
     assert_received {:tok, "delivery."}
+  end
+
+  test "reasoning model is runtime-switchable; switching to fast unloads the deep model" do
+    parent = self()
+
+    Application.put_env(:tragar_ai, CoreAI,
+      mode: :ollama,
+      model: "fast-model",
+      reason_model: "deep-model",
+      base_url: "http://ollama.test",
+      req_options: [
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          d = Jason.decode!(body)
+          send(parent, {:req, d["model"], d["keep_alive"]})
+          Req.Test.json(conn, %{"message" => %{"content" => "ok"}})
+        end
+      ]
+    )
+
+    # Default: reason uses the fast (main) model; phrase always does.
+    CoreAI.reason("q")
+    assert_received {:req, "fast-model", _}
+    CoreAI.phrase(:load_status, %{"status" => "OND"})
+    assert_received {:req, "fast-model", _}
+
+    # Switch to deep → reason now uses the deep model.
+    assert :ok = CoreAI.set_reasoning("deep-model")
+    CoreAI.reason("q")
+    assert_received {:req, "deep-model", _}
+
+    # Switch back to fast → fires an immediate unload (keep_alive: 0) of the deep model.
+    assert :ok = CoreAI.set_reasoning("fast-model")
+    assert_received {:req, "deep-model", 0}
+    CoreAI.reason("q")
+    assert_received {:req, "fast-model", _}
+
+    # An unknown model is rejected.
+    assert {:error, :unknown_model} = CoreAI.set_reasoning("bogus")
+  end
+
+  test "fast prompts send /no_think; reason lets the model think" do
+    parent = self()
+
+    Application.put_env(:tragar_ai, CoreAI,
+      mode: :ollama,
+      model: "qwen3:14b",
+      base_url: "http://ollama.test",
+      req_options: [
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          system = Jason.decode!(body)["messages"] |> List.first() |> Map.get("content")
+          send(parent, {:system, system})
+          Req.Test.json(conn, %{"message" => %{"content" => "ok"}})
+        end
+      ]
+    )
+
+    CoreAI.phrase(:load_status, %{"status" => "OND"})
+    assert_received {:system, phrase_sys}
+    assert phrase_sys =~ "/no_think"
+
+    CoreAI.reason("why is the sky blue?")
+    assert_received {:system, reason_sys}
+    refute reason_sys =~ "/no_think"
   end
 
   test "info/0 reports the Ollama provider and the fallback" do

@@ -106,9 +106,13 @@ if config_env() != :test do
   # :stub is the deterministic in-process responder — the default.)
   config :tragar_ai, TragarAi.CoreAI,
     mode: String.to_atom(System.get_env("CORE_AI_MODE") || "stub"),
+    # Fast model for interpret + grounded phrasing (e.g. qwen2.5:14b-instruct).
     model: System.get_env("CORE_AI_MODEL"),
+    # Optional deeper/slower model used only when "reason freely" is toggled on
+    # (e.g. qwen3:30b-a3b). Falls back to CORE_AI_MODEL when unset.
+    reason_model: System.get_env("CORE_AI_REASON_MODEL"),
     base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434",
-    receive_timeout: String.to_integer(System.get_env("CORE_AI_TIMEOUT_MS") || "120000")
+    receive_timeout: String.to_integer(System.get_env("CORE_AI_TIMEOUT_MS") || "180000")
 
   # Inbound API auth — the bearer token the Freshdesk automation must send to
   # call /api/* . We mint this; the admin stores it on the automation's webhook.

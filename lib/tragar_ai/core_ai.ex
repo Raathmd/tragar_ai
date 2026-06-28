@@ -156,7 +156,7 @@ defmodule TragarAi.CoreAI do
     {provider, label} =
       case mode do
         :ollama ->
-          {"Ollama", "#{model || "qwen3:30b"} · Ollama (→ stub fallback)"}
+          {"Ollama", "#{model || "qwen3:14b"} · Ollama (→ stub fallback)"}
 
         :http ->
           prov = if base && String.contains?(base, "11434"), do: "Ollama", else: "sidecar"
@@ -219,29 +219,31 @@ defmodule TragarAi.CoreAI do
       %{role: "system", content: phrase_system_prompt()},
       %{role: "user", content: phrase_user_prompt(intent, facts, context)}
     ]
-    |> ollama_generate(on_chunk)
+    |> ollama_generate(on_chunk, ollama_model())
   end
 
+  # "Reason freely" uses the active reasoning model (dashboard-switchable) — slower
+  # and deeper, only invoked when the agent toggled it on.
   defp ollama_reason(question, context, on_chunk) do
     [
       %{role: "system", content: reason_system_prompt()},
       %{role: "user", content: interpret_user_prompt(question, context)}
     ]
-    |> ollama_generate(on_chunk)
+    |> ollama_generate(on_chunk, active_reason_model())
   end
 
   # Stream when an on_chunk sink is given; otherwise one-shot. If streaming
   # errors mid-flight, fall back to a normal (non-stream) call so the caller
-  # still gets a real qwen answer rather than the stub.
-  defp ollama_generate(messages, on_chunk) do
+  # still gets a real model answer rather than the stub.
+  defp ollama_generate(messages, on_chunk, model) do
     result =
       if is_function(on_chunk, 1) do
-        case ollama_chat_stream(messages, on_chunk) do
+        case ollama_chat_stream(messages, on_chunk, model) do
           {:ok, _} = ok -> ok
-          {:error, _} -> ollama_chat(messages, [])
+          {:error, _} -> ollama_chat(messages, model: model)
         end
       else
-        ollama_chat(messages, [])
+        ollama_chat(messages, model: model)
       end
 
     case result do
@@ -259,7 +261,12 @@ defmodule TragarAi.CoreAI do
 
   defp ollama_chat(messages, opts) do
     body =
-      %{model: ollama_model(), messages: messages, stream: false, options: %{temperature: 0}}
+      %{
+        model: Keyword.get(opts, :model) || ollama_model(),
+        messages: messages,
+        stream: false,
+        options: %{temperature: 0}
+      }
       |> maybe_put(:format, Keyword.get(opts, :format))
 
     case Req.post(req(), url: "/api/chat", json: body) do
@@ -277,15 +284,15 @@ defmodule TragarAi.CoreAI do
 
   # Streaming chat: Ollama returns NDJSON (one JSON object per line, each with a
   # `message.content` token). We buffer across HTTP chunks, emit each token via
-  # on_chunk, and return the full accumulated text. `think: false` asks qwen3 not
-  # to emit a reasoning preamble. The `into` fun runs in THIS process, so the
+  # on_chunk, and return the full accumulated text. A thinking model streams its
+  # reasoning in a separate `message.thinking` field (which we ignore) and keeps
+  # `message.content` clean. The `into` fun runs in THIS process, so the
   # cross-chunk line buffer + accumulator live in the process dictionary.
-  defp ollama_chat_stream(messages, on_chunk) do
+  defp ollama_chat_stream(messages, on_chunk, model) do
     body = %{
-      model: ollama_model(),
+      model: model,
       messages: messages,
       stream: true,
-      think: false,
       options: %{temperature: 0}
     }
 
@@ -334,7 +341,62 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  defp ollama_model, do: Keyword.get(config(), :model) || "qwen3:30b"
+  defp ollama_model, do: Keyword.get(config(), :model) || "qwen3:14b"
+
+  @reason_key {__MODULE__, :active_reason_model}
+
+  @doc """
+  Reasoning-model control state for the dashboard:
+
+    * `:active` — the model "reason freely" currently uses,
+    * `:fast`   — the main model (default),
+    * `:deep`   — the optional deeper model (`CORE_AI_REASON_MODEL`), or nil.
+  """
+  def reasoning do
+    %{
+      active: active_reason_model(),
+      fast: ollama_model(),
+      deep: Keyword.get(config(), :reason_model)
+    }
+  end
+
+  @doc """
+  Switch the active reasoning model at runtime (dashboard control). Must be one of
+  the offered models (fast or deep). Node-global; resets to fast on restart.
+  """
+  @spec set_reasoning(String.t()) :: :ok | {:error, :unknown_model}
+  def set_reasoning(model) when is_binary(model) and model != "" do
+    %{fast: fast, deep: deep} = reasoning()
+
+    if model in Enum.reject([fast, deep], &is_nil/1) do
+      :persistent_term.put(@reason_key, model)
+      # Free the deep model from memory immediately when it's no longer in use.
+      if deep && deep != model && deep != fast, do: unload(deep)
+      :ok
+    else
+      {:error, :unknown_model}
+    end
+  end
+
+  @doc "Ask Ollama to unload a model from memory now (keep_alive: 0). Best-effort."
+  @spec unload(String.t()) :: :ok
+  def unload(model) when is_binary(model) do
+    if mode() == :ollama do
+      Req.post(req(),
+        url: "/api/chat",
+        json: %{model: model, messages: [], keep_alive: 0},
+        receive_timeout: 10_000
+      )
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  # The active "reason freely" model — runtime-switchable from the dashboard;
+  # defaults to the fast main model.
+  defp active_reason_model, do: :persistent_term.get(@reason_key, nil) || ollama_model()
 
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
@@ -365,6 +427,8 @@ defmodule TragarAi.CoreAI do
     #{intents}
 
     If the question matches no intent, respond {"intent": "unknown", "entities": {}}.
+
+    /no_think
     """
   end
 
@@ -386,6 +450,8 @@ defmodule TragarAi.CoreAI do
     - If the facts indicate missing information or a not-found result, say so
       plainly and ask for what you need.
     - Reply in the customer's language if it is evident from the question.
+
+    /no_think
     """
   end
 
@@ -403,6 +469,8 @@ defmodule TragarAi.CoreAI do
       If a specific record is needed, say it must be confirmed in the system.
     - It is fine to explain, advise, translate, or reason generally.
     - Be concise. Reply in the customer's language if it is evident.
+
+    /think
     """
   end
 
