@@ -4,17 +4,31 @@ defmodule TragarAiWeb.ChatLive do
   interprets → Elixir validates/fetches → Core AI phrases) and the answer plus the
   structured model output (intent, entities, source, trace) is shown below.
 
+  The model call runs **asynchronously** (`start_async`) so a slow qwen response
+  never blocks the LiveView process — the UI stays responsive (heartbeats keep
+  flowing, so the socket doesn't drop and re-mount), shows a "thinking" state, and
+  the chat history survives.
+
   Layout: the prompt is pinned at the top; the conversation scrolls beneath it,
   newest turn first.
   """
   use TragarAiWeb, :live_view
+
+  require Logger
 
   alias TragarAi.Assist.Engine
   alias TragarAi.CoreAI
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, turns: [], prompt: "", free_reasoning: false, model: CoreAI.info())}
+    {:ok,
+     assign(socket,
+       turns: [],
+       prompt: "",
+       free_reasoning: false,
+       next_id: 0,
+       model: CoreAI.info()
+     )}
   end
 
   @impl true
@@ -34,11 +48,35 @@ defmodule TragarAiWeb.ChatLive do
         {:noreply, socket}
 
       text ->
-        {:ok, interaction} = Engine.answer(text, %{free_reasoning: socket.assigns.free_reasoning})
-        turn = %{prompt: text, i: interaction}
-        {:noreply, assign(socket, turns: socket.assigns.turns ++ [turn], prompt: "")}
+        id = socket.assigns.next_id
+        free = socket.assigns.free_reasoning
+        turn = %{id: id, prompt: text, i: nil, error: false}
+
+        socket =
+          socket
+          |> update(:turns, &(&1 ++ [turn]))
+          |> assign(prompt: "", next_id: id + 1)
+          # Run the (slow) loop off the LiveView process; result arrives in handle_async.
+          |> start_async({:answer, id}, fn ->
+            Engine.answer(text, %{free_reasoning: free})
+          end)
+
+        {:noreply, socket}
     end
   end
+
+  @impl true
+  def handle_async({:answer, id}, {:ok, {:ok, interaction}}, socket) do
+    {:noreply, update(socket, :turns, &put_turn(&1, id, fn t -> %{t | i: interaction} end))}
+  end
+
+  def handle_async({:answer, id}, {:exit, reason}, socket) do
+    Logger.error("[chat] answer crashed: #{inspect(reason)}")
+    {:noreply, update(socket, :turns, &put_turn(&1, id, fn t -> %{t | error: true} end))}
+  end
+
+  defp put_turn(turns, id, fun),
+    do: Enum.map(turns, fn t -> if(t.id == id, do: fun.(t), else: t) end)
 
   @impl true
   def render(assigns) do
@@ -67,7 +105,7 @@ defmodule TragarAiWeb.ChatLive do
             phx-hook=".SubmitOnEnter"
             phx-mounted={JS.focus()}
           >{@prompt}</textarea>
-          <button class="btn btn-primary btn-lg" phx-disable-with="…">Send</button>
+          <button class="btn btn-primary btn-lg">Send</button>
         </form>
 
         <label class="flex items-center gap-2 text-xs cursor-pointer select-none w-fit">
@@ -99,37 +137,53 @@ defmodule TragarAiWeb.ChatLive do
           </div>
 
           <div class="chat chat-start">
-            <div class="chat-bubble whitespace-pre-line">{turn.i.draft_answer}</div>
-            <div class="chat-footer mt-1 flex flex-wrap items-center gap-1 text-[11px] opacity-70">
-              <span :if={turn.i.intent} class="badge badge-xs badge-outline">{turn.i.intent}</span>
-              <span :if={turn.i.source} class="badge badge-xs badge-ghost">{turn.i.source}</span>
-              <span class={"badge badge-xs " <> status_class(turn.i.status)}>{turn.i.status}</span>
-            </div>
+            <%= cond do %>
+              <% turn.i -> %>
+                <div class="chat-bubble whitespace-pre-line">{turn.i.draft_answer}</div>
+                <div class="chat-footer mt-1 flex flex-wrap items-center gap-1 text-[11px] opacity-70">
+                  <span :if={turn.i.intent} class="badge badge-xs badge-outline">
+                    {turn.i.intent}
+                  </span>
+                  <span :if={turn.i.source} class="badge badge-xs badge-ghost">{turn.i.source}</span>
+                  <span class={"badge badge-xs " <> status_class(turn.i.status)}>
+                    {turn.i.status}
+                  </span>
+                </div>
 
-            <details class="chat-footer mt-1 text-[11px] opacity-70">
-              <summary class="cursor-pointer">Model output &amp; trace</summary>
-              <div class="mt-1 space-y-2">
-                <div :if={present?(turn.i.entities)}>
-                  <div class="font-medium">entities</div>
-                  <pre class="bg-base-200 rounded p-2 overflow-x-auto">{pretty(turn.i.entities)}</pre>
+                <details class="chat-footer mt-1 text-[11px] opacity-70">
+                  <summary class="cursor-pointer">Model output &amp; trace</summary>
+                  <div class="mt-1 space-y-2">
+                    <div :if={present?(turn.i.entities)}>
+                      <div class="font-medium">entities</div>
+                      <pre class="bg-base-200 rounded p-2 overflow-x-auto">{pretty(turn.i.entities)}</pre>
+                    </div>
+                    <div :if={present?(turn.i.facts)}>
+                      <div class="font-medium">facts ({turn.i.source})</div>
+                      <pre class="bg-base-200 rounded p-2 overflow-x-auto">{pretty(turn.i.facts)}</pre>
+                    </div>
+                    <div :if={turn.i.tool_log not in [nil, []]}>
+                      <div class="font-medium">trace</div>
+                      <ol class="space-y-0.5">
+                        <li :for={e <- turn.i.tool_log} class="flex items-center gap-1">
+                          <span class={"badge badge-xs " <> if(e["ok"], do: "badge-success", else: "badge-error")}>
+                            {if e["ok"], do: "ok", else: "fail"}
+                          </span>
+                          <span>{e["tool"]}</span>
+                        </li>
+                      </ol>
+                    </div>
+                  </div>
+                </details>
+              <% turn.error -> %>
+                <div class="chat-bubble chat-bubble-error">
+                  Something went wrong answering that — please try again.
                 </div>
-                <div :if={present?(turn.i.facts)}>
-                  <div class="font-medium">facts ({turn.i.source})</div>
-                  <pre class="bg-base-200 rounded p-2 overflow-x-auto">{pretty(turn.i.facts)}</pre>
+              <% true -> %>
+                <div class="chat-bubble">
+                  <span class="loading loading-dots loading-sm align-middle"></span>
+                  <span class="opacity-60">thinking…</span>
                 </div>
-                <div :if={turn.i.tool_log not in [nil, []]}>
-                  <div class="font-medium">trace</div>
-                  <ol class="space-y-0.5">
-                    <li :for={e <- turn.i.tool_log} class="flex items-center gap-1">
-                      <span class={"badge badge-xs " <> if(e["ok"], do: "badge-success", else: "badge-error")}>
-                        {if e["ok"], do: "ok", else: "fail"}
-                      </span>
-                      <span>{e["tool"]}</span>
-                    </li>
-                  </ol>
-                </div>
-              </div>
-            </details>
+            <% end %>
           </div>
         </div>
       </div>
