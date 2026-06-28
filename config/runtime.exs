@@ -190,6 +190,11 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
       port: String.to_integer(System.get_env("PORT") || "4000")
     ],
+    # The app is reached on several hosts (PHX_HOST over HTTPS, plus the LAN
+    # `.local`/private IP and Tailscale `100.x`/`*.ts.net` over HTTP). Allow the
+    # LiveView socket origin for all of them, or the `/live` WebSocket is rejected
+    # for everything but PHX_HOST and pages never finish loading.
+    check_origin: {TragarAiWeb.SSLExclude, :allowed_origin?, []},
     secret_key_base: secret_key_base
 
   # ## SSL Support

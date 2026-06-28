@@ -26,4 +26,23 @@ defmodule TragarAiWeb.SSLExcludeTest do
   test "a non-Plug.Conn arg is never excluded" do
     refute SSLExclude.lan?(%{not: :a_conn})
   end
+
+  describe "allowed_origin?/1 (LiveView socket check_origin)" do
+    test "allows LAN and tailnet origins" do
+      for host <- ~w(localhost studio.local 192.168.1.10 100.64.0.1 studio.acme.ts.net) do
+        assert SSLExclude.allowed_origin?(%URI{host: host}), "#{host} origin should be allowed"
+      end
+    end
+
+    test "allows the configured PHX_HOST" do
+      host = Application.get_env(:tragar_ai, TragarAiWeb.Endpoint, [])[:url][:host]
+      # In test the endpoint host is set (e.g. "localhost"); a matching origin passes.
+      assert SSLExclude.allowed_origin?(%URI{host: host})
+    end
+
+    test "rejects an unrelated public origin" do
+      refute SSLExclude.allowed_origin?(%URI{host: "evil.example.com"})
+      refute SSLExclude.allowed_origin?(%URI{host: nil})
+    end
+  end
 end

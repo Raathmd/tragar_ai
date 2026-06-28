@@ -16,13 +16,22 @@ defmodule TragarAiWeb.SSLExclude do
 
   Wired in via `force_ssl: [exclude: [conn: {__MODULE__, :lan?, []}]]`; Plug.SSL
   prepends the `Plug.Conn` to the args, and a `true` return skips the redirect.
+
+  The same host predicate also drives the LiveView socket's `check_origin`
+  (`allowed_origin?/1`) — otherwise the `/live` WebSocket is rejected for any
+  host other than `PHX_HOST`, so pages load over Tailscale/LAN but the socket
+  never connects (the loading bar spins forever).
   """
 
+  @doc "True when a request reaches us on an internal host (see `lan_host?/1`)."
+  def lan?(%Plug.Conn{host: host}) when is_binary(host), do: lan_host?(host)
+  def lan?(_conn), do: false
+
   @doc """
-  True when the request host is loopback, an `*.local` mDNS name, a private IPv4,
-  or a Tailscale host (`100.64.0.0/10` IP or `*.ts.net` MagicDNS name).
+  True when the host is loopback, an `*.local` mDNS name, a private IPv4, or a
+  Tailscale host (`100.64.0.0/10` IP or `*.ts.net` MagicDNS name).
   """
-  def lan?(%Plug.Conn{host: host}) when is_binary(host) do
+  def lan_host?(host) when is_binary(host) do
     host in ["localhost", "127.0.0.1"] or
       String.ends_with?(host, ".local") or
       String.ends_with?(host, ".ts.net") or
@@ -30,7 +39,20 @@ defmodule TragarAiWeb.SSLExclude do
       tailscale_ip?(host)
   end
 
-  def lan?(_conn), do: false
+  def lan_host?(_), do: false
+
+  @doc """
+  `check_origin` predicate for the LiveView socket: allow the configured public
+  host (`PHX_HOST`) plus the internal LAN/tailnet hosts the app is served on.
+  """
+  def allowed_origin?(%URI{host: host}) when is_binary(host),
+    do: lan_host?(host) or host == configured_host()
+
+  def allowed_origin?(_), do: false
+
+  defp configured_host do
+    Application.get_env(:tragar_ai, TragarAiWeb.Endpoint, [])[:url][:host]
+  end
 
   defp private_ip?("192.168." <> _), do: true
   defp private_ip?("10." <> _), do: true
