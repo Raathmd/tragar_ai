@@ -14,6 +14,8 @@ defmodule TragarAiWeb.ConsoleLive do
   """
   use TragarAiWeb, :live_view
 
+  require Logger
+
   alias TragarAi.Assist
   alias TragarAi.Assist.Engine
   alias TragarAi.Freight.Statuses
@@ -31,6 +33,7 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(search_results: [], search_meta: nil)
      |> assign(quote_results: [], quote_meta: nil)
      |> assign(selected_ticket: nil, ticket_sort: "fifo")
+     |> assign(next_msg_id: 0)
      |> load_history()
      |> load_tickets()}
   end
@@ -733,7 +736,17 @@ defmodule TragarAiWeb.ConsoleLive do
             <div class="text-[10px] uppercase tracking-wide opacity-60">
               {if m.role == :user, do: "You", else: "Tragar AI"}
             </div>
-            {m.text}
+            <%= cond do %>
+              <% m.role == :user -> %>
+                {m.text}
+              <% m[:pending] && m[:stream] not in [nil, ""] -> %>
+                <span class="whitespace-pre-line">{m.stream}</span><span class="loading loading-dots loading-xs ml-1"></span>
+              <% m[:pending] -> %>
+                <span class="loading loading-dots loading-sm"></span>
+                <span class="opacity-60">thinking…</span>
+              <% true -> %>
+                {m.text}
+            <% end %>
             <div :if={m[:suggestions] not in [nil, []]} class="mt-2 flex flex-wrap gap-1">
               <button
                 :for={s <- m.suggestions}
@@ -1106,8 +1119,9 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # ── Conversation ─────────────────────────────────────────────────────────────
 
-  # One chat turn: interpret in the running frame, validate+fetch+phrase or
-  # clarify, accumulate the frame, and append the user + AI messages.
+  # One chat turn: append the user message + a pending AI bubble, then run the
+  # loop off the LiveView process. Tokens stream in via {:chunk,...}; the final
+  # interaction is applied in handle_async (frame accumulation, reply mode).
   defp converse(socket, text, reply?) do
     frame = socket.assigns.frame
 
@@ -1116,42 +1130,105 @@ defmodule TragarAiWeb.ConsoleLive do
         do: resolve_demo_entities(text, frame.entities),
         else: frame.entities
 
+    id = socket.assigns.next_msg_id
+    lv = self()
+
     context = %{
       demo: socket.assigns.demo,
       agent: blank_to_nil(socket.assigns.agent),
       entities: base,
-      intent: frame.intent
+      intent: frame.intent,
+      on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end
     }
 
-    {:ok, interaction} = Engine.answer(text, context)
+    pending = %{
+      role: :ai,
+      id: id,
+      pending: true,
+      stream: "",
+      text: nil,
+      resolved: true,
+      suggestions: []
+    }
+
+    socket
+    |> assign(
+      messages: socket.assigns.messages ++ [%{role: :user, text: text}, pending],
+      question: "",
+      next_msg_id: id + 1,
+      right_tab: "chat"
+    )
+    |> start_async({:converse, id}, fn ->
+      {Engine.answer(text, context), base, reply?, frame.intent}
+    end)
+  end
+
+  @impl true
+  def handle_async(
+        {:converse, id},
+        {:ok, {{:ok, interaction}, base, reply?, prior_intent}},
+        socket
+      ) do
     resolved? = interaction.status == :drafted
 
     new_frame = %{
-      intent: carry_intent(interaction, frame.intent),
+      intent: carry_intent(interaction, prior_intent),
       entities: Map.merge(base, atomize_entities(interaction.entities))
     }
 
-    ai_message = %{
+    ai = %{
       role: :ai,
+      id: id,
+      pending: false,
+      stream: "",
       text: interaction.draft_answer,
       resolved: resolved?,
       suggestions: if(resolved?, do: [], else: suggest(interaction))
     }
 
-    messages = socket.assigns.messages ++ [%{role: :user, text: text}, ai_message]
+    socket =
+      socket
+      |> assign(
+        messages: replace_msg(socket.assigns.messages, id, ai),
+        frame: new_frame,
+        # Keep the interaction (even if unresolved) so the agent can always reply.
+        interaction: interaction,
+        reply: reply?,
+        right_tab: "chat"
+      )
+      |> load_history()
 
-    socket
-    |> assign(
-      messages: messages,
-      frame: new_frame,
-      question: "",
-      # Keep the interaction (even if unresolved) so the agent can always reply.
-      interaction: interaction,
-      reply: reply?,
-      right_tab: "chat"
-    )
-    |> load_history()
+    {:noreply, socket}
   end
+
+  def handle_async({:converse, id}, {:exit, reason}, socket) do
+    Logger.error("[console] converse crashed: #{inspect(reason)}")
+
+    ai = %{
+      role: :ai,
+      id: id,
+      pending: false,
+      stream: "",
+      text: "Something went wrong — please try again.",
+      resolved: false,
+      suggestions: []
+    }
+
+    {:noreply, assign(socket, messages: replace_msg(socket.assigns.messages, id, ai))}
+  end
+
+  @impl true
+  def handle_info({:chunk, id, chunk}, socket) do
+    messages =
+      Enum.map(socket.assigns.messages, fn m ->
+        if Map.get(m, :id) == id, do: %{m | stream: Map.get(m, :stream, "") <> chunk}, else: m
+      end)
+
+    {:noreply, assign(socket, messages: messages)}
+  end
+
+  defp replace_msg(messages, id, new_msg),
+    do: Enum.map(messages, fn m -> if(Map.get(m, :id) == id, do: new_msg, else: m) end)
 
   # The composer starts from the AI's answer only when it actually answered;
   # never seed it with a clarify/error message.

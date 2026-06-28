@@ -65,6 +65,36 @@ defmodule TragarAi.CoreAIOllamaTest do
              CoreAI.interpret("what service types do you offer?")
   end
 
+  test "phrase streams tokens via on_chunk and returns the full text" do
+    configure(fn conn ->
+      ndjson =
+        Enum.map_join(
+          [
+            %{"message" => %{"content" => "Out for "}, "done" => false},
+            %{"message" => %{"content" => "delivery."}, "done" => false},
+            %{"message" => %{"content" => ""}, "done" => true}
+          ],
+          "\n",
+          &Jason.encode!/1
+        )
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/x-ndjson")
+      |> Plug.Conn.send_resp(200, ndjson)
+    end)
+
+    parent = self()
+
+    {:ok, full} =
+      CoreAI.phrase(:load_status, %{"status" => "OND"}, %{}, fn chunk ->
+        send(parent, {:tok, chunk})
+      end)
+
+    assert full == "Out for delivery."
+    assert_received {:tok, "Out for "}
+    assert_received {:tok, "delivery."}
+  end
+
   test "info/0 reports the Ollama provider and the fallback" do
     configure(fn conn -> Req.Test.json(conn, %{}) end)
     info = CoreAI.info()
