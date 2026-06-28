@@ -153,15 +153,10 @@ defmodule TragarAi.CoreAI do
     base = Keyword.get(cfg, :base_url)
     model = Keyword.get(cfg, :model)
 
-    reason_model = Keyword.get(cfg, :reason_model)
-
     {provider, label} =
       case mode do
         :ollama ->
-          reason =
-            if reason_model && reason_model != model, do: " · reason: #{reason_model}", else: ""
-
-          {"Ollama", "#{model || "qwen3:14b"}#{reason} · Ollama (→ stub fallback)"}
+          {"Ollama", "#{model || "qwen3:14b"} · Ollama (→ stub fallback)"}
 
         :http ->
           prov = if base && String.contains?(base, "11434"), do: "Ollama", else: "sidecar"
@@ -227,14 +222,14 @@ defmodule TragarAi.CoreAI do
     |> ollama_generate(on_chunk, ollama_model())
   end
 
-  # "Reason freely" uses the (optionally separate) reasoning model — slower and
-  # deeper, only invoked when the agent toggled it on.
+  # "Reason freely" uses the active reasoning model (dashboard-switchable) — slower
+  # and deeper, only invoked when the agent toggled it on.
   defp ollama_reason(question, context, on_chunk) do
     [
       %{role: "system", content: reason_system_prompt()},
       %{role: "user", content: interpret_user_prompt(question, context)}
     ]
-    |> ollama_generate(on_chunk, ollama_reason_model())
+    |> ollama_generate(on_chunk, active_reason_model())
   end
 
   # Stream when an on_chunk sink is given; otherwise one-shot. If streaming
@@ -348,8 +343,60 @@ defmodule TragarAi.CoreAI do
 
   defp ollama_model, do: Keyword.get(config(), :model) || "qwen3:14b"
 
-  # The reasoning model for "reason freely"; falls back to the main model.
-  defp ollama_reason_model, do: Keyword.get(config(), :reason_model) || ollama_model()
+  @reason_key {__MODULE__, :active_reason_model}
+
+  @doc """
+  Reasoning-model control state for the dashboard:
+
+    * `:active` — the model "reason freely" currently uses,
+    * `:fast`   — the main model (default),
+    * `:deep`   — the optional deeper model (`CORE_AI_REASON_MODEL`), or nil.
+  """
+  def reasoning do
+    %{
+      active: active_reason_model(),
+      fast: ollama_model(),
+      deep: Keyword.get(config(), :reason_model)
+    }
+  end
+
+  @doc """
+  Switch the active reasoning model at runtime (dashboard control). Must be one of
+  the offered models (fast or deep). Node-global; resets to fast on restart.
+  """
+  @spec set_reasoning(String.t()) :: :ok | {:error, :unknown_model}
+  def set_reasoning(model) when is_binary(model) and model != "" do
+    %{fast: fast, deep: deep} = reasoning()
+
+    if model in Enum.reject([fast, deep], &is_nil/1) do
+      :persistent_term.put(@reason_key, model)
+      # Free the deep model from memory immediately when it's no longer in use.
+      if deep && deep != model && deep != fast, do: unload(deep)
+      :ok
+    else
+      {:error, :unknown_model}
+    end
+  end
+
+  @doc "Ask Ollama to unload a model from memory now (keep_alive: 0). Best-effort."
+  @spec unload(String.t()) :: :ok
+  def unload(model) when is_binary(model) do
+    if mode() == :ollama do
+      Req.post(req(),
+        url: "/api/chat",
+        json: %{model: model, messages: [], keep_alive: 0},
+        receive_timeout: 10_000
+      )
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  # The active "reason freely" model — runtime-switchable from the dashboard;
+  # defaults to the fast main model.
+  defp active_reason_model, do: :persistent_term.get(@reason_key, nil) || ollama_model()
 
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)

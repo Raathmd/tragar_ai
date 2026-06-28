@@ -6,7 +6,12 @@ defmodule TragarAi.CoreAIOllamaTest do
 
   setup do
     original = Application.get_env(:tragar_ai, CoreAI)
-    on_exit(fn -> Application.put_env(:tragar_ai, CoreAI, original) end)
+
+    on_exit(fn ->
+      Application.put_env(:tragar_ai, CoreAI, original)
+      :persistent_term.erase({CoreAI, :active_reason_model})
+    end)
+
     :ok
   end
 
@@ -95,7 +100,7 @@ defmodule TragarAi.CoreAIOllamaTest do
     assert_received {:tok, "delivery."}
   end
 
-  test "phrase uses the main model; reason uses CORE_AI_REASON_MODEL" do
+  test "reasoning model is runtime-switchable; switching to fast unloads the deep model" do
     parent = self()
 
     Application.put_env(:tragar_ai, CoreAI,
@@ -106,17 +111,32 @@ defmodule TragarAi.CoreAIOllamaTest do
       req_options: [
         plug: fn conn ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
-          send(parent, {:model, Jason.decode!(body)["model"]})
+          d = Jason.decode!(body)
+          send(parent, {:req, d["model"], d["keep_alive"]})
           Req.Test.json(conn, %{"message" => %{"content" => "ok"}})
         end
       ]
     )
 
+    # Default: reason uses the fast (main) model; phrase always does.
+    CoreAI.reason("q")
+    assert_received {:req, "fast-model", _}
     CoreAI.phrase(:load_status, %{"status" => "OND"})
-    assert_received {:model, "fast-model"}
+    assert_received {:req, "fast-model", _}
 
-    CoreAI.reason("why is the sky blue?")
-    assert_received {:model, "deep-model"}
+    # Switch to deep → reason now uses the deep model.
+    assert :ok = CoreAI.set_reasoning("deep-model")
+    CoreAI.reason("q")
+    assert_received {:req, "deep-model", _}
+
+    # Switch back to fast → fires an immediate unload (keep_alive: 0) of the deep model.
+    assert :ok = CoreAI.set_reasoning("fast-model")
+    assert_received {:req, "deep-model", 0}
+    CoreAI.reason("q")
+    assert_received {:req, "fast-model", _}
+
+    # An unknown model is rejected.
+    assert {:error, :unknown_model} = CoreAI.set_reasoning("bogus")
   end
 
   test "fast prompts send /no_think; reason lets the model think" do
