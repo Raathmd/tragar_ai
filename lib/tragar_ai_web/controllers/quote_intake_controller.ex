@@ -18,9 +18,9 @@ defmodule TragarAiWeb.QuoteIntakeController do
   alias TragarAi.QuoteIntake.Server
 
   @doc """
-  The machine-readable quote workflow — a tool Freddy (or any caller) can fetch
-  to learn the steps, parameters and allowed values for taking a customer
-  through creating a quote.
+  The machine-readable quote workflow — a tool any caller can fetch to learn the
+  steps, parameters and allowed values for taking a customer through creating a
+  quote.
   """
   def workflow(conn, _params), do: json(conn, QuoteIntake.workflow())
 

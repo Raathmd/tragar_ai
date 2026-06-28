@@ -110,9 +110,9 @@ if config_env() != :test do
     base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434",
     receive_timeout: String.to_integer(System.get_env("CORE_AI_TIMEOUT_MS") || "120000")
 
-  # Inbound API auth — the bearer token Freddy (Freshdesk AI Agent) must send to
-  # call /api/* . We mint this; the admin stores it in Freshdesk's Action
-  # Authentication. When unset, /api is open (local dev only); prod must set it.
+  # Inbound API auth — the bearer token the Freshdesk automation must send to
+  # call /api/* . We mint this; the admin stores it on the automation's webhook.
+  # When unset, /api is open (local dev only); prod must set it.
   config :tragar_ai, :api_key, System.get_env("TRAGAR_API_KEY")
 
   # IP allowlist for /api — restrict to Freshworks' egress CIDRs. Unset → allow
