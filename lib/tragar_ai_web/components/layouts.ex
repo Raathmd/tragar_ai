@@ -25,10 +25,16 @@ defmodule TragarAiWeb.Layouts do
   def app_nav(assigns) do
     ~H"""
     <nav class="flex items-center gap-1">
-      <.link navigate={~p"/"} class={["btn btn-sm", (@active == :console && "btn-primary") || "btn-ghost"]}>
+      <.link
+        navigate={~p"/"}
+        class={["btn btn-sm", (@active == :console && "btn-primary") || "btn-ghost"]}
+      >
         Console
       </.link>
-      <.link navigate={~p"/chat"} class={["btn btn-sm", (@active == :chat && "btn-primary") || "btn-ghost"]}>
+      <.link
+        navigate={~p"/chat"}
+        class={["btn btn-sm", (@active == :chat && "btn-primary") || "btn-ghost"]}
+      >
         Chat
       </.link>
     </nav>

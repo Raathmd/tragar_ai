@@ -42,7 +42,12 @@ defmodule TragarAi.Assist.Engine do
         Logger.warning("[assist] interpret failed: #{inspect(reason)}")
 
         log = [
-          ai_entry("CoreAI.interpret", %{"question" => question}, %{"error" => inspect(reason)}, false)
+          ai_entry(
+            "CoreAI.interpret",
+            %{"question" => question},
+            %{"error" => inspect(reason)},
+            false
+          )
         ]
 
         if reasoning?(context) do

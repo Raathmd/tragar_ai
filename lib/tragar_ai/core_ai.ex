@@ -117,7 +117,10 @@ defmodule TragarAi.CoreAI do
   def available? do
     case mode() do
       :ollama ->
-        match?({:ok, %Req.Response{status: s}} when s in 200..499, Req.get(req(), url: "/api/tags"))
+        match?(
+          {:ok, %Req.Response{status: s}} when s in 200..499,
+          Req.get(req(), url: "/api/tags")
+        )
 
       :http ->
         match?({:ok, %Req.Response{status: s}} when s in 200..499, Req.get(req(), url: "/"))
@@ -167,7 +170,10 @@ defmodule TragarAi.CoreAI do
         ok
 
       {:error, reason} ->
-        Logger.warning("CoreAI #{what}: qwen/Ollama unavailable (#{inspect(reason)}); using fallback")
+        Logger.warning(
+          "CoreAI #{what}: qwen/Ollama unavailable (#{inspect(reason)}); using fallback"
+        )
+
         fallback.()
     end
   end

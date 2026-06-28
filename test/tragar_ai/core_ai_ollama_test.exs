@@ -38,7 +38,9 @@ defmodule TragarAi.CoreAIOllamaTest do
 
   test "an intent qwen invents that we don't allow collapses to :unknown" do
     configure(fn conn ->
-      Req.Test.json(conn, %{"message" => %{"content" => ~s({"intent":"launch_rocket","entities":{}})}})
+      Req.Test.json(conn, %{
+        "message" => %{"content" => ~s({"intent":"launch_rocket","entities":{}})}
+      })
     end)
 
     assert {:ok, %{intent: :unknown}} = CoreAI.interpret("do something weird")

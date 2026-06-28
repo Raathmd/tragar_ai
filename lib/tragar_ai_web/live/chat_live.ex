@@ -79,7 +79,9 @@ defmodule TragarAiWeb.ChatLive do
           />
           <span>
             Reason freely
-            <span class="text-base-content/50">— answer even when no Tragar fact is found (ungrounded)</span>
+            <span class="text-base-content/50">
+              — answer even when no Tragar fact is found (ungrounded)
+            </span>
           </span>
         </label>
       </div>
@@ -87,8 +89,8 @@ defmodule TragarAiWeb.ChatLive do
       <%!-- Scrollable conversation, newest first --%>
       <div id="conversation" class="flex-1 overflow-y-auto py-4 space-y-4">
         <p :if={@turns == []} class="text-sm text-base-content/50 py-8 text-center">
-          Ask something — e.g. <em>“Where is waybill 0006794936FC?”</em> or
-          <em>“What service types do you offer?”</em>
+          Ask something — e.g. <em>“Where is waybill 0006794936FC?”</em>
+          or <em>“What service types do you offer?”</em>
         </p>
 
         <div :for={turn <- Enum.reverse(@turns)} class="space-y-1">
