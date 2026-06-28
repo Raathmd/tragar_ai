@@ -1,20 +1,17 @@
-# Cloudflare Tunnel config for the Studio — publishes ONLY /api/* to the internet
-# so Freshdesk can reach the inbound API. Everything else (Dashboard/Console/Chat,
-# /admin) stays private (Tailscale/LAN only). Copy to ~/.cloudflared/config.yml and
-# fill in <UUID> and <API_HOST>. See docs/cloudflare-setup.md.
+# Cloudflare Tunnel config for the Studio. ONE public hostname serves both the
+# management UI and the Freshdesk API; Cloudflare Access + WAF split them by path
+# at the edge (see docs/cloudflare-setup.md). Copy to ~/.cloudflared/config.yml
+# and fill in <UUID> and <APP_HOST> (e.g. app.tragar.co.za).
 
 tunnel: <UUID>
 credentials-file: /Users/tragarai/.cloudflared/<UUID>.json
 
 ingress:
-  # Only the inbound API is reachable from the internet.
-  - hostname: <API_HOST>           # e.g. tragar-api.tragar.co.za
-    path: ^/api/
+  # Forward the whole host to the app; the edge (Access + WAF) does the gating:
+  #   /api/*  → Access Bypass + WAF (Freshworks IPs only) + app bearer   (Freshdesk)
+  #   /*      → Access Allow @tragar.co.za via Microsoft Entra SSO       (management UI)
+  - hostname: <APP_HOST>
     service: http://localhost:4000
-
-  # Any other path on the public host → not exposed.
-  - hostname: <API_HOST>
-    service: http_status:404
 
   # Any other host → not exposed.
   - service: http_status:404

@@ -1,31 +1,34 @@
-# Exposing `/api` to Freshdesk via Cloudflare Tunnel
+# Public access via Cloudflare Tunnel (one domain)
 
-Goal: **Freshworks' cloud can reach only `/api/*`, only from Freshworks' IPs, only
-with our bearer token** — and the rest of the app (Dashboard, Console, Chat,
-`/admin`) is never public; it stays on Tailscale/LAN.
-
-The Studio makes an **outbound** connection to Cloudflare, which publishes a public
-HTTPS hostname and forwards it back down the tunnel. No inbound ports are opened.
+One public hostname — e.g. **`app.tragar.co.za`** — serves **both** the management
+UI and the Freshdesk API. The Studio makes an **outbound** connection to
+Cloudflare (no inbound ports), and **Cloudflare Access + WAF split the host by
+path at the edge**:
 
 ```
-Freshdesk ──HTTPS──▶ Cloudflare edge ──tunnel──▶ Studio :4000  (/api/* only)
-            (WAF: only Freshworks IPs)            (bearer + requester→account gate)
+                         ┌─ /api/*  → Access: Bypass + WAF (Freshworks IPs only) + app bearer   ← Freshdesk
+app.tragar.co.za ──tunnel┤
+                         └─ /*      → Access: Allow @tragar.co.za (Microsoft Entra SSO)          ← management
+                                        ↓
+                                   Studio :4000
 ```
 
-## Layered "only Freshdesk" controls
-1. **Path** — the tunnel publishes only `/api/*`; all other paths/hosts → 404 publicly.
-2. **Network** — a Cloudflare **WAF rule** allows only Freshworks' egress IPs.
-3. **Credential** — the app's bearer token (`TRAGAR_API_KEY`) + the requester→account
-   gate, behind Cloudflare as defense-in-depth.
+The tunnel just forwards the whole host to the app; the **edge policies** decide
+who reaches what. The internal Tailscale/LAN access keeps working unchanged.
 
-The browser UIs keep working over Tailscale exactly as before — Cloudflare is only
-the Freshdesk → API door.
+## Controls per path
+| Path | Who | Edge control | App control |
+|---|---|---|---|
+| `/api/*` | Freshdesk (machine) | Access **Bypass** + **WAF**: only Freshworks IPs | bearer token + requester→account gate |
+| everything else | management (humans) | Access **Allow** `@tragar.co.za` via Entra SSO | — (Access is the auth) |
+
+`/api` is IP-locked by the WAF *and* the app's own allowlist, so a signed-in
+manager can't reach it from a home IP either.
 
 ---
 
-## 1. Pick the public hostname
-e.g. `tragar-api.tragar.co.za` (your domain must be on Cloudflare). Referred to as
-`<API_HOST>` below.
+## 1. Hostname
+Pick `<APP_HOST>` (e.g. `app.tragar.co.za`); your domain must be on Cloudflare.
 
 ## 2. Install cloudflared on the Studio
 ```bash
@@ -35,82 +38,96 @@ cloudflared tunnel login          # browser → authorize the domain
 
 ## 3. Create the tunnel + DNS
 ```bash
-cloudflared tunnel create tragar-api          # prints a UUID + writes ~/.cloudflared/<UUID>.json
-cloudflared tunnel route dns tragar-api <API_HOST>
+cloudflared tunnel create tragar          # prints a UUID + writes ~/.cloudflared/<UUID>.json
+cloudflared tunnel route dns tragar <APP_HOST>
 ```
 
-## 4. Config — publish ONLY `/api/*`
+## 4. Config — forward the whole host
 Copy [`cloudflared/config.yml.example`](../cloudflared/config.yml.example) to
-`~/.cloudflared/config.yml` and fill in `<UUID>` + `<API_HOST>`.
+`~/.cloudflared/config.yml` and fill in `<UUID>` + `<APP_HOST>`.
 
 ## 5. Run it as a service (starts at boot)
 ```bash
 sudo cloudflared --config /Users/tragarai/.cloudflared/config.yml service install
 sudo launchctl print system/com.cloudflare.cloudflared | grep -i state
 ```
-(macOS installs a LaunchDaemon — runs at boot, no GUI session needed.)
 
-## 6. WAF rule — only Freshworks IPs (the key lock)
-Cloudflare dashboard → **Security → WAF → Custom rules → Create**:
+## 6. Cloudflare Access — Microsoft Entra SSO for the UI
+In **Cloudflare Zero Trust** dashboard (one-time Entra wiring, then two apps):
 
-- **If:** `Hostname equals <API_HOST>` **AND NOT** `IP Source Address is in <freshworks list>`
-- **Then:** **Block**
+**a. Add the identity provider** — Settings → Authentication → Login methods →
+Add **Azure AD / Microsoft Entra ID**. You'll register an app in Entra (Azure
+portal → App registrations) and paste its **Application (client) ID**, a
+**client secret**, and **Directory (tenant) ID** into Cloudflare; grant the
+Graph `User.Read` / `email`, `openid`, `profile` permissions. Test the connection.
 
-Best practice: create a Cloudflare **IP List** named `freshworks` with your region's
-CIDRs (+ the two global IPs), then the rule expression is:
+**b. Access app for the UI** — Access → Applications → Add a **Self-hosted** app:
+- **Domain:** `<APP_HOST>` (leave path blank = whole host)
+- **Policy:** *Allow* → Include → **Emails ending in** `@tragar.co.za` (or list the
+  2–5 specific addresses). Identity provider: the Entra method from (a).
+- Session duration to taste (e.g. 24h).
 
-```
-(http.host eq "<API_HOST>") and not (ip.src in $freshworks)
-```
+**c. Access app for `/api` (so Freshdesk isn't challenged)** — add a **second**
+Self-hosted app, more specific so it's matched first:
+- **Domain:** `<APP_HOST>`, **Path:** `/api`
+- **Policy:** *Bypass* → Include → **Everyone**. (No SSO on `/api`; it's gated by
+  the WAF IP rule + the app bearer instead.)
 
-### Freshworks egress IPs
-> ⚠️ Freshworks updates these periodically — **always reconcile against the live
-> article** and keep the WAF list (and `TRAGAR_API_ALLOWED_IPS`) in sync, or new
-> Freshworks IPs get blocked. Authoritative, region-specific list:
+Cloudflare evaluates the path app first, so `/api/*` bypasses SSO and everything
+else requires an `@tragar.co.za` Entra login.
+
+## 7. WAF rule — `/api` only from Freshworks IPs
+Security → WAF → Custom rules → Create:
+- **Expression:** `(http.host eq "<APP_HOST>") and starts_with(http.request.uri.path, "/api") and not (ip.src in $freshworks)`
+- **Action:** **Block**
+
+Create a Cloudflare **IP List** named `freshworks` with your region's CIDRs + the
+two globals.
+
+> ⚠️ Freshworks updates these periodically — reconcile against the live article and
+> keep the list (and `TRAGAR_API_ALLOWED_IPS`) in sync:
 > <https://support.freshdesk.com/support/solutions/articles/50000005619-allowlist-nat-ips>
 
-**Global (all regions, always include):** `162.159.140.147`, `172.66.0.145`
+**Global (always include):** `162.159.140.147`, `172.66.0.145`
 
-**EU (Frankfurt/Ireland) — recommended for South Africa (lowest latency)** *(snapshot 2026-06; verify):*
+**EU (Frankfurt/Ireland) — lowest latency for South Africa** *(snapshot 2026-06; verify):*
 ```
 52.16.90.140, 52.17.38.68, 54.154.255.176/30, 54.154.255.186, 52.57.69.21,
 52.28.165.113, 52.57.168.188, 18.184.214.37, 18.184.155.228, 18.197.138.225,
 3.74.148.8/30, 35.158.67.243, 35.158.71.15, 35.156.130.117, 3.66.115.16,
 18.197.225.139, 18.194.35.50, 18.194.199.3, 18.184.82.138
 ```
+> The region must match **where your Freshdesk account lives** (Admin → Account →
+> data centre), not a preference. If it's US/India/Australia, use that set instead.
 
-> The region must match **where your Freshdesk account actually lives** (Admin →
-> Account → data centre), not a preference — the egress IPs come from that DC. If
-> your account is US/India/Australia, use that region's set from the article instead.
-
-## 7. App env (`/Users/tragarai/apps/tragar_ai/.env.prod`)
+## 8. App env (`/Users/tragarai/apps/tragar_ai/.env.prod`)
 ```dotenv
+PHX_HOST=<APP_HOST>                            # canonical host; allows the LiveView socket origin
 TRAGAR_API_KEY=<bearer secret>                 # openssl rand -hex 32
 TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip   # app reads the real client IP from Cloudflare
-# TRAGAR_API_ALLOWED_IPS=<Freshworks CIDRs>    # optional belt-and-braces; WAF is primary
+TRAGAR_API_ALLOWED_IPS=<Freshworks CIDRs>      # belt-and-braces for /api; WAF is primary
 ```
 Restart: `launchctl kickstart -k gui/$(id -u)/com.tragar.tragar_ai`
 
-## 8. Freshdesk automation
-Trigger Webhook → `https://<API_HOST>/api/tickets/answer`, header
-`Authorization: Bearer <TRAGAR_API_KEY>`.
+(Internal Tailscale/LAN access is unaffected — those hosts are still served over
+HTTP and allowed as socket origins.)
 
-## Optional — a second credential (Cloudflare Access service token)
-Put **Cloudflare Access** on `<API_HOST>/api/*` and have the Freshdesk automation also
-send `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers. Then even a leaked
-bearer + spoofed IP can't pass the edge. Recommended if you want belt-and-braces.
+## 9. Freshdesk automation
+Trigger Webhook → `https://<APP_HOST>/api/tickets/answer`, header
+`Authorization: Bearer <TRAGAR_API_KEY>`.
 
 ## Verify
 ```bash
-# from a non-Freshworks IP → blocked at the edge
-curl -i https://<API_HOST>/api/tickets/answer
-# UI is not exposed publicly
-curl -i https://<API_HOST>/                    # → 404
+# Management UI: opening it in a browser redirects to Microsoft sign-in, then loads.
+open https://<APP_HOST>/
+
+# /api from a non-Freshworks IP → blocked at the WAF (403)
+curl -i https://<APP_HOST>/api/tickets/answer
 ```
 
-## Testing variant (no DNS/WAF, throwaway)
+## Testing variant (throwaway, no DNS/WAF/Access)
 ```bash
 cloudflared tunnel --url http://localhost:4000   # prints a temporary https://<random>.trycloudflare.com
 ```
-Use the temporary URL's `/api/tickets/answer` for a quick test, then switch to the
-named tunnel + WAF rule for production.
+Use it to smoke-test `/api/tickets/answer`, then switch to the named tunnel +
+Access + WAF for production.
