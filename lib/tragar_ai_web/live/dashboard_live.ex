@@ -12,19 +12,29 @@ defmodule TragarAiWeb.DashboardLive do
   use TragarAiWeb, :live_view
 
   alias TragarAi.Assist
+  alias TragarAi.Dashboard
   alias TragarAi.QuoteIntake
 
-  @refresh_ms 5_000
+  # Push updates are instant via PubSub; this slow tick only keeps the relative
+  # timestamps ("2m ago") fresh between changes.
+  @tick_ms 15_000
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Process.send_after(self(), :refresh, @refresh_ms)
+    if connected?(socket) do
+      Dashboard.subscribe()
+      Process.send_after(self(), :tick, @tick_ms)
+    end
+
     {:ok, load(socket)}
   end
 
+  # A tracked flow changed (ticket answered / quote advanced) — re-render now.
   @impl true
-  def handle_info(:refresh, socket) do
-    Process.send_after(self(), :refresh, @refresh_ms)
+  def handle_info(:dashboard_changed, socket), do: {:noreply, load(socket)}
+
+  def handle_info(:tick, socket) do
+    Process.send_after(self(), :tick, @tick_ms)
     {:noreply, load(socket)}
   end
 
@@ -126,7 +136,7 @@ defmodule TragarAiWeb.DashboardLive do
         <div class="text-right shrink-0">
           <button class="btn btn-sm btn-ghost" phx-click="refresh">↻ Refresh</button>
           <div class="text-[11px] text-base-content/50">
-            updated {ago(@updated_at)} · auto every 5s
+            live · updated {ago(@updated_at)}
           </div>
         </div>
       </header>

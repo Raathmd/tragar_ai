@@ -298,10 +298,15 @@ defmodule TragarAi.Assist.Engine do
   # Persist, stamping the ticket (for grouping on the dashboard) and the loop
   # latency (request → response) from the context.
   defp create(attrs, context) do
-    attrs
-    |> Map.put(:ticket_id, context[:ticket_id])
-    |> Map.put(:duration_ms, elapsed_ms(context))
-    |> Assist.create_interaction()
+    result =
+      attrs
+      |> Map.put(:ticket_id, context[:ticket_id])
+      |> Map.put(:duration_ms, elapsed_ms(context))
+      |> Assist.create_interaction()
+
+    # Push the live monitor; harmless when there are no subscribers.
+    with {:ok, _} <- result, do: TragarAi.Dashboard.broadcast()
+    result
   end
 
   defp elapsed_ms(%{started_at: t}) when is_integer(t),
