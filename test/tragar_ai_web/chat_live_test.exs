@@ -9,13 +9,16 @@ defmodule TragarAiWeb.ChatLiveTest do
     # The nav links back to the console (root).
     assert view |> element(~s{nav a[href="/"]}) |> has_element?()
 
-    html =
+    # The prompt is echoed immediately; the answer arrives via async.
+    submitted =
       view
       |> form("form[phx-submit=send]", %{message: "hello there"})
       |> render_submit()
 
-    # The prompt is echoed and the local AI's (safe-fail) answer is shown.
-    assert html =~ "hello there"
+    assert submitted =~ "hello there"
+
+    # Await the async model call, then the safe-fail answer is shown.
+    html = render_async(view, 5000)
     assert html =~ "failed"
   end
 
@@ -24,11 +27,11 @@ defmodule TragarAiWeb.ChatLiveTest do
 
     view |> element("input[phx-click=toggle_reasoning]") |> render_click()
 
-    html =
-      view
-      |> form("form[phx-submit=send]", %{message: "hello there"})
-      |> render_submit()
+    view
+    |> form("form[phx-submit=send]", %{message: "hello there"})
+    |> render_submit()
 
+    html = render_async(view, 5000)
     assert html =~ "reasoned"
     refute html =~ "failed"
   end
