@@ -5,11 +5,18 @@ defmodule TragarAiWeb.TicketAnswerController do
   `POST /api/tickets/answer` with JSON:
 
       {"ticket_id": "55", "subject": "Where is my delivery?",
-       "description": "Tracking 0006794936FC", "post_reply": true}
+       "description": "Tracking 0006794936FC",
+       "account": "{{ticket.company.cf_account}}",
+       "requester_email": "{{ticket.requester.email}}", "post_reply": true}
 
-  Tragar AI interprets the question, uses the read tools to fetch the live facts,
-  composes an answer, and (by default) posts it onto the ticket as a private note
-  for the agent to review. The answer is also returned in the response.
+  `account` is the scope, injected by the Freshdesk automation from the company's
+  custom field (Freshdesk-rendered, behind the bearer + IP gates). When it's
+  absent we derive it via the Freshdesk API instead.
+
+  Tragar AI interprets the question, uses the read tools to fetch the live facts
+  (scoped to that account), composes an answer, and (by default) posts it onto the
+  ticket as a private note for the agent. The answer is also returned in the
+  response.
   """
 
   use TragarAiWeb, :controller
@@ -21,7 +28,11 @@ defmodule TragarAiWeb.TicketAnswerController do
          content when content != "" <- ticket_text(params) do
       opts = [
         post_reply: truthy(params["post_reply"], true),
-        private: truthy(params["private"], true)
+        private: truthy(params["private"], true),
+        # Account scope injected by the Freshdesk automation ({{ticket.company.cf_account}});
+        # falls back to deriving it via the Freshdesk API when absent.
+        account: params["account"],
+        requester_email: params["requester_email"]
       ]
 
       case TicketResponder.respond(to_string(ticket_id), content, opts) do

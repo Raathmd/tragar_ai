@@ -63,6 +63,22 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
     assert resp["intent"] == "load_status"
   end
 
+  test "uses the account injected in the webhook body over the FD-derived one", %{conn: conn} do
+    # The FD company stub would resolve ITD02; the body asserts ITD99, so the
+    # webhook-supplied value must win (no API derivation).
+    body = %{
+      "ticket_id" => "55",
+      "subject" => "Delivery query",
+      "description" => "Where is load 4821?",
+      "account" => "ITD99"
+    }
+
+    resp = conn |> post(~p"/api/tickets/answer", body) |> json_response(200)
+
+    assert resp["account"] == "ITD99"
+    assert resp["answer"] =~ "In transit"
+  end
+
   test "requires ticket content", %{conn: conn} do
     resp = conn |> post(~p"/api/tickets/answer", %{"ticket_id" => "55"}) |> json_response(400)
     assert resp["error"] =~ "content"

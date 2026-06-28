@@ -98,8 +98,16 @@ defmodule TragarAi.Freshdesk do
   # multi-select list). Normalize to an upper-cased, de-duplicated list.
   defp parse_accounts(company, field) do
     cf = company["custom_fields"] || company[:custom_fields] || %{}
+    normalize_codes(cf[field] || cf[to_string(field)] || company[field])
+  end
 
-    (cf[field] || cf[to_string(field)] || company[field])
+  @doc """
+  Normalize one or several account codes to an upper-cased, de-duplicated list.
+  Accepts a string ("ITD01, ITD02"), a list, or nil — used for both the Company
+  custom field and a webhook-supplied account value.
+  """
+  def normalize_codes(value) do
+    value
     |> List.wrap()
     |> Enum.flat_map(fn
       s when is_binary(s) -> String.split(s, ~r/[,;\s]+/, trim: true)
