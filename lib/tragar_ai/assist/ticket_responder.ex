@@ -19,7 +19,7 @@ defmodule TragarAi.Assist.TicketResponder do
   def respond(ticket_id, content, opts \\ []) when is_binary(content) do
     fd = Keyword.get(opts, :freshdesk, TragarAi.Freshdesk)
     client = Keyword.get(opts, :client, TragarAi.Freshdesk.Client)
-    accounts = accounts_for(ticket_id, fd)
+    accounts = accounts_for(ticket_id, opts, fd)
     account = List.first(accounts)
 
     # `:accounts` enforces scope in the Engine — facts must be on the requester's
@@ -51,8 +51,18 @@ defmodule TragarAi.Assist.TicketResponder do
     end
   end
 
-  # The requester's authorized account(s) (the validated scope).
-  defp accounts_for(ticket_id, fd) do
+  # Scope = the account(s) the request is allowed to read. Prefer the account the
+  # Freshdesk automation injected in the webhook (`{{ticket.company.cf_account}}`,
+  # rendered by Freshdesk, behind the bearer + IP gates) for speed; fall back to
+  # deriving it via the Freshdesk API when the body doesn't carry one.
+  defp accounts_for(ticket_id, opts, fd) do
+    case TragarAi.Freshdesk.normalize_codes(opts[:account]) do
+      [] -> derive_accounts(ticket_id, fd)
+      accounts -> accounts
+    end
+  end
+
+  defp derive_accounts(ticket_id, fd) do
     case fd.accounts_for_requester(ticket_id) do
       {:ok, accounts} when is_list(accounts) -> accounts
       _ -> []

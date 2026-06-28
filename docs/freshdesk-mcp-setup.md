@@ -16,8 +16,13 @@ a **Trigger Webhook** action on new tickets:
 - **Body:**
   ```json
   {"ticket_id": "{{ticket.id}}", "subject": "{{ticket.subject}}",
-   "description": "{{ticket.description_text}}", "post_reply": true}
+   "description": "{{ticket.description_text}}",
+   "account": "{{ticket.company.cf_account}}",
+   "requester_email": "{{ticket.requester.email}}", "post_reply": true}
   ```
+  `account` is the scope, rendered by Freshdesk from the company's custom field
+  (so the app knows the scope immediately, no extra API calls). If it's omitted,
+  the app derives the account via the Freshdesk API instead.
 
 Our app then: derives the requester's account (Freshdesk Company `cf_account`),
 runs the assist loop (Core AI interprets → read tools fetch the live fact → Core
