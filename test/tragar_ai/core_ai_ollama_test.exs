@@ -119,6 +119,32 @@ defmodule TragarAi.CoreAIOllamaTest do
     assert_received {:model, "deep-model"}
   end
 
+  test "fast prompts send /no_think; reason lets the model think" do
+    parent = self()
+
+    Application.put_env(:tragar_ai, CoreAI,
+      mode: :ollama,
+      model: "qwen3:14b",
+      base_url: "http://ollama.test",
+      req_options: [
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          system = Jason.decode!(body)["messages"] |> List.first() |> Map.get("content")
+          send(parent, {:system, system})
+          Req.Test.json(conn, %{"message" => %{"content" => "ok"}})
+        end
+      ]
+    )
+
+    CoreAI.phrase(:load_status, %{"status" => "OND"})
+    assert_received {:system, phrase_sys}
+    assert phrase_sys =~ "/no_think"
+
+    CoreAI.reason("why is the sky blue?")
+    assert_received {:system, reason_sys}
+    refute reason_sys =~ "/no_think"
+  end
+
   test "info/0 reports the Ollama provider and the fallback" do
     configure(fn conn -> Req.Test.json(conn, %{}) end)
     info = CoreAI.info()

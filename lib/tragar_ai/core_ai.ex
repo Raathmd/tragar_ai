@@ -161,7 +161,7 @@ defmodule TragarAi.CoreAI do
           reason =
             if reason_model && reason_model != model, do: " · reason: #{reason_model}", else: ""
 
-          {"Ollama", "#{model || "qwen3:30b"}#{reason} · Ollama (→ stub fallback)"}
+          {"Ollama", "#{model || "qwen3:14b"}#{reason} · Ollama (→ stub fallback)"}
 
         :http ->
           prov = if base && String.contains?(base, "11434"), do: "Ollama", else: "sidecar"
@@ -346,7 +346,7 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  defp ollama_model, do: Keyword.get(config(), :model) || "qwen3:30b"
+  defp ollama_model, do: Keyword.get(config(), :model) || "qwen3:14b"
 
   # The reasoning model for "reason freely"; falls back to the main model.
   defp ollama_reason_model, do: Keyword.get(config(), :reason_model) || ollama_model()
@@ -380,6 +380,8 @@ defmodule TragarAi.CoreAI do
     #{intents}
 
     If the question matches no intent, respond {"intent": "unknown", "entities": {}}.
+
+    /no_think
     """
   end
 
@@ -401,6 +403,8 @@ defmodule TragarAi.CoreAI do
     - If the facts indicate missing information or a not-found result, say so
       plainly and ask for what you need.
     - Reply in the customer's language if it is evident from the question.
+
+    /no_think
     """
   end
 
@@ -418,6 +422,8 @@ defmodule TragarAi.CoreAI do
       If a specific record is needed, say it must be confirmed in the system.
     - It is fine to explain, advise, translate, or reason generally.
     - Be concise. Reply in the customer's language if it is evident.
+
+    /think
     """
   end
 
