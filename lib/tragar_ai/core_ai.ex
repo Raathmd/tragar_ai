@@ -153,10 +153,15 @@ defmodule TragarAi.CoreAI do
     base = Keyword.get(cfg, :base_url)
     model = Keyword.get(cfg, :model)
 
+    reason_model = Keyword.get(cfg, :reason_model)
+
     {provider, label} =
       case mode do
         :ollama ->
-          {"Ollama", "#{model || "qwen3:30b"} · Ollama (→ stub fallback)"}
+          reason =
+            if reason_model && reason_model != model, do: " · reason: #{reason_model}", else: ""
+
+          {"Ollama", "#{model || "qwen3:30b"}#{reason} · Ollama (→ stub fallback)"}
 
         :http ->
           prov = if base && String.contains?(base, "11434"), do: "Ollama", else: "sidecar"
@@ -219,29 +224,31 @@ defmodule TragarAi.CoreAI do
       %{role: "system", content: phrase_system_prompt()},
       %{role: "user", content: phrase_user_prompt(intent, facts, context)}
     ]
-    |> ollama_generate(on_chunk)
+    |> ollama_generate(on_chunk, ollama_model())
   end
 
+  # "Reason freely" uses the (optionally separate) reasoning model — slower and
+  # deeper, only invoked when the agent toggled it on.
   defp ollama_reason(question, context, on_chunk) do
     [
       %{role: "system", content: reason_system_prompt()},
       %{role: "user", content: interpret_user_prompt(question, context)}
     ]
-    |> ollama_generate(on_chunk)
+    |> ollama_generate(on_chunk, ollama_reason_model())
   end
 
   # Stream when an on_chunk sink is given; otherwise one-shot. If streaming
   # errors mid-flight, fall back to a normal (non-stream) call so the caller
-  # still gets a real qwen answer rather than the stub.
-  defp ollama_generate(messages, on_chunk) do
+  # still gets a real model answer rather than the stub.
+  defp ollama_generate(messages, on_chunk, model) do
     result =
       if is_function(on_chunk, 1) do
-        case ollama_chat_stream(messages, on_chunk) do
+        case ollama_chat_stream(messages, on_chunk, model) do
           {:ok, _} = ok -> ok
-          {:error, _} -> ollama_chat(messages, [])
+          {:error, _} -> ollama_chat(messages, model: model)
         end
       else
-        ollama_chat(messages, [])
+        ollama_chat(messages, model: model)
       end
 
     case result do
@@ -259,7 +266,12 @@ defmodule TragarAi.CoreAI do
 
   defp ollama_chat(messages, opts) do
     body =
-      %{model: ollama_model(), messages: messages, stream: false, options: %{temperature: 0}}
+      %{
+        model: Keyword.get(opts, :model) || ollama_model(),
+        messages: messages,
+        stream: false,
+        options: %{temperature: 0}
+      }
       |> maybe_put(:format, Keyword.get(opts, :format))
 
     case Req.post(req(), url: "/api/chat", json: body) do
@@ -277,15 +289,15 @@ defmodule TragarAi.CoreAI do
 
   # Streaming chat: Ollama returns NDJSON (one JSON object per line, each with a
   # `message.content` token). We buffer across HTTP chunks, emit each token via
-  # on_chunk, and return the full accumulated text. `think: false` asks qwen3 not
-  # to emit a reasoning preamble. The `into` fun runs in THIS process, so the
+  # on_chunk, and return the full accumulated text. A thinking model streams its
+  # reasoning in a separate `message.thinking` field (which we ignore) and keeps
+  # `message.content` clean. The `into` fun runs in THIS process, so the
   # cross-chunk line buffer + accumulator live in the process dictionary.
-  defp ollama_chat_stream(messages, on_chunk) do
+  defp ollama_chat_stream(messages, on_chunk, model) do
     body = %{
-      model: ollama_model(),
+      model: model,
       messages: messages,
       stream: true,
-      think: false,
       options: %{temperature: 0}
     }
 
@@ -335,6 +347,9 @@ defmodule TragarAi.CoreAI do
   end
 
   defp ollama_model, do: Keyword.get(config(), :model) || "qwen3:30b"
+
+  # The reasoning model for "reason freely"; falls back to the main model.
+  defp ollama_reason_model, do: Keyword.get(config(), :reason_model) || ollama_model()
 
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
