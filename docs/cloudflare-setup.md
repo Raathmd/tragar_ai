@@ -28,7 +28,15 @@ manager can't reach it from a home IP either.
 ---
 
 ## 1. Hostname
-Pick `<APP_HOST>` (e.g. `app.tragar.co.za`); your domain must be on Cloudflare.
+Use the dedicated domain **`tragarai.net`** (registered just for this — no email,
+nothing else depends on it, so `tragar.co.za` is never touched). If you registered
+it through **Cloudflare Registrar** it's already on Cloudflare; otherwise add
+`tragarai.net` to a Cloudflare account and switch its nameservers (a fresh, empty
+zone → zero risk).
+
+> Management's Microsoft 365 / Entra sign-in is unaffected — Cloudflare Access
+> authenticates the person's `@tragar.co.za` work account regardless of the app's
+> domain.
 
 ## 2. Install cloudflared on the Studio
 ```bash
@@ -39,12 +47,12 @@ cloudflared tunnel login          # browser → authorize the domain
 ## 3. Create the tunnel + DNS
 ```bash
 cloudflared tunnel create tragar          # prints a UUID + writes ~/.cloudflared/<UUID>.json
-cloudflared tunnel route dns tragar <APP_HOST>
+cloudflared tunnel route dns tragar tragarai.net
 ```
 
 ## 4. Config — forward the whole host
 Copy [`cloudflared/config.yml.example`](../cloudflared/config.yml.example) to
-`~/.cloudflared/config.yml` and fill in `<UUID>` + `<APP_HOST>`.
+`~/.cloudflared/config.yml` and fill in `<UUID>` + `tragarai.net`.
 
 ## 5. Run it as a service (starts at boot)
 ```bash
@@ -62,14 +70,14 @@ portal → App registrations) and paste its **Application (client) ID**, a
 Graph `User.Read` / `email`, `openid`, `profile` permissions. Test the connection.
 
 **b. Access app for the UI** — Access → Applications → Add a **Self-hosted** app:
-- **Domain:** `<APP_HOST>` (leave path blank = whole host)
+- **Domain:** `tragarai.net` (leave path blank = whole host)
 - **Policy:** *Allow* → Include → **Emails ending in** `@tragar.co.za` (or list the
   2–5 specific addresses). Identity provider: the Entra method from (a).
 - Session duration to taste (e.g. 24h).
 
 **c. Access app for `/api` (so Freshdesk isn't challenged)** — add a **second**
 Self-hosted app, more specific so it's matched first:
-- **Domain:** `<APP_HOST>`, **Path:** `/api`
+- **Domain:** `tragarai.net`, **Path:** `/api`
 - **Policy:** *Bypass* → Include → **Everyone**. (No SSO on `/api`; it's gated by
   the WAF IP rule + the app bearer instead.)
 
@@ -78,7 +86,7 @@ else requires an `@tragar.co.za` Entra login.
 
 ## 7. WAF rule — `/api` only from Freshworks IPs
 Security → WAF → Custom rules → Create:
-- **Expression:** `(http.host eq "<APP_HOST>") and starts_with(http.request.uri.path, "/api") and not (ip.src in $freshworks)`
+- **Expression:** `(http.host eq "tragarai.net") and starts_with(http.request.uri.path, "/api") and not (ip.src in $freshworks)`
 - **Action:** **Block**
 
 Create a Cloudflare **IP List** named `freshworks` with your region's CIDRs + the
@@ -102,7 +110,7 @@ two globals.
 
 ## 8. App env (`/Users/tragarai/apps/tragar_ai/.env.prod`)
 ```dotenv
-PHX_HOST=<APP_HOST>                            # canonical host; allows the LiveView socket origin
+PHX_HOST=tragarai.net                            # canonical host; allows the LiveView socket origin
 TRAGAR_API_KEY=<bearer secret>                 # openssl rand -hex 32
 TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip   # app reads the real client IP from Cloudflare
 TRAGAR_API_ALLOWED_IPS=<Freshworks CIDRs>      # belt-and-braces for /api; WAF is primary
@@ -113,16 +121,16 @@ Restart: `launchctl kickstart -k gui/$(id -u)/com.tragar.tragar_ai`
 HTTP and allowed as socket origins.)
 
 ## 9. Freshdesk automation
-Trigger Webhook → `https://<APP_HOST>/api/tickets/answer`, header
+Trigger Webhook → `https://tragarai.net/api/tickets/answer`, header
 `Authorization: Bearer <TRAGAR_API_KEY>`.
 
 ## Verify
 ```bash
 # Management UI: opening it in a browser redirects to Microsoft sign-in, then loads.
-open https://<APP_HOST>/
+open https://tragarai.net/
 
 # /api from a non-Freshworks IP → blocked at the WAF (403)
-curl -i https://<APP_HOST>/api/tickets/answer
+curl -i https://tragarai.net/api/tickets/answer
 ```
 
 ## Testing variant (throwaway, no DNS/WAF/Access)
