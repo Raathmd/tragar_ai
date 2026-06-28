@@ -147,3 +147,5 @@ Nightly `pg_dump` via cron on the Studio:
 0 2 * * * /opt/homebrew/opt/postgresql@17/bin/pg_dump tragar_ai_prod \
   | gzip > ~/backups/tragar_$(date +\%F).sql.gz
 ```
+
+<!-- ci: end-to-end native deploy smoke test (2026-06-28T10:21:26Z) -->
