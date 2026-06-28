@@ -34,6 +34,20 @@ AI phrases), and posts the drafted answer onto the ticket as a **private note**
 Both `/mcp` and `/api/*` run through the same `:api` pipeline, so all the gates
 below apply to either.
 
+## Tokens — there are two, in opposite directions
+
+| Token | Who creates it | Who sends it | Used for |
+|---|---|---|---|
+| `TRAGAR_API_KEY` | **You** (`openssl rand -hex 32`) | Freshdesk → app, as `Authorization: Bearer …` on the webhook | gate the inbound `/api` call |
+| `FRESHDESK_API_KEY` | **Freshdesk** (agent → Profile → "Your API Key") | app → Freshdesk | read the ticket + post the answer note |
+
+- **`TRAGAR_API_KEY`** is yours — mint it, set it in `.env.prod`, **and** put the same
+  value in the Freshdesk automation's webhook as a custom header
+  `Authorization: Bearer <TRAGAR_API_KEY>`. If it's unset, `/api` is open (dev only).
+- **`FRESHDESK_API_KEY`** comes from Freshdesk (your agent's API key) + set
+  `FRESHDESK_DOMAIN` (the subdomain, e.g. `tragar` for `tragar.freshdesk.com`).
+  Without these the app can't read the ticket or post the reply.
+
 ## Security gates
 
 | Gate | Question | Mechanism |
