@@ -1,0 +1,17 @@
+# Cloudflare Tunnel config for the Studio. ONE public hostname (tragarai.net)
+# serves both the management UI and the Freshdesk API; Cloudflare Access + WAF
+# split them by path at the edge (see docs/cloudflare-setup.md). Copy to
+# ~/.cloudflared/config.yml and fill in <UUID> (printed by `cloudflared tunnel create`).
+
+tunnel: <UUID>
+credentials-file: /Users/tragarai/.cloudflared/<UUID>.json
+
+ingress:
+  # Forward the whole host to the app; the edge (Access + WAF) does the gating:
+  #   /api/*  → Access Bypass + WAF (Freshworks IPs only) + app bearer   (Freshdesk)
+  #   /*      → Access Allow @tragar.co.za via Microsoft Entra SSO       (management UI)
+  - hostname: tragarai.net
+    service: http://localhost:4000
+
+  # Any other host → not exposed.
+  - service: http_status:404
