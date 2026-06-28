@@ -65,9 +65,9 @@ defmodule TragarAi.QuoteIntake.Flow do
 
   @doc """
   Machine-readable description of the quote workflow — the steps, parameters and
-  actions a caller (e.g. Freddy on Freshdesk) needs to take a customer through
-  creating a quote. `allowed_values` is injected per step (e.g. live service
-  types) by the caller.
+  actions a caller (e.g. the Freshdesk automation) needs to take a customer
+  through creating a quote. `allowed_values` is injected per step (e.g. live
+  service types) by the caller.
   """
   def workflow(opts \\ []) do
     allowed = Keyword.get(opts, :allowed_values, %{})

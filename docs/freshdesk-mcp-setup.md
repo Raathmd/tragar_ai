@@ -3,7 +3,7 @@
 The quote workflow is exposed two ways, both behind the same gates:
 
 - **Ticket auto-answer** (Freshdesk automation → us): **`POST /api/tickets/answer`** — send a created ticket's content; Tragar AI interprets it, fetches the facts via the read tools, composes an answer, and posts it back as a private note for the agent.
-- **MCP** (for Freddy, optional/disabled for now): **`POST /mcp`** (JSON-RPC 2.0) — tools `quote_workflow`, `quote_intake`.
+- **MCP** (for an MCP client, optional): **`POST /mcp`** (JSON-RPC 2.0) — tools `quote_workflow`, `quote_intake`.
 - **REST** (optional/internal): `GET /api/quotes/workflow`, `POST /api/quotes/intake`
 
 ## Ticket auto-answer (the active inbound flow)
@@ -44,7 +44,7 @@ request body — it's derived from the verified requester.
 ## Environment
 
 ```
-TRAGAR_API_KEY=<random secret>            # the bearer Freddy sends; mint with: openssl rand -hex 32
+TRAGAR_API_KEY=<random secret>            # the bearer the Freshdesk automation sends; mint with: openssl rand -hex 32
 TRAGAR_API_ALLOWED_IPS=<csv of CIDRs>     # Freshworks egress (see below). Unset = allow all (dev only)
 TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip   # behind Cloudflare Tunnel — read real client IP from this header
 TRAGAR_API_TRUST_XFF=1                     # alternative: plain proxy/LB (reads right-most X-Forwarded-For)
@@ -72,10 +72,10 @@ CIDRs; ranges shown as `x-y` are a contiguous block (e.g. `44.206.73.232-239` =
 ## Register the MCP server in Freshdesk
 
 1. **AI Agent Studio → MCP Gateway** → add a **Remote / HTTP MCP server**.
-2. **URL:** `https://<your-domain>/mcp` (Freddy is cloud-hosted — must be a public HTTPS URL; use `ngrok http 4000` for testing).
+2. **URL:** `https://<your-domain>/mcp` (a cloud-hosted MCP client needs a public HTTPS URL; use `ngrok http 4000` for testing).
 3. **Authentication:** **Bearer Token** = `TRAGAR_API_KEY`.
-4. Save & connect — Freshworks discovers `quote_workflow` + `quote_intake`.
-5. In the Agent's workflow, call `quote_intake` with `ticket_id = {{ticket.id}}` and the customer message; post the tool's `reply` back; loop until `structuredContent.complete`.
+4. Save & connect — the client discovers `quote_workflow` + `quote_intake`.
+5. The client calls `quote_intake` with `ticket_id = {{ticket.id}}` and the customer message; posts the tool's `reply` back; loops until `structuredContent.complete`.
 
 ## Freshdesk data setup
 
@@ -86,7 +86,7 @@ CIDRs; ranges shown as `x-y` are a contiguous block (e.g. `44.206.73.232-239` =
 
 # Exposing `/api` from on-prem — firewall / DMZ spec
 
-The MCP endpoint must be reachable from Freshworks' cloud (Freddy → our MCP). Two
+The MCP endpoint must be reachable from the MCP client. Two
 ways; pick one. The app's own gates (IP allowlist → bearer → MCP session → email)
 run **behind** whichever you choose, as defense-in-depth.
 

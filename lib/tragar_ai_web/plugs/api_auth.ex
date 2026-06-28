@@ -2,9 +2,9 @@ defmodule TragarAiWeb.Plugs.ApiAuth do
   @moduledoc """
   Bearer-token auth for the inbound `/api` surface.
 
-  Freddy (the Freshdesk AI Agent) sends `Authorization: Bearer <token>` — the
-  token is configured once in Freshdesk's Action Authentication and injected on
-  every call. We compare it (constant-time) against `:api_key`.
+  The Freshdesk automation sends `Authorization: Bearer <token>` — the token is
+  configured once on the automation's webhook and sent on every call. We compare
+  it (constant-time) against `:api_key`.
 
   When `:api_key` is unset the surface is open — intended for local development
   only; production sets `TRAGAR_API_KEY` (see `config/runtime.exs`).

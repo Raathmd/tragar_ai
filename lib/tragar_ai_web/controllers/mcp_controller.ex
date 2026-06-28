@@ -1,7 +1,7 @@
 defmodule TragarAiWeb.McpController do
   @moduledoc """
   MCP (Model Context Protocol) server exposing the guided quote workflow as tools
-  Freddy can discover and call. JSON-RPC 2.0 over HTTP at the conventional
+  an MCP client can discover and call. JSON-RPC 2.0 over HTTP at the conventional
   `POST /mcp` (root path; runs through the `:api` pipeline gates).
 
   Three gates protect it:
