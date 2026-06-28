@@ -40,6 +40,12 @@ defmodule TragarAi.Assist.Interaction do
     attribute :error, :string
     attribute :agent, :string, description: "Agent who handled the interaction."
 
+    attribute :ticket_id, :string,
+      description: "Freshdesk ticket this interaction answered (nil for ad-hoc console/chat)."
+
+    attribute :duration_ms, :integer,
+      description: "Wall-clock ms for the assist loop (interpret → fetch → phrase)."
+
     timestamps()
   end
 
@@ -57,7 +63,9 @@ defmodule TragarAi.Assist.Interaction do
         :draft_answer,
         :status,
         :error,
-        :agent
+        :agent,
+        :ticket_id,
+        :duration_ms
       ]
     end
 

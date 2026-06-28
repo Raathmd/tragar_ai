@@ -21,6 +21,7 @@ defmodule TragarAi.QuoteIntake do
     resource TragarAi.QuoteIntake.Session do
       define :upsert_session, action: :upsert
       define :get_session, action: :read, get_by: [:ticket_id]
+      define :list_sessions, action: :read
     end
   end
 
