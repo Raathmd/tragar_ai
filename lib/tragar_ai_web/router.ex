@@ -26,8 +26,10 @@ defmodule TragarAiWeb.Router do
   scope "/", TragarAiWeb do
     pipe_through :browser
 
-    # Phase 1 — the support-assist agent console is the landing page (internal app).
-    live "/", ConsoleLive
+    # Integration monitor — the landing page (internal app).
+    live "/", DashboardLive
+
+    # Phase 1 — the support-assist agent console.
     live "/console", ConsoleLive
 
     # Plain chat with the local AI.

@@ -27,6 +27,12 @@ defmodule TragarAiWeb.Layouts do
     <nav class="flex items-center gap-1">
       <.link
         navigate={~p"/"}
+        class={["btn btn-sm", (@active == :dashboard && "btn-primary") || "btn-ghost"]}
+      >
+        Dashboard
+      </.link>
+      <.link
+        navigate={~p"/console"}
         class={["btn btn-sm", (@active == :console && "btn-primary") || "btn-ghost"]}
       >
         Console

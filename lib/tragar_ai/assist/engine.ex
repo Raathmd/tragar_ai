@@ -27,6 +27,9 @@ defmodule TragarAi.Assist.Engine do
   """
   @spec answer(String.t(), map()) :: {:ok, Ash.Resource.record()} | {:error, term()}
   def answer(question, context \\ %{}) when is_binary(question) do
+    # Stamp the start so every persisted interaction records its loop latency.
+    context = Map.put_new(context, :started_at, System.monotonic_time(:millisecond))
+
     case CoreAI.interpret(question, context) do
       {:ok, request} ->
         entities = merge_entities(request.entities, context)
@@ -148,17 +151,20 @@ defmodule TragarAi.Assist.Engine do
     phrase_entry =
       ai_entry("CoreAI.phrase", %{"intent" => to_string(intent)}, %{"answer" => draft}, true)
 
-    create(%{
-      question: question,
-      intent: to_string(intent),
-      entities: stringify(entities),
-      facts: facts,
-      source: source,
-      tool_log: log ++ [phrase_entry],
-      draft_answer: draft,
-      status: :drafted,
-      agent: context[:agent]
-    })
+    create(
+      %{
+        question: question,
+        intent: to_string(intent),
+        entities: stringify(entities),
+        facts: facts,
+        source: source,
+        tool_log: log ++ [phrase_entry],
+        draft_answer: draft,
+        status: :drafted,
+        agent: context[:agent]
+      },
+      context
+    )
   end
 
   # No grounded fact was produced (unmatched, or the lookup returned nothing).
@@ -192,16 +198,19 @@ defmodule TragarAi.Assist.Engine do
     entry =
       ai_entry("CoreAI.reason", %{"after" => inspect(reason)}, %{"answer" => answer}, true)
 
-    create(%{
-      question: question,
-      intent: intent && to_string(intent),
-      entities: stringify(entities),
-      source: "reasoning",
-      tool_log: log ++ [entry],
-      draft_answer: answer,
-      status: :reasoned,
-      agent: context[:agent]
-    })
+    create(
+      %{
+        question: question,
+        intent: intent && to_string(intent),
+        entities: stringify(entities),
+        source: "reasoning",
+        tool_log: log ++ [entry],
+        draft_answer: answer,
+        status: :reasoned,
+        agent: context[:agent]
+      },
+      context
+    )
   end
 
   defp reasoning?(context), do: context[:free_reasoning] == true
@@ -256,17 +265,20 @@ defmodule TragarAi.Assist.Engine do
   # ── Failure handling — always a usable, safe interaction ────────────────────
 
   defp fail(question, intent, entities, context, opts) do
-    create(%{
-      question: question,
-      intent: intent && to_string(intent),
-      entities: stringify(entities),
-      source: intent && source_name(intent),
-      tool_log: opts[:tool_log] || [],
-      draft_answer: opts[:draft],
-      status: :failed,
-      error: opts[:error],
-      agent: context[:agent]
-    })
+    create(
+      %{
+        question: question,
+        intent: intent && to_string(intent),
+        entities: stringify(entities),
+        source: intent && source_name(intent),
+        tool_log: opts[:tool_log] || [],
+        draft_answer: opts[:draft],
+        status: :failed,
+        error: opts[:error],
+        agent: context[:agent]
+      },
+      context
+    )
   end
 
   defp fetch_failure(:not_available, intent),
@@ -283,7 +295,24 @@ defmodule TragarAi.Assist.Engine do
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
 
-  defp create(attrs), do: Assist.create_interaction(attrs)
+  # Persist, stamping the ticket (for grouping on the dashboard) and the loop
+  # latency (request → response) from the context.
+  defp create(attrs, context) do
+    result =
+      attrs
+      |> Map.put(:ticket_id, context[:ticket_id])
+      |> Map.put(:duration_ms, elapsed_ms(context))
+      |> Assist.create_interaction()
+
+    # Push the live monitor; harmless when there are no subscribers.
+    with {:ok, _} <- result, do: TragarAi.Dashboard.broadcast()
+    result
+  end
+
+  defp elapsed_ms(%{started_at: t}) when is_integer(t),
+    do: System.monotonic_time(:millisecond) - t
+
+  defp elapsed_ms(_), do: nil
 
   defp source_name(nil), do: nil
 

@@ -412,7 +412,12 @@ defmodule TragarAi.QuoteIntake.Server do
     end
   end
 
-  defp upsert(attrs), do: QuoteIntake.upsert_session(attrs)
+  defp upsert(attrs) do
+    result = QuoteIntake.upsert_session(attrs)
+    # Push the live monitor; harmless when there are no subscribers.
+    with {:ok, _} <- result, do: TragarAi.Dashboard.broadcast()
+    result
+  end
 
   defp save(session, changes) do
     attrs =

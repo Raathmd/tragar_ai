@@ -41,10 +41,10 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "Support Assist"
   end
 
-  test "the root path renders the console with a link to chat", %{conn: conn} do
-    {:ok, view, html} = live(conn, ~p"/")
+  test "the console nav links to the dashboard and chat", %{conn: conn} do
+    {:ok, view, html} = live(conn, ~p"/console")
     assert html =~ "Support Assist"
-    # The nav offers proper LiveView navigation to the chat.
+    assert view |> element(~s{nav a[href="/"]}) |> has_element?()
     assert view |> element(~s{nav a[href="/chat"]}) |> has_element?()
   end
 

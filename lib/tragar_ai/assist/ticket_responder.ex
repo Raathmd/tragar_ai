@@ -24,7 +24,13 @@ defmodule TragarAi.Assist.TicketResponder do
 
     # `:accounts` enforces scope in the Engine — facts must be on the requester's
     # account, so a ticket can't pull another account's records.
-    context = %{demo: false, intent: nil, accounts: accounts, entities: entities(account)}
+    context = %{
+      demo: false,
+      intent: nil,
+      accounts: accounts,
+      entities: entities(account),
+      ticket_id: ticket_id
+    }
 
     case Engine.answer(content, context) do
       {:ok, interaction} ->
