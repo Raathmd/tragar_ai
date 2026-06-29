@@ -16,5 +16,11 @@ defmodule TragarAi.Adapters.Vantage do
     do: TragarAi.Vantage.find_trip_by_waybill(waybill)
 
   def fetch(:route, _), do: {:error, :missing_waybill}
+
+  def fetch(:vehicle_tracking, %{registration: registration}) when is_binary(registration),
+    do: TragarAi.Vantage.find_trip_by_vehicle(registration)
+
+  def fetch(:vehicle_tracking, _), do: {:error, :missing_registration}
+
   def fetch(_intent, _params), do: {:error, :not_available}
 end
