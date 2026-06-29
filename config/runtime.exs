@@ -112,7 +112,14 @@ if config_env() != :test do
     # (e.g. qwen3:30b-a3b). Falls back to CORE_AI_MODEL when unset.
     reason_model: System.get_env("CORE_AI_REASON_MODEL"),
     base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434",
-    receive_timeout: String.to_integer(System.get_env("CORE_AI_TIMEOUT_MS") || "180000")
+    receive_timeout: String.to_integer(System.get_env("CORE_AI_TIMEOUT_MS") || "180000"),
+    # Cloud fallback tier (Anthropic Claude) — used ONLY when local Ollama is
+    # unavailable AND this is enabled. Sensitive values are redacted to [[N]]
+    # tokens before the request and rehydrated before the answer is shown.
+    cloud_enabled: System.get_env("CORE_AI_CLOUD_ENABLED") == "true",
+    cloud_api_key: System.get_env("CORE_AI_CLOUD_API_KEY"),
+    cloud_model: System.get_env("CORE_AI_CLOUD_MODEL") || "claude-haiku-4-5",
+    cloud_url: System.get_env("CORE_AI_CLOUD_URL") || "https://api.anthropic.com/v1/messages"
 
   # Inbound API auth — the bearer token the Freshdesk automation must send to
   # call /api/* . We mint this; the admin stores it on the automation's webhook.

@@ -54,3 +54,5 @@ npm-debug.log
 
 # macOS
 .DS_Store
+/set-claude-api-key.sh
+/set-claude-api-key.sh.sha256
