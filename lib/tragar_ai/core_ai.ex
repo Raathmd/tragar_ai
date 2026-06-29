@@ -29,6 +29,8 @@ defmodule TragarAi.CoreAI do
 
   require Logger
 
+  alias TragarAi.CoreAI.Redact
+
   @type request :: %{intent: atom(), entities: map(), raw: String.t()}
 
   @doc "Interpret a free-form question into a structured request."
@@ -36,8 +38,9 @@ defmodule TragarAi.CoreAI do
   def interpret(question, context \\ %{}) when is_binary(question) do
     case mode() do
       :ollama ->
-        with_fallback(
-          fn -> ollama_interpret(question, context) end,
+        with_fallbacks(
+          [fn -> ollama_interpret(question, context) end] ++
+            cloud_interpret_attempts(question, context),
           fn -> {:ok, ensure_intents(__MODULE__.Stub.interpret(question, context))} end,
           "interpret"
         )
@@ -81,8 +84,9 @@ defmodule TragarAi.CoreAI do
   def phrase(intent, facts, context \\ %{}, on_chunk \\ nil) do
     case mode() do
       :ollama ->
-        with_fallback(
-          fn -> ollama_phrase(intent, facts, context, on_chunk) end,
+        with_fallbacks(
+          [fn -> ollama_phrase(intent, facts, context, on_chunk) end] ++
+            cloud_phrase_attempts(intent, facts, context, on_chunk),
           fn -> single_chunk(__MODULE__.Stub.phrase(intent, facts, context), on_chunk) end,
           "phrase"
         )
@@ -148,7 +152,107 @@ defmodule TragarAi.CoreAI do
   # when configured, slot in here ahead of the stub.)
   defp reason_attempts(question, context, on_chunk) do
     models = Enum.uniq([active_reason_model(), ollama_model()])
-    for m <- models, do: fn -> ollama_reason(question, context, on_chunk, m) end
+    local = for m <- models, do: fn -> ollama_reason(question, context, on_chunk, m) end
+    local ++ cloud_reason_attempts(question, context, on_chunk)
+  end
+
+  # ── Cloud fallback tier (Claude, redacted) ───────────────────────────────────
+  # These attempts are appended to each chain only when the cloud tier is enabled;
+  # otherwise they're an empty list (no-op). Sensitive values are redacted to
+  # [[N]] tokens before the request and rehydrated before the answer is returned.
+
+  defp cloud_interpret_attempts(question, context) do
+    if __MODULE__.Cloud.enabled?(),
+      do: [fn -> cloud_interpret(question, context) end],
+      else: []
+  end
+
+  defp cloud_phrase_attempts(intent, facts, context, on_chunk) do
+    if __MODULE__.Cloud.enabled?(),
+      do: [fn -> cloud_phrase(intent, facts, context, on_chunk) end],
+      else: []
+  end
+
+  defp cloud_reason_attempts(question, context, on_chunk) do
+    if __MODULE__.Cloud.enabled?(),
+      do: [fn -> cloud_reason(question, context, on_chunk) end],
+      else: []
+  end
+
+  defp cloud_interpret(question, context) do
+    map = redact_map(question, %{}, Map.get(context, :entities, %{}))
+
+    with {:ok, content} <-
+           cloud_chat_redacted(
+             interpret_system_prompt(),
+             interpret_user_prompt(question, context),
+             map
+           ),
+         {:ok, body} <- Jason.decode(content) do
+      requests =
+        parse_interpret(body)
+        |> Enum.map(fn {name, args} -> {name, restore_args(args, map)} end)
+
+      {:ok, finalize(requests, question)}
+    else
+      {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp cloud_phrase(intent, facts, context, on_chunk) do
+    map = redact_map(Map.get(context, :question, ""), facts, Map.get(context, :entities, %{}))
+
+    case cloud_chat_redacted(
+           phrase_system_prompt(),
+           phrase_user_prompt(intent, facts, context),
+           map
+         ) do
+      {:ok, text} -> single_chunk(Redact.restore(clean(text), map), on_chunk)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp cloud_reason(question, context, on_chunk) do
+    map = redact_map(question, %{}, Map.get(context, :entities, %{}))
+
+    case cloud_chat_redacted(
+           reason_system_prompt(),
+           interpret_user_prompt(question, context),
+           map
+         ) do
+      {:ok, text} -> single_chunk(Redact.restore(clean(text), map), on_chunk)
+      {:error, _} = err -> err
+    end
+  end
+
+  # Build the user prompt with REAL values, then redact the whole thing — so any
+  # secret that landed in either the question or the encoded context/facts is
+  # tokenised before it leaves the network.
+  defp cloud_chat_redacted(system, user, map) do
+    [
+      %{role: "system", content: system <> cloud_redaction_note()},
+      %{role: "user", content: Redact.apply(user, map)}
+    ]
+    |> __MODULE__.Cloud.chat()
+  end
+
+  defp redact_map(question, facts, entities) do
+    (Redact.secrets(question, facts, entities) ++ Redact.identifiers(question))
+    |> Redact.build()
+  end
+
+  defp restore_args(args, map) when is_map(args),
+    do: Map.new(args, fn {k, v} -> {k, if(is_binary(v), do: Redact.restore(v, map), else: v)} end)
+
+  defp restore_args(args, _map), do: args
+
+  defp clean(text), do: text |> strip_think() |> String.trim()
+
+  defp cloud_redaction_note do
+    "\n\nNote: values shown as [[N]] (e.g. [[1]]) are redacted placeholders for " <>
+      "private data. Preserve every [[N]] token exactly as-is in your output — do " <>
+      "not alter, translate, drop, or invent placeholders."
   end
 
   @doc "Whether the real local model is reachable (always true in stub mode)."

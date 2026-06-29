@@ -208,4 +208,63 @@ defmodule TragarAi.CoreAIOllamaTest do
     assert info.provider == "Ollama"
     assert info.label =~ "fallback"
   end
+
+  test "cloud tier serves phrase when Ollama is down — redacted out, rehydrated back" do
+    parent = self()
+
+    Application.put_env(:tragar_ai, CoreAI,
+      mode: :ollama,
+      model: "fast",
+      base_url: "http://ollama.test",
+      # Ollama is down → the chain must fall through to the cloud tier.
+      req_options: [plug: fn conn -> Plug.Conn.send_resp(conn, 500, "down") end],
+      cloud_enabled: true,
+      cloud_api_key: "sk-ant-test",
+      cloud_url: "http://anthropic.test/v1/messages",
+      cloud_req_options: [
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(parent, {:cloud_body, body})
+          Req.Test.json(conn, %{
+            "content" => [%{"type" => "text", "text" => "Your waybill [[1]] was delivered."}]
+          })
+        end
+      ]
+    )
+
+    facts = %{"waybill_number" => "0006794936FC", "status" => "OND"}
+    {:ok, answer} = CoreAI.phrase(:load_status, facts, %{question: "Where is waybill 0006794936FC?"})
+
+    # The answer is rehydrated — real value back, no leftover token.
+    assert answer =~ "0006794936FC"
+    refute answer =~ "[[1]]"
+
+    # The payload that left for Anthropic carried only the token, never the waybill.
+    assert_received {:cloud_body, body}
+    refute body =~ "0006794936FC"
+    assert body =~ "[[1]]"
+  end
+
+  test "with the cloud flag off, an Ollama-down phrase falls to the stub (no cloud call)" do
+    parent = self()
+
+    Application.put_env(:tragar_ai, CoreAI,
+      mode: :ollama,
+      model: "fast",
+      base_url: "http://ollama.test",
+      req_options: [plug: fn conn -> Plug.Conn.send_resp(conn, 500, "down") end],
+      cloud_enabled: false,
+      cloud_api_key: "sk-ant-test",
+      cloud_url: "http://anthropic.test/v1/messages",
+      cloud_req_options: [
+        plug: fn conn ->
+          send(parent, :cloud_called)
+          Req.Test.json(conn, %{})
+        end
+      ]
+    )
+
+    assert {:ok, _} = CoreAI.phrase(:load_status, %{"status" => "OND"}, %{})
+    refute_received :cloud_called
+  end
 end
