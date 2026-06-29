@@ -432,6 +432,30 @@ defmodule TragarAiWeb.ConsoleLive do
       </form>
 
       <section
+        :if={multi_results(@interaction) != []}
+        class="rounded-lg border border-base-300 p-4 space-y-3"
+      >
+        <h3 class="text-sm font-medium">
+          Answers by source
+          <span class="text-xs text-base-content/50">
+            ({length(multi_results(@interaction))} lookups)
+          </span>
+        </h3>
+        <div :for={{source, rows} <- group_by_source(multi_results(@interaction))} class="space-y-2">
+          <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">
+            {source}
+          </div>
+          <div :for={r <- rows} class="rounded border border-base-200 p-2 space-y-1">
+            <div class="flex items-center gap-2 text-xs">
+              <span class="badge badge-xs badge-outline">{r["intent"]}</span>
+              <span :if={result_entity(r)} class="text-base-content/60">{result_entity(r)}</span>
+            </div>
+            <div class="text-sm whitespace-pre-line">{r["answer"]}</div>
+          </div>
+        </div>
+      </section>
+
+      <section
         :if={@interaction}
         id="resource-panel"
         class="rounded-lg border border-base-300 p-4 space-y-4"
@@ -736,6 +760,13 @@ defmodule TragarAiWeb.ConsoleLive do
             <div class="text-[10px] uppercase tracking-wide opacity-60">
               {if m.role == :user, do: "You", else: "Tragar AI"}
             </div>
+            <ul :if={m[:steps] not in [nil, []]} class="mb-1 space-y-0.5 text-[11px] opacity-80">
+              <li :for={s <- m.steps} class="flex items-center gap-1.5">
+                <span class={"badge badge-xs " <> step_badge(s.status)}>{step_icon(s.status)}</span>
+                <span>{s.source} · {s.intent}</span>
+                <span :if={s.entity} class="opacity-60">{s.entity}</span>
+              </li>
+            </ul>
             <%= cond do %>
               <% m.role == :user -> %>
                 {m.text}
@@ -1138,7 +1169,8 @@ defmodule TragarAiWeb.ConsoleLive do
       agent: blank_to_nil(socket.assigns.agent),
       entities: base,
       intent: frame.intent,
-      on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end
+      on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end,
+      on_event: fn event -> send(lv, {:event, id, event}) end
     }
 
     pending = %{
@@ -1148,7 +1180,8 @@ defmodule TragarAiWeb.ConsoleLive do
       stream: "",
       text: nil,
       resolved: true,
-      suggestions: []
+      suggestions: [],
+      steps: []
     }
 
     socket
@@ -1226,6 +1259,52 @@ defmodule TragarAiWeb.ConsoleLive do
 
     {:noreply, assign(socket, messages: messages)}
   end
+
+  # Live per-source progress for a multi-lookup turn (concurrent gather).
+  def handle_info({:event, id, {:source_started, intent, source, entities}}, socket) do
+    step = %{
+      key: ev_key(intent, entities),
+      intent: intent,
+      source: source,
+      entity: ev_entity(entities),
+      status: :running
+    }
+
+    {:noreply,
+     assign(socket, messages: update_steps(socket.assigns.messages, id, &upsert_step(&1, step)))}
+  end
+
+  def handle_info({:event, id, {:source_done, intent, source, entities, ok?}}, socket) do
+    key = ev_key(intent, entities)
+    status = if ok?, do: :ok, else: :fail
+
+    {:noreply,
+     assign(socket,
+       messages: update_steps(socket.assigns.messages, id, &set_step_status(&1, key, status))
+     )}
+  end
+
+  defp update_steps(messages, id, fun) do
+    Enum.map(messages, fn m ->
+      if Map.get(m, :id) == id, do: Map.put(m, :steps, fun.(Map.get(m, :steps, []))), else: m
+    end)
+  end
+
+  defp ev_key(intent, entities), do: {intent, ev_entity(entities)}
+
+  defp ev_entity(entities) when is_map(entities),
+    do: entities[:waybill] || entities[:quote] || entities[:account] || entities[:ticket_id]
+
+  defp ev_entity(_), do: nil
+
+  defp upsert_step(steps, step) do
+    if Enum.any?(steps, &(&1.key == step.key)),
+      do: Enum.map(steps, &if(&1.key == step.key, do: step, else: &1)),
+      else: steps ++ [step]
+  end
+
+  defp set_step_status(steps, key, status),
+    do: Enum.map(steps, &if(&1.key == key, do: %{&1 | status: status}, else: &1))
 
   defp replace_msg(messages, id, new_msg),
     do: Enum.map(messages, fn m -> if(Map.get(m, :id) == id, do: new_msg, else: m) end)
@@ -1440,6 +1519,26 @@ defmodule TragarAiWeb.ConsoleLive do
   defp money(nil), do: ""
   defp money(n) when is_number(n), do: "R #{:erlang.float_to_binary(n * 1.0, decimals: 2)}"
   defp money(n), do: to_string(n)
+
+  # ── Multi-lookup rendering (combined interaction with per-source results) ─────
+
+  defp multi_results(%{facts: %{"results" => rows}}) when is_list(rows), do: rows
+  defp multi_results(_), do: []
+
+  defp group_by_source(rows), do: rows |> Enum.group_by(& &1["source"]) |> Enum.to_list()
+
+  defp result_entity(r) do
+    e = r["entities"] || %{}
+    e["waybill"] || e["quote"] || e["account"] || e["ticket_id"]
+  end
+
+  defp step_badge(:ok), do: "badge-success"
+  defp step_badge(:fail), do: "badge-error"
+  defp step_badge(_), do: "badge-ghost"
+
+  defp step_icon(:ok), do: "✓"
+  defp step_icon(:fail), do: "✗"
+  defp step_icon(_), do: "…"
 
   defp reset_chat_state(socket) do
     assign(socket,

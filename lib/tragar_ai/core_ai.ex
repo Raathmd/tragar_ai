@@ -38,7 +38,7 @@ defmodule TragarAi.CoreAI do
       :ollama ->
         with_fallback(
           fn -> ollama_interpret(question, context) end,
-          fn -> {:ok, __MODULE__.Stub.interpret(question, context)} end,
+          fn -> {:ok, ensure_intents(__MODULE__.Stub.interpret(question, context))} end,
           "interpret"
         )
 
@@ -46,9 +46,30 @@ defmodule TragarAi.CoreAI do
         http_interpret(question, context)
 
       _ ->
-        {:ok, __MODULE__.Stub.interpret(question, context)}
+        {:ok, ensure_intents(__MODULE__.Stub.interpret(question, context))}
     end
   end
+
+  # The interpret backends produce one structured request per distinct lookup.
+  # `finalize/2` returns the canonical shape: a list under `:intents`, with the
+  # FIRST request's intent/entities mirrored at the top level for backward
+  # compatibility (single-intent callers and tests read `:intent`/`:entities`).
+  defp finalize(pairs, question) do
+    requests =
+      pairs
+      |> Enum.map(fn {name, args} ->
+        %{intent: constrain_intent(name), entities: atomize_entities(args)}
+      end)
+      |> Enum.uniq()
+
+    requests = if requests == [], do: [%{intent: :unknown, entities: %{}}], else: requests
+    first = hd(requests)
+    %{intent: first.intent, entities: first.entities, intents: requests, raw: question}
+  end
+
+  # Lift a single-request map (the stub) into the `:intents` list shape.
+  defp ensure_intents(%{intent: intent, entities: entities} = req),
+    do: Map.put_new(req, :intents, [%{intent: intent, entities: entities}])
 
   @doc """
   Phrase fetched facts into a clear draft answer. Pass `on_chunk` (a 1-arity fun)
@@ -236,9 +257,7 @@ defmodule TragarAi.CoreAI do
     # so there is no thinking-tag preamble to strip.
     with {:ok, content} <- ollama_chat(messages, format: "json"),
          {:ok, body} <- Jason.decode(content) do
-      {name, args} = parse_interpret(body)
-
-      {:ok, %{intent: constrain_intent(name), entities: atomize_entities(args), raw: question}}
+      {:ok, finalize(parse_interpret(body), question)}
     else
       {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
       {:error, _} = err -> err
@@ -462,13 +481,21 @@ defmodule TragarAi.CoreAI do
     courier). If the question is not in English, translate it first, then classify.
 
     Respond with ONLY a JSON object — no prose, no markdown, no code fences:
-    {"intent": "<one intent>", "entities": {"waybill": "...", "account": "...", "quote": "...", "ticket_id": "..."}}
+    {"intents": [{"intent": "<intent>", "entities": {"waybill": "...", "account": "...", "quote": "...", "ticket_id": "..."}}]}
+
+    Return ONE entry in "intents" per distinct lookup the question needs:
+    - If the customer asks several things about one reference (e.g. status AND ETA
+      AND proof of delivery for a waybill), include one entry for each.
+    - If the customer names several references (e.g. multiple waybills, or a
+      waybill and an account), include one entry for each — you MAY repeat the
+      same intent with different entities.
+    - If it is a single request, return a one-element list.
 
     Include an entity key ONLY if you actually found its value in the question.
-    Valid intents (pick exactly one):
+    Valid intents:
     #{intents}
 
-    If the question matches no intent, respond {"intent": "unknown", "entities": {}}.
+    If the question matches no intent, respond {"intents": [{"intent": "unknown", "entities": {}}]}.
 
     /no_think
     """
@@ -545,14 +572,7 @@ defmodule TragarAi.CoreAI do
 
     case Req.post(req(), url: "/interpret", json: payload) do
       {:ok, %Req.Response{status: 200, body: body}} ->
-        {name, args} = parse_interpret(body)
-
-        {:ok,
-         %{
-           intent: constrain_intent(name),
-           entities: atomize_entities(args),
-           raw: question
-         }}
+        {:ok, finalize(parse_interpret(body), question)}
 
       {:ok, %Req.Response{status: status, body: body}} ->
         {:error, {:http_error, status, body}}
@@ -562,11 +582,22 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  # Accept either a function-calling shape (`tool_call`) or a flat intent/entities.
-  defp parse_interpret(%{"tool_call" => %{"name" => name} = call}),
+  # Parse the model's reply into a LIST of `{name, args}` — one per requested
+  # lookup. Accepts a multi shape (`{"intents":[...]}` / `{"tool_calls":[...]}`)
+  # or a single object (function-calling `tool_call`, or flat intent/entities),
+  # which becomes a one-element list.
+  defp parse_interpret(%{"intents" => list}) when is_list(list), do: Enum.map(list, &parse_one/1)
+  defp parse_interpret(%{"tool_calls" => list}) when is_list(list), do: Enum.map(list, &parse_one/1)
+  defp parse_interpret(other), do: [parse_one(other)]
+
+  defp parse_one(%{"tool_call" => %{"name" => name} = call}),
     do: {name, call["arguments"] || call["entities"] || %{}}
 
-  defp parse_interpret(body), do: {body["intent"], body["entities"] || %{}}
+  defp parse_one(%{"name" => name} = call),
+    do: {name, call["arguments"] || call["entities"] || %{}}
+
+  defp parse_one(item) when is_map(item), do: {item["intent"], item["entities"] || %{}}
+  defp parse_one(_), do: {nil, %{}}
 
   # The model may only resolve to an allowed intent; anything else is :unknown.
   defp constrain_intent(name) do
