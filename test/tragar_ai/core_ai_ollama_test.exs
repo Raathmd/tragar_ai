@@ -189,6 +189,35 @@ defmodule TragarAi.CoreAIOllamaTest do
     assert {:error, :unknown_model} = CoreAI.set_reasoning("bogus")
   end
 
+  test "interpret prompt exposes capabilities grouped by source (so the model can route)" do
+    parent = self()
+
+    Application.put_env(:tragar_ai, CoreAI,
+      mode: :ollama,
+      model: "m",
+      base_url: "http://ollama.test",
+      req_options: [
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          system = Jason.decode!(body)["messages"] |> List.first() |> Map.get("content")
+          send(parent, {:system, system})
+
+          Req.Test.json(conn, %{
+            "message" => %{"content" => ~s({"intents":[{"intent":"route","entities":{"waybill":"WB1"}}]})}
+          })
+        end
+      ]
+    )
+
+    CoreAI.interpret("call vantage for WB1")
+    assert_received {:system, sys}
+    assert sys =~ "Vantage"
+    assert sys =~ "route"
+    assert sys =~ "FreightWare"
+    # The named-source routing instruction is present.
+    assert sys =~ "names a source"
+  end
+
   test "fast prompts send /no_think; reason lets the model think" do
     parent = self()
 
