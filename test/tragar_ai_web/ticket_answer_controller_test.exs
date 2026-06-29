@@ -34,6 +34,18 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
         String.contains?(conn.request_path, "/notes") ->
           Req.Test.json(conn, %{"id" => 99})
 
+        String.ends_with?(conn.request_path, "/ticket_fields") ->
+          Req.Test.json(conn, [
+            %{"name" => "subject", "label" => "Subject", "type" => "default_subject"},
+            %{
+              "name" => "cf_waybill_status",
+              "label" => "Waybill status",
+              "type" => "custom_dropdown",
+              "choices" => ["In transit", "Delivered"]
+            },
+            %{"name" => "cf_waybill_number", "label" => "Waybill number", "type" => "custom_text"}
+          ])
+
         String.contains?(conn.request_path, "/companies/") ->
           Req.Test.json(conn, %{
             "id" => 10,
@@ -64,6 +76,10 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
     assert resp["answer"] =~ "In transit"
     assert resp["account"] == "ITD02"
     assert resp["intent"] == "load_status"
+
+    # Custom ticket fields pre-filled from the retrieved facts (assignment untouched).
+    assert resp["filled_fields"]["cf_waybill_number"] == "4821"
+    assert resp["filled_fields"]["cf_waybill_status"] == "In transit"
   end
 
   test "uses the account injected in the webhook body over the FD-derived one", %{conn: conn} do

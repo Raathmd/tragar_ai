@@ -17,6 +17,12 @@ defmodule TragarAiWeb.TicketAnswerController do
   (scoped to that account), composes an answer, and (by default) posts it onto the
   ticket as a private note for the agent. The answer is also returned in the
   response.
+
+  It then **pre-fills the ticket's custom fields** from those facts where it can
+  match them confidently (validating dropdown values against the field's allowed
+  choices). It never sets the assignee/group — assignment stays a human decision.
+  Pass `"fill_fields": false` to skip pre-fill. The fields it filled are returned
+  under `filled_fields`.
   """
 
   use TragarAiWeb, :controller
@@ -32,7 +38,10 @@ defmodule TragarAiWeb.TicketAnswerController do
         # Account scope injected by the Freshdesk automation ({{ticket.company.freightware_accounts}});
         # falls back to deriving it via the Freshdesk API when absent.
         account: params["account"],
-        requester_email: params["requester_email"]
+        requester_email: params["requester_email"],
+        # Pre-fill matching custom ticket fields from the retrieved facts (never
+        # assignment). Set "fill_fields": false to skip.
+        fill_fields: truthy(params["fill_fields"], true)
       ]
 
       case TicketResponder.respond(to_string(ticket_id), content, opts) do

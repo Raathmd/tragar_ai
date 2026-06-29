@@ -97,6 +97,13 @@ should appear on the ticket, posted by **Tragar AI**.
 - You do **not** need to set up any inbound IP rules or a second webhook for the reply —
   Tragar AI posts the note back using the agent API key (Value A).
 - Nothing here changes your email, existing automations, or other tickets.
+- **Custom ticket fields get pre-filled.** Any **custom ticket field** you create
+  (Admin → Ticket fields) whose name matches data the AI looked up — e.g. *Waybill
+  status*, *Waybill number*, *Account*, *Service type*, *Consignee* — is filled in
+  automatically when a ticket comes through. For **dropdowns**, only values that
+  match one of your configured choices are filled (others are left blank). The AI
+  **never assigns the ticket** to an agent or group — a human still owns that.
+  Tell ops the exact field names if you'd like us to confirm the mapping.
 
 ## Questions for ops
 - Confirm the public URL (`https://api.tragarai.net/api/tickets/answer`) and the Bearer

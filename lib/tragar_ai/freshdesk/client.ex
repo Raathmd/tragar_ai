@@ -61,6 +61,13 @@ defmodule TragarAi.Freshdesk.Client do
   @doc "Update a ticket."
   def update_ticket(id, attrs), do: put("/tickets/#{id}", attrs)
 
+  @doc """
+  List every ticket field with its type and — for dropdowns — the allowed
+  `choices`. Used to discover which fields exist and what values they accept
+  before the assistant pre-fills them.
+  """
+  def list_ticket_fields, do: get("/ticket_fields")
+
   @doc "Add a public or private note/reply to a ticket."
   def add_note(ticket_id, attrs), do: post("/tickets/#{ticket_id}/notes", attrs)
 
