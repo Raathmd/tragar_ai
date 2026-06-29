@@ -70,13 +70,13 @@ defmodule TragarAi.Assist.Engine do
             end
 
           many ->
-            # Broad single OR multiple → expand each (per-entity capability fan-out
-            # for broad ones), gather concurrently, and harmonise per domain entity.
+            # Broad single OR multiple → expand (per-entity capability fan-out
+            # across sources), gather concurrently, harmonise per domain entity.
             Logger.info(
               "[assist] interpret #{inspect(question)} -> surface #{inspect(Enum.map(many, &{&1.intent, &1.scope}))}"
             )
 
-            process_surface(question, Enum.flat_map(many, &expand_request/1), context)
+            process_surface(question, expand_requests(many), context)
         end
 
       {:error, reason} ->
@@ -191,6 +191,35 @@ defmodule TragarAi.Assist.Engine do
 
   defp sub(intent, entities, entity, key),
     do: %{intent: intent, entities: entities, entity: entity, entity_key: key}
+
+  # Expand a SET of requests, collapsing same-entity requests into the entity's
+  # full cross-source capability group when that entity is asked about more than
+  # once OR any request for it is broad. So "status AND eta AND pod for X" (three
+  # FreightWare facets) surfaces EVERY source for X — including Vantage's route —
+  # and one source's miss never suppresses the others.
+  defp expand_requests(requests) do
+    {grouped, ungrouped} =
+      Enum.split_with(requests, fn r -> Entities.entity_for(r.entities) != nil end)
+
+    entity_subs =
+      grouped
+      |> Enum.group_by(fn r ->
+        entity = Entities.entity_for(r.entities)
+        {entity, Entities.key(entity, r.entities)}
+      end)
+      |> Enum.flat_map(fn {{entity, key}, reqs} ->
+        broad? = length(reqs) > 1 or Enum.any?(reqs, &(&1.scope == "all"))
+        entities = hd(reqs).entities
+
+        if broad? do
+          for cap <- Entities.group(entity).capabilities, do: sub(cap, entities, entity, key)
+        else
+          for r <- reqs, do: sub(r.intent, r.entities, entity, key)
+        end
+      end)
+
+    entity_subs ++ Enum.flat_map(ungrouped, &expand_request/1)
+  end
 
   # Validate the sub-lookups, gather them concurrently, harmonise the slices per
   # domain entity, phrase one answer per entity, and persist a single interaction.

@@ -44,6 +44,23 @@ defmodule TragarAi.Assist.Tools do
   @spec schema() :: [map()]
   def schema, do: read_tools() ++ change_tools()
 
+  @doc """
+  The read capability catalogue — one entry per allowed intent with its source,
+  required entities and description. Used to build the interpret prompt so the
+  model knows which source serves what (and can route a named source).
+  """
+  @spec catalog() :: [%{intent: atom(), source: String.t() | nil, required: [atom()], description: String.t()}]
+  def catalog do
+    for {intent, required} <- Validator.required() do
+      %{
+        intent: intent,
+        source: source_name(intent),
+        required: required,
+        description: Map.get(@descriptions, intent, "")
+      }
+    end
+  end
+
   defp read_tools do
     for {intent, required} <- Validator.required() do
       %{

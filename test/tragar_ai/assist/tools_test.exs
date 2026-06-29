@@ -18,6 +18,19 @@ defmodule TragarAi.Assist.ToolsTest do
     assert reads["vehicle_status"]["source"] == "FleetIT"
   end
 
+  test "catalog/0 lists every intent with its source, required entities and description" do
+    by = Map.new(Tools.catalog(), &{&1.intent, &1})
+
+    assert MapSet.new(Map.keys(by)) ==
+             MapSet.new(TragarAi.Assist.Validator.allowed_intents())
+
+    assert by[:load_status].source == "FreightWare"
+    assert by[:route].source == "Vantage"
+    assert by[:route].required == [:waybill]
+    assert by[:invoice].source == "Pastel"
+    assert by[:route].description != ""
+  end
+
   test "change actions are listed (not executed by the assistant) with source functions" do
     by_name = Map.new(Tools.schema(), &{&1["name"], &1})
     change = by_name["change_quote"]

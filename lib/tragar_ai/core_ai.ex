@@ -575,12 +575,23 @@ defmodule TragarAi.CoreAI do
   # The model picks from the validator's allowed intents (the source of truth),
   # not an open-ended set. We list each intent and the entity it requires.
   defp interpret_system_prompt do
+    # Group the capability catalogue by source so the model knows which source
+    # serves what — and can route when a source is named (e.g. "call Vantage…").
     intents =
-      TragarAi.Assist.Validator.required()
-      |> Enum.sort()
-      |> Enum.map_join("\n", fn {intent, req} ->
-        needs = if req == [], do: "", else: " — needs #{Enum.map_join(req, ", ", &to_string/1)}"
-        "  - #{intent}#{needs}"
+      TragarAi.Assist.Tools.catalog()
+      |> Enum.group_by(&(&1.source || "Other"))
+      |> Enum.sort_by(fn {source, _} -> source end)
+      |> Enum.map_join("\n", fn {source, caps} ->
+        lines =
+          caps
+          |> Enum.sort_by(& &1.intent)
+          |> Enum.map_join("\n", fn c ->
+            needs = if c.required == [], do: "", else: " — needs #{Enum.map_join(c.required, ", ", &to_string/1)}"
+            desc = if c.description == "", do: "", else: " — #{c.description}"
+            "    - #{c.intent}#{needs}#{desc}"
+          end)
+
+        "  #{source}:\n#{lines}"
       end)
 
     """
@@ -590,12 +601,15 @@ defmodule TragarAi.CoreAI do
     Respond with ONLY a JSON object — no prose, no markdown, no code fences:
     {"intents": [{"intent": "<intent>", "entities": {"waybill": "...", "account": "...", "quote": "...", "ticket_id": "..."}, "scope": "all"}]}
 
-    "scope" controls breadth for that entity:
-    - "all" (DEFAULT) — surface everything known about the entity across all sources.
-      Use this unless the customer clearly wants only one fact.
-    - "one" — the customer clearly asks for a single fact (e.g. "just the latest
-      status", "only the ETA", "the POD only"). Then only that one lookup runs.
-    When unsure, use "all".
+    "scope" controls breadth for the entity:
+    - "all" is the DEFAULT — surface EVERYTHING known about the entity across ALL
+      sources (status, tracking, live location/route, etc.). Use "all" for any
+      general question such as "where is X", "status of X", "track X", "delivery
+      status of X", "what's happening with X", or "everything about X".
+    - Use "one" ONLY when the customer explicitly limits the request to a single
+      fact with a word like "just", "only", "nothing but", or "exactly" — e.g.
+      "just the latest status", "only the ETA", "the POD only".
+    If there is no such explicit limiter word, ALWAYS use "all".
 
     Return ONE entry in "intents" per distinct lookup the question needs:
     - If the customer asks several things about one reference (e.g. status AND ETA
@@ -606,8 +620,14 @@ defmodule TragarAi.CoreAI do
     - If it is a single request, return a one-element list.
 
     Include an entity key ONLY if you actually found its value in the question.
-    Valid intents:
+
+    Capabilities, grouped by the source system that serves them:
     #{intents}
+
+    If the customer names a source system (e.g. "Vantage", "FreightWare",
+    "Pastel"), choose a capability from THAT source. For example a route/tracking
+    or vehicle question, or a request that names Vantage, should use Vantage's
+    "route" / "vehicle_tracking" — not a FreightWare capability.
 
     If the question matches no intent, respond {"intents": [{"intent": "unknown", "entities": {}}]}.
 
