@@ -93,10 +93,13 @@ defmodule TragarAi.Vantage.Normalize do
   end
 
   # The next stop still expecting arrival (carries a revised ETA).
-  defp pending_stop(trip), do: Enum.find(stops(trip), &get_in(&1, ["tripStopExecution", "revisedEta"]))
+  defp pending_stop(trip),
+    do: Enum.find(stops(trip), &get_in(&1, ["tripStopExecution", "revisedEta"]))
 
   defp next_stop_name(trip), do: pending_stop(trip) && node_ref(pending_stop(trip))
-  defp next_eta(trip), do: pending_stop(trip) && get_in(pending_stop(trip), ["tripStopExecution", "revisedEta"])
+
+  defp next_eta(trip),
+    do: pending_stop(trip) && get_in(pending_stop(trip), ["tripStopExecution", "revisedEta"])
 
   # Live position from the mobile device's last-seen GPS.
   defp location(trip) do

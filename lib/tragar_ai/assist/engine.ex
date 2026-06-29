@@ -39,7 +39,13 @@ defmodule TragarAi.Assist.Engine do
         # one-intent path; more than one runs the concurrent gather.
         requests =
           (Map.get(request, :intents) ||
-             [%{intent: request.intent, entities: request.entities, scope: Map.get(request, :scope, "one")}])
+             [
+               %{
+                 intent: request.intent,
+                 entities: request.entities,
+                 scope: Map.get(request, :scope, "one")
+               }
+             ])
           |> Enum.map(fn r ->
             %{
               intent: effective_intent(r.intent, context),
@@ -230,6 +236,7 @@ defmodule TragarAi.Assist.Engine do
     case valid do
       [] ->
         first = hd(subreqs)
+
         clarify_fail(question, first.intent, first.entities, context, primary_reason(first), [
           interpret_entry
         ])
@@ -249,7 +256,13 @@ defmodule TragarAi.Assist.Engine do
 
           _ ->
             {results, phrase_entries} = harmonize_and_phrase(question, groups, context)
-            create_surface(question, results, context, [interpret_entry | fetch_entries] ++ phrase_entries)
+
+            create_surface(
+              question,
+              results,
+              context,
+              [interpret_entry | fetch_entries] ++ phrase_entries
+            )
         end
     end
   end
@@ -267,7 +280,9 @@ defmodule TragarAi.Assist.Engine do
         merged = Harmonize.project(Enum.map(slices, &%{source: &1.source, data: &1.facts}))
         rep = hd(slices)
 
-        if is_function(on_chunk, 1), do: on_chunk.("\n\n#{entity_label(entity, key, rep.intent)}\n")
+        if is_function(on_chunk, 1),
+          do: on_chunk.("\n\n#{entity_label(entity, key, rep.intent)}\n")
+
         {:ok, answer} = CoreAI.phrase(rep.intent, merged.fields, %{question: question}, on_chunk)
 
         entry =
@@ -301,7 +316,8 @@ defmodule TragarAi.Assist.Engine do
   # One harmonised entity → a flat record (consumable like any single lookup).
   # Several → a `results` list (rendered grouped by the console).
   defp create_surface(question, results, context, tool_log) do
-    draft = results |> Enum.map(fn r -> "#{result_label(r)}\n#{r.answer}" end) |> Enum.join("\n\n")
+    draft =
+      results |> Enum.map(fn r -> "#{result_label(r)}\n#{r.answer}" end) |> Enum.join("\n\n")
 
     {facts, source} =
       case results do
@@ -326,7 +342,12 @@ defmodule TragarAi.Assist.Engine do
   end
 
   defp surface_sources(results),
-    do: results |> Enum.flat_map(& &1.sources) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.join(", ")
+    do:
+      results
+      |> Enum.flat_map(& &1.sources)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.join(", ")
 
   defp surface_result_map(r) do
     %{

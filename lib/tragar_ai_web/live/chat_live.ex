@@ -103,7 +103,11 @@ defmodule TragarAiWeb.ChatLive do
     }
 
     {:noreply,
-     update(socket, :turns, &put_turn(&1, id, fn t -> %{t | steps: upsert_step(t.steps, step)} end))}
+     update(
+       socket,
+       :turns,
+       &put_turn(&1, id, fn t -> %{t | steps: upsert_step(t.steps, step)} end)
+     )}
   end
 
   def handle_info({:event, id, {:source_done, intent, source, entities, ok?}}, socket) do

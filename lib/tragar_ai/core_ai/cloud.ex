@@ -59,9 +59,14 @@ defmodule TragarAi.CoreAI.Cloud do
         |> Req.merge(Keyword.get(cfg, :cloud_req_options, []))
 
       case Req.post(req, json: body) do
-        {:ok, %Req.Response{status: 200, body: rbody}} -> extract_text(rbody)
-        {:ok, %Req.Response{status: status, body: rbody}} -> {:error, {:http_error, status, rbody}}
-        {:error, reason} -> {:error, reason}
+        {:ok, %Req.Response{status: 200, body: rbody}} ->
+          extract_text(rbody)
+
+        {:ok, %Req.Response{status: status, body: rbody}} ->
+          {:error, {:http_error, status, rbody}}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       {:error, :no_api_key}
@@ -71,7 +76,9 @@ defmodule TragarAi.CoreAI.Cloud do
   # Anthropic wants `system` as a top-level string and `messages` as
   # user/assistant turns. We only ever build one system + one user message.
   defp split_system(messages) do
-    {system_msgs, turns} = Enum.split_with(messages, &(&1[:role] == "system" or &1["role"] == "system"))
+    {system_msgs, turns} =
+      Enum.split_with(messages, &(&1[:role] == "system" or &1["role"] == "system"))
+
     system = system_msgs |> Enum.map_join("\n\n", &content(&1))
     turns = Enum.map(turns, fn m -> %{role: m[:role] || m["role"], content: content(m)} end)
     turns = if turns == [], do: [%{role: "user", content: ""}], else: turns
