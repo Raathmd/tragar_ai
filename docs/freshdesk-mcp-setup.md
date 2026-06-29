@@ -17,14 +17,14 @@ a **Trigger Webhook** action on new tickets:
   ```json
   {"ticket_id": "{{ticket.id}}", "subject": "{{ticket.subject}}",
    "description": "{{ticket.description_text}}",
-   "account": "{{ticket.company.cf_account}}",
+   "account": "{{ticket.company.freightware_accounts}}",
    "requester_email": "{{ticket.requester.email}}", "post_reply": true}
   ```
   `account` is the scope, rendered by Freshdesk from the company's custom field
   (so the app knows the scope immediately, no extra API calls). If it's omitted,
   the app derives the account via the Freshdesk API instead.
 
-Our app then: derives the requester's account (Freshdesk Company `cf_account`),
+Our app then: derives the requester's account (Freshdesk Company `freightware_accounts`),
 runs the assist loop (Core AI interprets → read tools fetch the live fact → Core
 AI phrases), and posts the drafted answer onto the ticket as a **private note**
 (agent reviews/relays — `post_reply:false` to only return it in the response;
@@ -55,7 +55,7 @@ below apply to either.
 | IP allowlist | Is it from Freshworks' network? | `Plugs.IpAllowlist` — `TRAGAR_API_ALLOWED_IPS` |
 | Bearer token | Is it Freshworks' credential? | `Plugs.ApiAuth` — `Authorization: Bearer $TRAGAR_API_KEY` |
 | MCP session | Did it handshake? | `Mcp-Session-Id` from `initialize` (MCP only) |
-| Requester/email | Is it a real customer of that account? | account derived from the ticket's Freshdesk Company `cf_account` |
+| Requester/email | Is it a real customer of that account? | account derived from the ticket's Freshdesk Company `freightware_accounts` |
 
 A request must pass **all** of them. The account is **never** taken from the
 request body — it's derived from the verified requester.
@@ -69,7 +69,7 @@ TRAGAR_API_CLIENT_IP_HEADER=cf-connecting-ip   # behind Cloudflare Tunnel — re
 TRAGAR_API_TRUST_XFF=1                     # alternative: plain proxy/LB (reads right-most X-Forwarded-For)
 FRESHDESK_DOMAIN=<sub>                      # e.g. "tragar"  → https://tragar.freshdesk.com
 FRESHDESK_API_KEY=<freshdesk agent key>    # our app -> Freshdesk (read ticket / post reply)
-FRESHDESK_ACCOUNT_FIELD=cf_account         # Company custom field holding the account code(s)
+FRESHDESK_ACCOUNT_FIELD=freightware_accounts         # Company custom field holding the account code(s)
 DOVETAIL_BASE_URL / DOVETAIL_USERNAME / DOVETAIL_PASSWORD / DOVETAIL_STATION   # FreightWare
 ```
 
@@ -98,7 +98,7 @@ CIDRs; ranges shown as `x-y` are a contiguous block (e.g. `44.206.73.232-239` =
 
 ## Freshdesk data setup
 
-- Tag each **Company** with custom field `cf_account` = the FreightWare account code(s) (`ITD02`, or `ITD01, ITD02` for multiple — the flow then asks which).
+- Tag each **Company** with custom field `freightware_accounts` = the FreightWare account code(s) (`ITD02`, or `ITD01, ITD02` for multiple — the flow then asks which).
 - Add customer emails as **Contacts** in that Company (auto-associate by domain, or manually). A requester with no linked Company/account is refused.
 
 ---

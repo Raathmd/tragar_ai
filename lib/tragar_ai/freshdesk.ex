@@ -20,7 +20,7 @@ defmodule TragarAi.Freshdesk do
 
   # Default Company custom-field key holding the account code(s). Override with
   # `config :tragar_ai, :freshdesk_account_field, "cf_..."`.
-  @default_account_field "cf_account"
+  @default_account_field "freightware_accounts"
 
   @doc """
   The FreightWare account code(s) the ticket's requester is entitled to, read

@@ -37,7 +37,7 @@ Tragar AI ops team. None of this affects existing tickets or email.
 The assistant scopes every lookup to the customer's account, read from the Company.
 
 1. **Admin → Companies → Company fields → add a custom field** named **`Account`**
-   (text). Its internal key should be **`cf_account`** — tell ops if it ends up
+   (text). Its internal key should be **`freightware_accounts`** — tell ops if it ends up
    different.
 2. **Populate** each customer **Company** with its FreightWare **account code**
    (e.g. `ITD02`). If a company spans several accounts, comma-separate them
@@ -101,4 +101,4 @@ should appear on the ticket, posted by **Tragar AI**.
 ## Questions for ops
 - Confirm the public URL (`https://api.tragarai.net/api/tickets/answer`) and the Bearer
   token (Value B).
-- Confirm the account field key (`cf_account`) matches what they expect.
+- Confirm the account field key (`freightware_accounts`) matches what they expect.
