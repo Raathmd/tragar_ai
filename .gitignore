@@ -44,6 +44,10 @@ npm-debug.log
 # Prod/other env files hold live secrets — never commit them.
 .env.*
 
+# Local operational helper (prompts for prod credentials; not for the repo)
+/switch-freightware-prod.sh
+/switch-freightware-prod.sh.sha256
+
 # Zig build artifacts (zig/ Pastel ingestion programs)
 /zig/**/.zig-cache/
 /zig/**/zig-out/

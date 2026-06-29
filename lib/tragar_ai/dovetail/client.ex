@@ -214,24 +214,36 @@ defmodule TragarAi.Dovetail.Client do
       max_retries: 2,
       # We decode JSON ourselves (in `decode/1`) after scrubbing non-UTF-8 bytes.
       decode_body: false,
-      # The Dovetail server presents only its leaf certificate (no intermediate),
-      # and Erlang's TLS doesn't chase AIA to fetch the missing one — so default
-      # verification fails with `unknown_ca`. We verify against the OS trust store
-      # plus the bundled Sectigo intermediate, completing the chain ourselves.
-      connect_options: [
-        transport_opts: [
-          verify: :verify_peer,
-          depth: 5,
-          cacerts: ca_certs(),
-          customize_hostname_check: [
-            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-          ]
-        ]
-      ],
       headers: [{"content-type", "application/json"}, {"accept", "application/json"}]
     ]
+    |> Keyword.merge(tls_connect_options())
     |> Keyword.merge(Keyword.get(config(), :req_options, []))
     |> Req.new()
+  end
+
+  # TLS options apply ONLY to https endpoints. Passing SSL transport_opts (verify,
+  # cacerts, …) to a plain-http (TCP) connection throws :badarg, so for http we
+  # add nothing. For https: the Dovetail server presents only its leaf certificate
+  # (no intermediate) and Erlang's TLS doesn't chase AIA for the missing one — so
+  # default verification fails with `unknown_ca`. We verify against the OS trust
+  # store plus the bundled Sectigo intermediate, completing the chain ourselves.
+  defp tls_connect_options do
+    if String.starts_with?(base_url(), "https") do
+      [
+        connect_options: [
+          transport_opts: [
+            verify: :verify_peer,
+            depth: 5,
+            cacerts: ca_certs(),
+            customize_hostname_check: [
+              match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+            ]
+          ]
+        ]
+      ]
+    else
+      []
+    end
   end
 
   # OS root CAs plus the bundled Sectigo intermediate, as DER binaries — built
