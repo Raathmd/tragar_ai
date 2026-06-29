@@ -71,6 +71,11 @@ defmodule TragarAiWeb.ChatLive do
     {:noreply, update(socket, :turns, &put_turn(&1, id, fn t -> %{t | i: interaction} end))}
   end
 
+  def handle_async({:answer, id}, {:ok, {:error, reason}}, socket) do
+    Logger.error("[chat] answer returned error: #{inspect(reason)}")
+    {:noreply, update(socket, :turns, &put_turn(&1, id, fn t -> %{t | error: true} end))}
+  end
+
   def handle_async({:answer, id}, {:exit, reason}, socket) do
     Logger.error("[chat] answer crashed: #{inspect(reason)}")
     {:noreply, update(socket, :turns, &put_turn(&1, id, fn t -> %{t | error: true} end))}

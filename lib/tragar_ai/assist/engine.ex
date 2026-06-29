@@ -225,8 +225,26 @@ defmodule TragarAi.Assist.Engine do
   defp error_code(other), do: inspect(other)
 
   # In demo mode, fact-check against fixtures; otherwise the live adapters.
-  defp fetch_facts(intent, entities, %{demo: true}), do: TragarAi.Demo.fetch(intent, entities)
-  defp fetch_facts(intent, entities, _context), do: Adapters.fetch(intent, entities)
+  # A misconfigured/unreachable source (e.g. missing Dovetail credentials) raises
+  # or exits deep in an adapter/GenServer; catch it here so a single source being
+  # down degrades to a graceful "not connected" reply instead of crashing the turn.
+  defp fetch_facts(intent, entities, %{demo: true}),
+    do: safe_fetch(fn -> TragarAi.Demo.fetch(intent, entities) end, intent)
+
+  defp fetch_facts(intent, entities, _context),
+    do: safe_fetch(fn -> Adapters.fetch(intent, entities) end, intent)
+
+  defp safe_fetch(fun, intent) do
+    fun.()
+  rescue
+    e ->
+      Logger.error("[assist] source #{inspect(intent)} raised: #{Exception.message(e)}")
+      {:error, :not_available}
+  catch
+    :exit, reason ->
+      Logger.error("[assist] source #{inspect(intent)} exited: #{inspect(reason)}")
+      {:error, :not_available}
+  end
 
   # ── tool_log entries ─────────────────────────────────────────────────────────
 
