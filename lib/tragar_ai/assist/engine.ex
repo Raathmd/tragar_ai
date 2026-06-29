@@ -13,10 +13,12 @@ defmodule TragarAi.Assist.Engine do
   """
 
   alias TragarAi.Assist
+  alias TragarAi.Assist.Entities
   alias TragarAi.Assist.Scope
   alias TragarAi.Assist.Validator
   alias TragarAi.Adapters
   alias TragarAi.CoreAI
+  alias TragarAi.Harmonize
 
   require Logger
 
@@ -36,27 +38,45 @@ defmodule TragarAi.Assist.Engine do
         # carried conversation intent). A single request keeps the exact original
         # one-intent path; more than one runs the concurrent gather.
         requests =
-          (Map.get(request, :intents) || [%{intent: request.intent, entities: request.entities}])
+          (Map.get(request, :intents) ||
+             [%{intent: request.intent, entities: request.entities, scope: Map.get(request, :scope, "one")}])
           |> Enum.map(fn r ->
-            %{intent: effective_intent(r.intent, context), entities: merge_entities(r.entities, context)}
+            %{
+              intent: effective_intent(r.intent, context),
+              entities: merge_entities(r.entities, context),
+              scope: Map.get(r, :scope, "one")
+            }
           end)
           |> Enum.uniq()
 
         case requests do
           [one] ->
-            Logger.info(
-              "[assist] interpret #{inspect(question)} -> #{one.intent} #{inspect(one.entities)}"
-            )
+            if narrow?(one) do
+              # A deliberately-narrow single request keeps the exact one-intent path.
+              Logger.info(
+                "[assist] interpret #{inspect(question)} -> #{one.intent} #{inspect(one.entities)}"
+              )
 
-            log = [interpret_entry(question, one.intent, one.entities)]
-            process(question, %{intent: one.intent, entities: one.entities, raw: question}, context, log)
+              log = [interpret_entry(question, one.intent, one.entities)]
+
+              process(
+                question,
+                %{intent: one.intent, entities: one.entities, raw: question},
+                context,
+                log
+              )
+            else
+              process_surface(question, expand_request(one), context)
+            end
 
           many ->
+            # Broad single OR multiple → expand each (per-entity capability fan-out
+            # for broad ones), gather concurrently, and harmonise per domain entity.
             Logger.info(
-              "[assist] interpret #{inspect(question)} -> multi #{inspect(Enum.map(many, & &1.intent))}"
+              "[assist] interpret #{inspect(question)} -> surface #{inspect(Enum.map(many, &{&1.intent, &1.scope}))}"
             )
 
-            process_many(question, many, context)
+            process_surface(question, Enum.flat_map(many, &expand_request/1), context)
         end
 
       {:error, reason} ->
@@ -144,15 +164,43 @@ defmodule TragarAi.Assist.Engine do
   # results are a list, not keyed by intent.
   @gather_timeout 60_000
 
-  defp process_many(question, requests, context) do
-    interpret_entry = multi_interpret_entry(question, requests)
-    valid = Enum.filter(requests, &(Validator.validate(&1) == :ok))
+  # A request is narrow (single-intent path) when the model asked for one fact or
+  # the entity has no domain capability group to fan out over.
+  defp narrow?(%{scope: scope, entities: entities}),
+    do: scope == "one" or is_nil(Entities.entity_for(entities))
+
+  # Expand a request into the concrete sub-lookups to gather. Broad + grouped →
+  # one sub-request per capability in the entity's group; otherwise the single
+  # lookup. Each sub-request is tagged with its domain entity + reference key so
+  # the gathered slices can be grouped and harmonised per entity.
+  defp expand_request(%{intent: intent, entities: entities, scope: scope}) do
+    case Entities.entity_for(entities) do
+      nil ->
+        [sub(intent, entities, nil, to_string(intent))]
+
+      entity ->
+        key = Entities.key(entity, entities)
+
+        if scope == "one" do
+          [sub(intent, entities, entity, key)]
+        else
+          for cap <- Entities.group(entity).capabilities, do: sub(cap, entities, entity, key)
+        end
+    end
+  end
+
+  defp sub(intent, entities, entity, key),
+    do: %{intent: intent, entities: entities, entity: entity, entity_key: key}
+
+  # Validate the sub-lookups, gather them concurrently, harmonise the slices per
+  # domain entity, phrase one answer per entity, and persist a single interaction.
+  defp process_surface(question, subreqs, context) do
+    interpret_entry = multi_interpret_entry(question, subreqs)
+    valid = Enum.filter(subreqs, &(Validator.validate(&1) == :ok))
 
     case valid do
       [] ->
-        # Nothing validatable — defer to the single-intent terminal handling for
-        # the primary request (clarify / reason-freely), unchanged behaviour.
-        first = hd(requests)
+        first = hd(subreqs)
         clarify_fail(question, first.intent, first.entities, context, primary_reason(first), [
           interpret_entry
         ])
@@ -171,11 +219,101 @@ defmodule TragarAi.Assist.Engine do
             )
 
           _ ->
-            {answered, phrase_entries} = phrase_groups(question, groups, context)
-            create_combined(question, answered, context, [interpret_entry | fetch_entries] ++ phrase_entries)
+            {results, phrase_entries} = harmonize_and_phrase(question, groups, context)
+            create_surface(question, results, context, [interpret_entry | fetch_entries] ++ phrase_entries)
         end
     end
   end
+
+  # Group the gathered slices by domain entity (first-seen order), harmonise each
+  # group into one record (Harmonize.project — first-writer-wins by source
+  # priority), and phrase one cohesive answer per entity.
+  defp harmonize_and_phrase(question, groups, context) do
+    on_chunk = context[:on_chunk]
+    keys = groups |> Enum.map(&{&1.entity, &1.entity_key}) |> Enum.uniq()
+
+    {results, entries} =
+      Enum.map_reduce(keys, [], fn {entity, key}, acc ->
+        slices = Enum.filter(groups, &(&1.entity == entity and &1.entity_key == key))
+        merged = Harmonize.project(Enum.map(slices, &%{source: &1.source, data: &1.facts}))
+        rep = hd(slices)
+
+        if is_function(on_chunk, 1), do: on_chunk.("\n\n#{entity_label(entity, key, rep.intent)}\n")
+        {:ok, answer} = CoreAI.phrase(rep.intent, merged.fields, %{question: question}, on_chunk)
+
+        entry =
+          ai_entry(
+            "CoreAI.phrase",
+            %{
+              "entity" => to_string(entity),
+              "key" => to_string(key),
+              "sources" => Enum.join(merged.sources, ", ")
+            },
+            %{"answer" => answer},
+            true
+          )
+
+        result = %{
+          entity: entity,
+          entity_key: key,
+          intent: rep.intent,
+          entities: rep.entities,
+          sources: merged.sources,
+          fields: merged.fields,
+          answer: answer
+        }
+
+        {result, [entry | acc]}
+      end)
+
+    {results, Enum.reverse(entries)}
+  end
+
+  # One harmonised entity → a flat record (consumable like any single lookup).
+  # Several → a `results` list (rendered grouped by the console).
+  defp create_surface(question, results, context, tool_log) do
+    draft = results |> Enum.map(fn r -> "#{result_label(r)}\n#{r.answer}" end) |> Enum.join("\n\n")
+
+    {facts, source} =
+      case results do
+        [one] -> {one.fields, Enum.join(one.sources, ", ")}
+        many -> {%{"results" => Enum.map(many, &surface_result_map/1)}, surface_sources(many)}
+      end
+
+    create(
+      %{
+        question: question,
+        intent: results |> Enum.map(&to_string(&1.intent)) |> Enum.uniq() |> Enum.join(", "),
+        entities: results |> Enum.flat_map(&Map.to_list(&1.entities)) |> Map.new() |> stringify(),
+        facts: facts,
+        source: source,
+        tool_log: tool_log,
+        draft_answer: draft,
+        status: :drafted,
+        agent: context[:agent]
+      },
+      context
+    )
+  end
+
+  defp surface_sources(results),
+    do: results |> Enum.flat_map(& &1.sources) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.join(", ")
+
+  defp surface_result_map(r) do
+    %{
+      "intent" => to_string(r.intent),
+      "source" => Enum.join(r.sources, ", "),
+      "sources" => r.sources,
+      "entities" => stringify(r.entities),
+      "facts" => r.fields,
+      "answer" => r.answer
+    }
+  end
+
+  defp entity_label(nil, key, intent), do: "#{intent} (#{key})"
+  defp entity_label(entity, key, _intent), do: "#{entity} #{key}"
+
+  defp result_label(r), do: entity_label(r.entity, r.entity_key, r.intent)
 
   # Concurrent fan-out. Each task emits {:source_started,…} / {:source_done,…} via
   # the optional `on_event` sink, so a live UI can show a per-source checklist as
@@ -210,63 +348,17 @@ defmodule TragarAi.Assist.Engine do
 
     groups =
       for {r, src, {:ok, facts}} <- triples, not out_of_scope?(facts, context) do
-        %{intent: r.intent, source: src, entities: r.entities, facts: facts}
+        %{
+          intent: r.intent,
+          source: src,
+          entities: r.entities,
+          entity: Map.get(r, :entity),
+          entity_key: Map.get(r, :entity_key),
+          facts: facts
+        }
       end
 
     {groups, fetch_entries}
-  end
-
-  # Phrase each group in turn (sequential so the streamed answer stays coherent),
-  # emitting a labelled header before each one so the combined answer is grouped.
-  defp phrase_groups(question, groups, context) do
-    on_chunk = context[:on_chunk]
-
-    {answered, entries} =
-      Enum.map_reduce(groups, [], fn g, acc ->
-        if is_function(on_chunk, 1), do: on_chunk.(group_header(g))
-        {:ok, answer} = CoreAI.phrase(g.intent, g.facts, %{question: question}, on_chunk)
-
-        entry =
-          ai_entry(
-            "CoreAI.phrase",
-            %{"intent" => to_string(g.intent), "source" => g.source, "entities" => stringify(g.entities)},
-            %{"answer" => answer},
-            true
-          )
-
-        {Map.put(g, :answer, answer), [entry | acc]}
-      end)
-
-    {answered, Enum.reverse(entries)}
-  end
-
-  defp create_combined(question, groups, context, tool_log) do
-    draft = groups |> Enum.map(fn g -> "#{group_label(g)}\n#{g.answer}" end) |> Enum.join("\n\n")
-
-    create(
-      %{
-        question: question,
-        intent: groups |> Enum.map(&to_string(&1.intent)) |> Enum.uniq() |> Enum.join(", "),
-        entities: groups |> Enum.flat_map(&Map.to_list(&1.entities)) |> Map.new() |> stringify(),
-        facts: %{"results" => Enum.map(groups, &result_map/1)},
-        source: groups |> Enum.map(& &1.source) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.join(", "),
-        tool_log: tool_log,
-        draft_answer: draft,
-        status: :drafted,
-        agent: context[:agent]
-      },
-      context
-    )
-  end
-
-  defp result_map(g) do
-    %{
-      "intent" => to_string(g.intent),
-      "source" => g.source,
-      "entities" => stringify(g.entities),
-      "facts" => g.facts,
-      "answer" => g.answer
-    }
   end
 
   defp multi_interpret_entry(question, requests) do
@@ -282,22 +374,6 @@ defmodule TragarAi.Assist.Engine do
       true
     )
   end
-
-  # A short "Source · intent (entity)" label for grouping the combined answer.
-  defp group_header(g), do: "\n\n#{group_label(g)}\n"
-
-  defp group_label(g) do
-    base = "#{g.source || "Source"} · #{g.intent}"
-    case primary_entity_value(g.entities) do
-      nil -> base
-      v -> "#{base} (#{v})"
-    end
-  end
-
-  defp primary_entity_value(entities) when is_map(entities),
-    do: entities[:waybill] || entities[:quote] || entities[:account] || entities[:ticket_id]
-
-  defp primary_entity_value(_), do: nil
 
   defp ok_result?({:ok, facts}, context), do: not out_of_scope?(facts, context)
   defp ok_result?(_, _), do: false
