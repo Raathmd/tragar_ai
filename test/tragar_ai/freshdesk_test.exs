@@ -8,7 +8,7 @@ defmodule TragarAi.FreshdeskTest do
     def get_ticket(_id), do: {:ok, %{"id" => 1, "company_id" => 10}}
 
     def get_company(10),
-      do: {:ok, %{"id" => 10, "custom_fields" => %{"cf_account" => "ITD01, ITD02"}}}
+      do: {:ok, %{"id" => 10, "custom_fields" => %{"freightware_accounts" => "ITD01, ITD02"}}}
 
     def add_note(_ticket_id, attrs) do
       if pid = Process.get(:notes), do: Agent.update(pid, &[attrs | &1])

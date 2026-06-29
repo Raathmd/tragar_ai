@@ -52,7 +52,7 @@ defmodule TragarAi.Assist.TicketResponder do
   end
 
   # Scope = the account(s) the request is allowed to read. Prefer the account the
-  # Freshdesk automation injected in the webhook (`{{ticket.company.cf_account}}`,
+  # Freshdesk automation injected in the webhook (`{{ticket.company.freightware_accounts}}`,
   # rendered by Freshdesk, behind the bearer + IP gates) for speed; fall back to
   # deriving it via the Freshdesk API when the body doesn't carry one.
   defp accounts_for(ticket_id, opts, fd) do

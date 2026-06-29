@@ -6,7 +6,7 @@ defmodule TragarAiWeb.TicketAnswerController do
 
       {"ticket_id": "55", "subject": "Where is my delivery?",
        "description": "Tracking 0006794936FC",
-       "account": "{{ticket.company.cf_account}}",
+       "account": "{{ticket.company.freightware_accounts}}",
        "requester_email": "{{ticket.requester.email}}", "post_reply": true}
 
   `account` is the scope, injected by the Freshdesk automation from the company's
@@ -29,7 +29,7 @@ defmodule TragarAiWeb.TicketAnswerController do
       opts = [
         post_reply: truthy(params["post_reply"], true),
         private: truthy(params["private"], true),
-        # Account scope injected by the Freshdesk automation ({{ticket.company.cf_account}});
+        # Account scope injected by the Freshdesk automation ({{ticket.company.freightware_accounts}});
         # falls back to deriving it via the Freshdesk API when absent.
         account: params["account"],
         requester_email: params["requester_email"]
