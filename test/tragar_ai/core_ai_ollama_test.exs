@@ -55,10 +55,11 @@ defmodule TragarAi.CoreAIOllamaTest do
              CoreAI.interpret("status and eta of WB1, and where is WB2?")
 
     # One entry per lookup — the same intent may repeat with different entities.
+    # No "scope" in the JSON → defaults to "one".
     assert intents == [
-             %{intent: :load_status, entities: %{waybill: "WB1"}},
-             %{intent: :eta, entities: %{waybill: "WB1"}},
-             %{intent: :load_status, entities: %{waybill: "WB2"}}
+             %{intent: :load_status, entities: %{waybill: "WB1"}, scope: "one"},
+             %{intent: :eta, entities: %{waybill: "WB1"}, scope: "one"},
+             %{intent: :load_status, entities: %{waybill: "WB2"}, scope: "one"}
            ]
   end
 
@@ -72,7 +73,20 @@ defmodule TragarAi.CoreAIOllamaTest do
     assert {:ok, %{intent: :load_status, entities: %{waybill: "WB1"}, intents: [one]}} =
              CoreAI.interpret("where is WB1?")
 
-    assert one == %{intent: :load_status, entities: %{waybill: "WB1"}}
+    assert one == %{intent: :load_status, entities: %{waybill: "WB1"}, scope: "one"}
+  end
+
+  test "interpret carries an explicit scope=all for a broad request" do
+    configure(fn conn ->
+      Req.Test.json(conn, %{
+        "message" => %{
+          "content" => ~s({"intents":[{"intent":"load_status","entities":{"waybill":"WB1"},"scope":"all"}]})
+        }
+      })
+    end)
+
+    assert {:ok, %{scope: "all", intents: [%{scope: "all"}]}} =
+             CoreAI.interpret("tell me everything about WB1")
   end
 
   test "an intent qwen invents that we don't allow collapses to :unknown" do

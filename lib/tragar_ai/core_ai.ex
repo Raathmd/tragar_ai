@@ -57,22 +57,25 @@ defmodule TragarAi.CoreAI do
   # `finalize/2` returns the canonical shape: a list under `:intents`, with the
   # FIRST request's intent/entities mirrored at the top level for backward
   # compatibility (single-intent callers and tests read `:intent`/`:entities`).
-  defp finalize(pairs, question) do
+  defp finalize(triples, question) do
     requests =
-      pairs
-      |> Enum.map(fn {name, args} ->
-        %{intent: constrain_intent(name), entities: atomize_entities(args)}
+      triples
+      |> Enum.map(fn {name, args, scope} ->
+        %{intent: constrain_intent(name), entities: atomize_entities(args), scope: scope}
       end)
       |> Enum.uniq()
 
-    requests = if requests == [], do: [%{intent: :unknown, entities: %{}}], else: requests
+    requests = if requests == [], do: [%{intent: :unknown, entities: %{}, scope: "one"}], else: requests
     first = hd(requests)
-    %{intent: first.intent, entities: first.entities, intents: requests, raw: question}
+    %{intent: first.intent, entities: first.entities, scope: first.scope, intents: requests, raw: question}
   end
 
   # Lift a single-request map (the stub) into the `:intents` list shape.
-  defp ensure_intents(%{intent: intent, entities: entities} = req),
-    do: Map.put_new(req, :intents, [%{intent: intent, entities: entities}])
+  defp ensure_intents(%{intent: intent, entities: entities} = req) do
+    req
+    |> Map.put_new(:scope, "one")
+    |> Map.put_new(:intents, [%{intent: intent, entities: entities, scope: "one"}])
+  end
 
   @doc """
   Phrase fetched facts into a clear draft answer. Pass `on_chunk` (a 1-arity fun)
@@ -585,7 +588,14 @@ defmodule TragarAi.CoreAI do
     courier). If the question is not in English, translate it first, then classify.
 
     Respond with ONLY a JSON object — no prose, no markdown, no code fences:
-    {"intents": [{"intent": "<intent>", "entities": {"waybill": "...", "account": "...", "quote": "...", "ticket_id": "..."}}]}
+    {"intents": [{"intent": "<intent>", "entities": {"waybill": "...", "account": "...", "quote": "...", "ticket_id": "..."}, "scope": "all"}]}
+
+    "scope" controls breadth for that entity:
+    - "all" (DEFAULT) — surface everything known about the entity across all sources.
+      Use this unless the customer clearly wants only one fact.
+    - "one" — the customer clearly asks for a single fact (e.g. "just the latest
+      status", "only the ETA", "the POD only"). Then only that one lookup runs.
+    When unsure, use "all".
 
     Return ONE entry in "intents" per distinct lookup the question needs:
     - If the customer asks several things about one reference (e.g. status AND ETA
@@ -694,14 +704,20 @@ defmodule TragarAi.CoreAI do
   defp parse_interpret(%{"tool_calls" => list}) when is_list(list), do: Enum.map(list, &parse_one/1)
   defp parse_interpret(other), do: [parse_one(other)]
 
-  defp parse_one(%{"tool_call" => %{"name" => name} = call}),
-    do: {name, call["arguments"] || call["entities"] || %{}}
+  defp parse_one(%{"tool_call" => %{"name" => name} = call} = item),
+    do: {name, call["arguments"] || call["entities"] || %{}, scope_of(item)}
 
   defp parse_one(%{"name" => name} = call),
-    do: {name, call["arguments"] || call["entities"] || %{}}
+    do: {name, call["arguments"] || call["entities"] || %{}, scope_of(call)}
 
-  defp parse_one(item) when is_map(item), do: {item["intent"], item["entities"] || %{}}
-  defp parse_one(_), do: {nil, %{}}
+  defp parse_one(item) when is_map(item), do: {item["intent"], item["entities"] || %{}, scope_of(item)}
+  defp parse_one(_), do: {nil, %{}, "one"}
+
+  # Breadth signal: "all" → surface every facet of the entity; "one" → just this
+  # capability. Code default is "one" (safe); the system prompt tells the model to
+  # default to "all" and only narrow for explicit single-fact asks.
+  defp scope_of(%{"scope" => s}) when s in ["all", "one"], do: s
+  defp scope_of(_), do: "one"
 
   # The model may only resolve to an allowed intent; anything else is :unknown.
   defp constrain_intent(name) do
