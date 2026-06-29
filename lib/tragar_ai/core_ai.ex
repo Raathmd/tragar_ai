@@ -110,8 +110,8 @@ defmodule TragarAi.CoreAI do
   def reason(question, context \\ %{}, on_chunk \\ nil) when is_binary(question) do
     case mode() do
       :ollama ->
-        with_fallback(
-          fn -> ollama_reason(question, context, on_chunk) end,
+        with_fallbacks(
+          reason_attempts(question, context, on_chunk),
           fn -> single_chunk(__MODULE__.Stub.reason(question), on_chunk) end,
           "reason"
         )
@@ -119,6 +119,15 @@ defmodule TragarAi.CoreAI do
       _ ->
         single_chunk(__MODULE__.Stub.reason(question), on_chunk)
     end
+  end
+
+  # Reason fallback chain: the deep reason model first (thinking on), then the
+  # fast local model, before ever using the stub — so a flaky/unavailable 30B
+  # degrades to the 14B's answer, not a canned rule-based reply. (Cloud models,
+  # when configured, slot in here ahead of the stub.)
+  defp reason_attempts(question, context, on_chunk) do
+    models = Enum.uniq([active_reason_model(), ollama_model()])
+    for m <- models, do: fn -> ollama_reason(question, context, on_chunk, m) end
   end
 
   @doc "Whether the real local model is reachable (always true in stub mode)."
@@ -187,6 +196,28 @@ defmodule TragarAi.CoreAI do
     end
   end
 
+  # Try each attempt in order; first success wins. Only if every attempt fails do
+  # we run `final` (the deterministic stub). This gives a model→model→stub chain
+  # rather than a single primary→stub jump.
+  defp with_fallbacks(attempts, final, what) do
+    result =
+      Enum.reduce_while(attempts, {:error, :no_attempts}, fn attempt, _acc ->
+        case safe(attempt) do
+          {:ok, _} = ok ->
+            {:halt, ok}
+
+          {:error, reason} ->
+            Logger.warning("CoreAI #{what}: attempt failed (#{inspect(reason)}); trying next")
+            {:cont, {:error, reason}}
+        end
+      end)
+
+    case result do
+      {:ok, _} = ok -> ok
+      _ -> final.()
+    end
+  end
+
   defp safe(fun) do
     fun.()
   rescue
@@ -223,27 +254,31 @@ defmodule TragarAi.CoreAI do
   end
 
   # "Reason freely" uses the active reasoning model (dashboard-switchable) — slower
-  # and deeper, only invoked when the agent toggled it on.
-  defp ollama_reason(question, context, on_chunk) do
+  # and deeper, only invoked when the agent toggled it on. This is the only path
+  # that runs with thinking ON (`think: true`); the model's reasoning streams in a
+  # separate field we ignore, so the visible answer stays clean.
+  defp ollama_reason(question, context, on_chunk, model) do
     [
       %{role: "system", content: reason_system_prompt()},
       %{role: "user", content: interpret_user_prompt(question, context)}
     ]
-    |> ollama_generate(on_chunk, active_reason_model())
+    |> ollama_generate(on_chunk, model, think: true)
   end
 
   # Stream when an on_chunk sink is given; otherwise one-shot. If streaming
   # errors mid-flight, fall back to a normal (non-stream) call so the caller
   # still gets a real model answer rather than the stub.
-  defp ollama_generate(messages, on_chunk, model) do
+  defp ollama_generate(messages, on_chunk, model, opts \\ []) do
+    think = Keyword.get(opts, :think, false)
+
     result =
       if is_function(on_chunk, 1) do
-        case ollama_chat_stream(messages, on_chunk, model) do
+        case ollama_chat_stream(messages, on_chunk, model, think) do
           {:ok, _} = ok -> ok
-          {:error, _} -> ollama_chat(messages, model: model)
+          {:error, _} -> ollama_chat(messages, model: model, think: think)
         end
       else
-        ollama_chat(messages, model: model)
+        ollama_chat(messages, model: model, think: think)
       end
 
     case result do
@@ -268,6 +303,7 @@ defmodule TragarAi.CoreAI do
         options: %{temperature: 0}
       }
       |> maybe_put(:format, Keyword.get(opts, :format))
+      |> maybe_put(:think, if(Keyword.get(opts, :think), do: true))
 
     case Req.post(req(), url: "/api/chat", json: body) do
       {:ok, %Req.Response{status: 200, body: %{"message" => %{"content" => content}}}}
@@ -288,13 +324,15 @@ defmodule TragarAi.CoreAI do
   # reasoning in a separate `message.thinking` field (which we ignore) and keeps
   # `message.content` clean. The `into` fun runs in THIS process, so the
   # cross-chunk line buffer + accumulator live in the process dictionary.
-  defp ollama_chat_stream(messages, on_chunk, model) do
-    body = %{
-      model: model,
-      messages: messages,
-      stream: true,
-      options: %{temperature: 0}
-    }
+  defp ollama_chat_stream(messages, on_chunk, model, think \\ false) do
+    body =
+      %{
+        model: model,
+        messages: messages,
+        stream: true,
+        options: %{temperature: 0}
+      }
+      |> maybe_put(:think, if(think, do: true))
 
     Process.put({__MODULE__, :buf}, "")
     Process.put({__MODULE__, :acc}, "")
@@ -394,9 +432,13 @@ defmodule TragarAi.CoreAI do
     _ -> :ok
   end
 
-  # The active "reason freely" model — runtime-switchable from the dashboard;
-  # defaults to the fast main model.
-  defp active_reason_model, do: :persistent_term.get(@reason_key, nil) || ollama_model()
+  # The active "reason freely" model — runtime-switchable from the dashboard.
+  # Defaults to the configured deep reason model (CORE_AI_REASON_MODEL) when set,
+  # otherwise the fast main model.
+  defp active_reason_model,
+    do:
+      :persistent_term.get(@reason_key, nil) || Keyword.get(config(), :reason_model) ||
+        ollama_model()
 
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
@@ -432,11 +474,32 @@ defmodule TragarAi.CoreAI do
     """
   end
 
-  defp interpret_user_prompt(question, context) when context == %{},
-    do: question
+  defp interpret_user_prompt(question, context) do
+    case safe_context_json(context) do
+      nil -> question
+      json -> "Context: #{json}\nQuestion: #{question}"
+    end
+  end
 
-  defp interpret_user_prompt(question, context),
-    do: "Context: #{Jason.encode!(context)}\nQuestion: #{question}"
+  # The model only needs hint fields (entities, intent, ticket, accounts) — never
+  # internal/runtime keys, and definitely not the `on_chunk` streaming function,
+  # which isn't JSON-encodable and previously crashed interpret/reason into the
+  # rule-based stub. Drop internal keys; if anything left is still non-encodable,
+  # omit the context entirely rather than fail the model call.
+  defp safe_context_json(context) do
+    ctx = Map.drop(context, [:on_chunk, :started_at, :free_reasoning, :demo, :agent])
+
+    case map_size(ctx) do
+      0 ->
+        nil
+
+      _ ->
+        case Jason.encode(ctx) do
+          {:ok, json} -> json
+          {:error, _} -> nil
+        end
+    end
+  end
 
   defp phrase_system_prompt do
     """
