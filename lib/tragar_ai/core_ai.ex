@@ -65,9 +65,18 @@ defmodule TragarAi.CoreAI do
       end)
       |> Enum.uniq()
 
-    requests = if requests == [], do: [%{intent: :unknown, entities: %{}, scope: "one"}], else: requests
+    requests =
+      if requests == [], do: [%{intent: :unknown, entities: %{}, scope: "one"}], else: requests
+
     first = hd(requests)
-    %{intent: first.intent, entities: first.entities, scope: first.scope, intents: requests, raw: question}
+
+    %{
+      intent: first.intent,
+      entities: first.entities,
+      scope: first.scope,
+      intents: requests,
+      raw: question
+    }
   end
 
   # Lift a single-request map (the stub) into the `:intents` list shape.
@@ -586,7 +595,11 @@ defmodule TragarAi.CoreAI do
           caps
           |> Enum.sort_by(& &1.intent)
           |> Enum.map_join("\n", fn c ->
-            needs = if c.required == [], do: "", else: " — needs #{Enum.map_join(c.required, ", ", &to_string/1)}"
+            needs =
+              if c.required == [],
+                do: "",
+                else: " — needs #{Enum.map_join(c.required, ", ", &to_string/1)}"
+
             desc = if c.description == "", do: "", else: " — #{c.description}"
             "    - #{c.intent}#{needs}#{desc}"
           end)
@@ -721,7 +734,10 @@ defmodule TragarAi.CoreAI do
   # or a single object (function-calling `tool_call`, or flat intent/entities),
   # which becomes a one-element list.
   defp parse_interpret(%{"intents" => list}) when is_list(list), do: Enum.map(list, &parse_one/1)
-  defp parse_interpret(%{"tool_calls" => list}) when is_list(list), do: Enum.map(list, &parse_one/1)
+
+  defp parse_interpret(%{"tool_calls" => list}) when is_list(list),
+    do: Enum.map(list, &parse_one/1)
+
   defp parse_interpret(other), do: [parse_one(other)]
 
   defp parse_one(%{"tool_call" => %{"name" => name} = call} = item),
@@ -730,7 +746,9 @@ defmodule TragarAi.CoreAI do
   defp parse_one(%{"name" => name} = call),
     do: {name, call["arguments"] || call["entities"] || %{}, scope_of(call)}
 
-  defp parse_one(item) when is_map(item), do: {item["intent"], item["entities"] || %{}, scope_of(item)}
+  defp parse_one(item) when is_map(item),
+    do: {item["intent"], item["entities"] || %{}, scope_of(item)}
+
   defp parse_one(_), do: {nil, %{}, "one"}
 
   # Breadth signal: "all" → surface every facet of the entity; "one" → just this

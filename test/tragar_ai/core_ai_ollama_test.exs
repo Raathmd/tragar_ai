@@ -80,7 +80,8 @@ defmodule TragarAi.CoreAIOllamaTest do
     configure(fn conn ->
       Req.Test.json(conn, %{
         "message" => %{
-          "content" => ~s({"intents":[{"intent":"load_status","entities":{"waybill":"WB1"},"scope":"all"}]})
+          "content" =>
+            ~s({"intents":[{"intent":"load_status","entities":{"waybill":"WB1"},"scope":"all"}]})
         }
       })
     end)
@@ -203,7 +204,9 @@ defmodule TragarAi.CoreAIOllamaTest do
           send(parent, {:system, system})
 
           Req.Test.json(conn, %{
-            "message" => %{"content" => ~s({"intents":[{"intent":"route","entities":{"waybill":"WB1"}}]})}
+            "message" => %{
+              "content" => ~s({"intents":[{"intent":"route","entities":{"waybill":"WB1"}}]})
+            }
           })
         end
       ]
@@ -268,6 +271,7 @@ defmodule TragarAi.CoreAIOllamaTest do
         plug: fn conn ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           send(parent, {:cloud_body, body})
+
           Req.Test.json(conn, %{
             "content" => [%{"type" => "text", "text" => "Your waybill [[1]] was delivered."}]
           })
@@ -276,7 +280,9 @@ defmodule TragarAi.CoreAIOllamaTest do
     )
 
     facts = %{"waybill_number" => "0006794936FC", "status" => "OND"}
-    {:ok, answer} = CoreAI.phrase(:load_status, facts, %{question: "Where is waybill 0006794936FC?"})
+
+    {:ok, answer} =
+      CoreAI.phrase(:load_status, facts, %{question: "Where is waybill 0006794936FC?"})
 
     # The answer is rehydrated — real value back, no leftover token.
     assert answer =~ "0006794936FC"

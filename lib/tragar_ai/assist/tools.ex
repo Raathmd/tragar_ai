@@ -49,7 +49,9 @@ defmodule TragarAi.Assist.Tools do
   required entities and description. Used to build the interpret prompt so the
   model knows which source serves what (and can route a named source).
   """
-  @spec catalog() :: [%{intent: atom(), source: String.t() | nil, required: [atom()], description: String.t()}]
+  @spec catalog() :: [
+          %{intent: atom(), source: String.t() | nil, required: [atom()], description: String.t()}
+        ]
   def catalog do
     for {intent, required} <- Validator.required() do
       %{
