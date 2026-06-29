@@ -42,11 +42,11 @@ defmodule TragarAi.Vantage.Client do
   Trips created since `created_since` — a `YYYYMMDDHHmmss` datetime string.
   Returns `{:ok, trips}` (a list).
   """
-  def trips_since(created_since) when is_binary(created_since),
-    do: get("/master_trip/created_since", params: [createdSince: created_since])
+  def trips_since(created_since, page \\ 1) when is_binary(created_since),
+    do: get("/master_trip/created_since", params: [createdSince: created_since, page: page])
 
   @doc false
-  def get(path, opts \\ []) do
+  def get(path, opts \\ [], retry? \\ true) do
     with {:ok, token} <- TokenStore.token() do
       req =
         base_request()
@@ -59,8 +59,9 @@ defmodule TragarAi.Vantage.Client do
           {:ok, body}
 
         {:ok, %Req.Response{status: 401, body: body}} ->
+          # Token expired/revoked — drop it and re-authenticate once.
           TokenStore.invalidate()
-          {:error, {:unauthorized, body}}
+          if retry?, do: get(path, opts, false), else: {:error, {:unauthorized, body}}
 
         {:ok, %Req.Response{status: status, body: body}} ->
           {:error, {:http_error, status, body}}
@@ -76,8 +77,8 @@ defmodule TragarAi.Vantage.Client do
   defp token_from(%Req.Response{body: body} = resp) do
     from_body =
       is_map(body) &&
-        (body["Authentication-Token"] || body["authentication_token"] || body["authToken"] ||
-           body["token"])
+        (body["auth_token"] || body["Authentication-Token"] || body["authentication_token"] ||
+           body["authToken"] || body["token"])
 
     from_body || Req.Response.get_header(resp, "authentication-token") |> List.first()
   end
