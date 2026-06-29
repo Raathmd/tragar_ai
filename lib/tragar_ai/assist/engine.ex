@@ -32,14 +32,32 @@ defmodule TragarAi.Assist.Engine do
 
     case CoreAI.interpret(question, context) do
       {:ok, request} ->
-        entities = merge_entities(request.entities, context)
-        # Carry the conversation's intent when this turn only adds an entity.
-        intent = effective_intent(request.intent, context)
+        # The model may return several lookups; normalise each (agent entities +
+        # carried conversation intent). A single request keeps the exact original
+        # one-intent path; more than one runs the concurrent gather.
+        requests =
+          (Map.get(request, :intents) || [%{intent: request.intent, entities: request.entities}])
+          |> Enum.map(fn r ->
+            %{intent: effective_intent(r.intent, context), entities: merge_entities(r.entities, context)}
+          end)
+          |> Enum.uniq()
 
-        Logger.info("[assist] interpret #{inspect(question)} -> #{intent} #{inspect(entities)}")
+        case requests do
+          [one] ->
+            Logger.info(
+              "[assist] interpret #{inspect(question)} -> #{one.intent} #{inspect(one.entities)}"
+            )
 
-        log = [interpret_entry(question, intent, entities)]
-        process(question, %{request | intent: intent, entities: entities}, context, log)
+            log = [interpret_entry(question, one.intent, one.entities)]
+            process(question, %{intent: one.intent, entities: one.entities, raw: question}, context, log)
+
+          many ->
+            Logger.info(
+              "[assist] interpret #{inspect(question)} -> multi #{inspect(Enum.map(many, & &1.intent))}"
+            )
+
+            process_many(question, many, context)
+        end
 
       {:error, reason} ->
         Logger.warning("[assist] interpret failed: #{inspect(reason)}")
@@ -115,6 +133,186 @@ defmodule TragarAi.Assist.Engine do
           context,
           fetch_failure(reason, intent) ++ [tool_log: log ++ [fetch_entry]]
         )
+    end
+  end
+
+  # ── Multi-lookup (the model returned more than one intent) ───────────────────
+  #
+  # Validate each request, gather them CONCURRENTLY (emitting per-source progress
+  # events), phrase EACH in-scope result, and persist one combined interaction.
+  # Multiple lookups of the same source are kept (e.g. several waybills), since
+  # results are a list, not keyed by intent.
+  @gather_timeout 60_000
+
+  defp process_many(question, requests, context) do
+    interpret_entry = multi_interpret_entry(question, requests)
+    valid = Enum.filter(requests, &(Validator.validate(&1) == :ok))
+
+    case valid do
+      [] ->
+        # Nothing validatable — defer to the single-intent terminal handling for
+        # the primary request (clarify / reason-freely), unchanged behaviour.
+        first = hd(requests)
+        clarify_fail(question, first.intent, first.entities, context, primary_reason(first), [
+          interpret_entry
+        ])
+
+      _ ->
+        {groups, fetch_entries} = gather(valid, context)
+
+        case groups do
+          [] ->
+            first = hd(valid)
+
+            fail(question, first.intent, first.entities, context,
+              error: "no_facts",
+              draft: "I couldn't retrieve those details right now — please try again shortly.",
+              tool_log: [interpret_entry | fetch_entries]
+            )
+
+          _ ->
+            {answered, phrase_entries} = phrase_groups(question, groups, context)
+            create_combined(question, answered, context, [interpret_entry | fetch_entries] ++ phrase_entries)
+        end
+    end
+  end
+
+  # Concurrent fan-out. Each task emits {:source_started,…} / {:source_done,…} via
+  # the optional `on_event` sink, so a live UI can show a per-source checklist as
+  # lookups return. Returns the in-scope {:ok} results as groups, plus a tool_log
+  # fetch entry for every attempt (ok/error) for the audit trail.
+  defp gather(requests, context) do
+    emit = event_sink(context)
+
+    triples =
+      requests
+      |> Task.async_stream(
+        fn r ->
+          src = source_name(r.intent)
+          emit.({:source_started, r.intent, src, r.entities})
+          result = fetch_facts(r.intent, r.entities, context)
+          emit.({:source_done, r.intent, src, r.entities, ok_result?(result, context)})
+          {r, src, result}
+        end,
+        max_concurrency: max(length(requests), 1),
+        ordered: true,
+        timeout: @gather_timeout,
+        on_timeout: :kill_task
+      )
+      |> Enum.zip(requests)
+      |> Enum.map(fn
+        {{:ok, triple}, _r} -> triple
+        {{:exit, _reason}, r} -> {r, source_name(r.intent), {:error, :not_available}}
+      end)
+
+    fetch_entries =
+      Enum.map(triples, fn {r, src, result} -> fetch_entry(src, r.intent, r.entities, result) end)
+
+    groups =
+      for {r, src, {:ok, facts}} <- triples, not out_of_scope?(facts, context) do
+        %{intent: r.intent, source: src, entities: r.entities, facts: facts}
+      end
+
+    {groups, fetch_entries}
+  end
+
+  # Phrase each group in turn (sequential so the streamed answer stays coherent),
+  # emitting a labelled header before each one so the combined answer is grouped.
+  defp phrase_groups(question, groups, context) do
+    on_chunk = context[:on_chunk]
+
+    {answered, entries} =
+      Enum.map_reduce(groups, [], fn g, acc ->
+        if is_function(on_chunk, 1), do: on_chunk.(group_header(g))
+        {:ok, answer} = CoreAI.phrase(g.intent, g.facts, %{question: question}, on_chunk)
+
+        entry =
+          ai_entry(
+            "CoreAI.phrase",
+            %{"intent" => to_string(g.intent), "source" => g.source, "entities" => stringify(g.entities)},
+            %{"answer" => answer},
+            true
+          )
+
+        {Map.put(g, :answer, answer), [entry | acc]}
+      end)
+
+    {answered, Enum.reverse(entries)}
+  end
+
+  defp create_combined(question, groups, context, tool_log) do
+    draft = groups |> Enum.map(fn g -> "#{group_label(g)}\n#{g.answer}" end) |> Enum.join("\n\n")
+
+    create(
+      %{
+        question: question,
+        intent: groups |> Enum.map(&to_string(&1.intent)) |> Enum.uniq() |> Enum.join(", "),
+        entities: groups |> Enum.flat_map(&Map.to_list(&1.entities)) |> Map.new() |> stringify(),
+        facts: %{"results" => Enum.map(groups, &result_map/1)},
+        source: groups |> Enum.map(& &1.source) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.join(", "),
+        tool_log: tool_log,
+        draft_answer: draft,
+        status: :drafted,
+        agent: context[:agent]
+      },
+      context
+    )
+  end
+
+  defp result_map(g) do
+    %{
+      "intent" => to_string(g.intent),
+      "source" => g.source,
+      "entities" => stringify(g.entities),
+      "facts" => g.facts,
+      "answer" => g.answer
+    }
+  end
+
+  defp multi_interpret_entry(question, requests) do
+    ai_entry(
+      "CoreAI.interpret",
+      %{"question" => question},
+      %{
+        "intents" =>
+          Enum.map(requests, fn r ->
+            %{"intent" => to_string(r.intent), "entities" => stringify(r.entities)}
+          end)
+      },
+      true
+    )
+  end
+
+  # A short "Source · intent (entity)" label for grouping the combined answer.
+  defp group_header(g), do: "\n\n#{group_label(g)}\n"
+
+  defp group_label(g) do
+    base = "#{g.source || "Source"} · #{g.intent}"
+    case primary_entity_value(g.entities) do
+      nil -> base
+      v -> "#{base} (#{v})"
+    end
+  end
+
+  defp primary_entity_value(entities) when is_map(entities),
+    do: entities[:waybill] || entities[:quote] || entities[:account] || entities[:ticket_id]
+
+  defp primary_entity_value(_), do: nil
+
+  defp ok_result?({:ok, facts}, context), do: not out_of_scope?(facts, context)
+  defp ok_result?(_, _), do: false
+
+  defp event_sink(context) do
+    case context[:on_event] do
+      f when is_function(f, 1) -> f
+      _ -> fn _ -> :ok end
+    end
+  end
+
+  defp primary_reason(request) do
+    case Validator.validate(request) do
+      {:error, reason} -> reason
+      :ok -> :not_understood
     end
   end
 

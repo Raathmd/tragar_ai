@@ -51,8 +51,13 @@ defmodule TragarAiWeb.ChatLive do
         id = socket.assigns.next_id
         free = socket.assigns.free_reasoning
         lv = self()
-        turn = %{id: id, prompt: text, i: nil, error: false, stream: ""}
-        context = %{free_reasoning: free, on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end}
+        turn = %{id: id, prompt: text, i: nil, error: false, stream: "", steps: []}
+
+        context = %{
+          free_reasoning: free,
+          on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end,
+          on_event: fn event -> send(lv, {:event, id, event}) end
+        }
 
         socket =
           socket
@@ -86,6 +91,48 @@ defmodule TragarAiWeb.ChatLive do
     {:noreply,
      update(socket, :turns, &put_turn(&1, id, fn t -> %{t | stream: t.stream <> chunk} end))}
   end
+
+  # Live per-source progress for a multi-lookup turn (concurrent gather).
+  def handle_info({:event, id, {:source_started, intent, source, entities}}, socket) do
+    step = %{
+      key: step_key(intent, entities),
+      intent: intent,
+      source: source,
+      entity: entity_label(entities),
+      status: :running
+    }
+
+    {:noreply,
+     update(socket, :turns, &put_turn(&1, id, fn t -> %{t | steps: upsert_step(t.steps, step)} end))}
+  end
+
+  def handle_info({:event, id, {:source_done, intent, source, entities, ok?}}, socket) do
+    status = if ok?, do: :ok, else: :fail
+    key = step_key(intent, entities)
+
+    {:noreply,
+     update(
+       socket,
+       :turns,
+       &put_turn(&1, id, fn t -> %{t | steps: set_step_status(t.steps, key, status)} end)
+     )}
+  end
+
+  defp step_key(intent, entities), do: {intent, entity_label(entities)}
+
+  defp entity_label(entities) when is_map(entities),
+    do: entities[:waybill] || entities[:quote] || entities[:account] || entities[:ticket_id]
+
+  defp entity_label(_), do: nil
+
+  defp upsert_step(steps, step) do
+    if Enum.any?(steps, &(&1.key == step.key)),
+      do: Enum.map(steps, &if(&1.key == step.key, do: step, else: &1)),
+      else: steps ++ [step]
+  end
+
+  defp set_step_status(steps, key, status),
+    do: Enum.map(steps, &if(&1.key == key, do: %{&1 | status: status}, else: &1))
 
   defp put_turn(turns, id, fun),
     do: Enum.map(turns, fn t -> if(t.id == id, do: fun.(t), else: t) end)
@@ -149,6 +196,16 @@ defmodule TragarAiWeb.ChatLive do
           </div>
 
           <div class="chat chat-start">
+            <ul
+              :if={turn.steps != []}
+              class="mb-1 w-full max-w-sm space-y-0.5 text-[11px] opacity-80"
+            >
+              <li :for={s <- turn.steps} class="flex items-center gap-1.5">
+                <span class={"badge badge-xs " <> step_badge(s.status)}>{step_icon(s.status)}</span>
+                <span>{s.source} · {s.intent}</span>
+                <span :if={s.entity} class="opacity-60">{s.entity}</span>
+              </li>
+            </ul>
             <%= cond do %>
               <% turn.i -> %>
                 <div class="chat-bubble whitespace-pre-line">{turn.i.draft_answer}</div>
@@ -219,6 +276,14 @@ defmodule TragarAiWeb.ChatLive do
     </script>
     """
   end
+
+  defp step_badge(:ok), do: "badge-success"
+  defp step_badge(:fail), do: "badge-error"
+  defp step_badge(_), do: "badge-ghost"
+
+  defp step_icon(:ok), do: "✓"
+  defp step_icon(:fail), do: "✗"
+  defp step_icon(_), do: "…"
 
   defp status_class(:drafted), do: "badge-success"
   defp status_class(:relayed), do: "badge-success"

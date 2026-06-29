@@ -41,6 +41,40 @@ defmodule TragarAi.CoreAIOllamaTest do
     assert entities == %{waybill: "WB1"}
   end
 
+  test "interpret returns multiple lookups when the model splits the question" do
+    configure(fn conn ->
+      Req.Test.json(conn, %{
+        "message" => %{
+          "content" =>
+            ~s({"intents":[{"intent":"load_status","entities":{"waybill":"WB1"}},{"intent":"eta","entities":{"waybill":"WB1"}},{"intent":"load_status","entities":{"waybill":"WB2"}}]})
+        }
+      })
+    end)
+
+    assert {:ok, %{intents: intents, intent: :load_status, entities: %{waybill: "WB1"}}} =
+             CoreAI.interpret("status and eta of WB1, and where is WB2?")
+
+    # One entry per lookup — the same intent may repeat with different entities.
+    assert intents == [
+             %{intent: :load_status, entities: %{waybill: "WB1"}},
+             %{intent: :eta, entities: %{waybill: "WB1"}},
+             %{intent: :load_status, entities: %{waybill: "WB2"}}
+           ]
+  end
+
+  test "a single-object interpret reply still yields a one-element intents list" do
+    configure(fn conn ->
+      Req.Test.json(conn, %{
+        "message" => %{"content" => ~s({"intent":"load_status","entities":{"waybill":"WB1"}})}
+      })
+    end)
+
+    assert {:ok, %{intent: :load_status, entities: %{waybill: "WB1"}, intents: [one]}} =
+             CoreAI.interpret("where is WB1?")
+
+    assert one == %{intent: :load_status, entities: %{waybill: "WB1"}}
+  end
+
   test "an intent qwen invents that we don't allow collapses to :unknown" do
     configure(fn conn ->
       Req.Test.json(conn, %{
@@ -118,22 +152,24 @@ defmodule TragarAi.CoreAIOllamaTest do
       ]
     )
 
-    # Default: reason uses the fast (main) model; phrase always does.
+    # Default: with a deep reason_model configured, reason uses it (long-running,
+    # thinking on); phrase always uses the fast model.
     CoreAI.reason("q")
-    assert_received {:req, "fast-model", _}
+    assert_received {:req, "deep-model", _}
     CoreAI.phrase(:load_status, %{"status" => "OND"})
     assert_received {:req, "fast-model", _}
 
-    # Switch to deep → reason now uses the deep model.
-    assert :ok = CoreAI.set_reasoning("deep-model")
-    CoreAI.reason("q")
-    assert_received {:req, "deep-model", _}
-
-    # Switch back to fast → fires an immediate unload (keep_alive: 0) of the deep model.
+    # Switch to fast → reason now uses the fast model; fires an immediate unload
+    # (keep_alive: 0) of the deep model.
     assert :ok = CoreAI.set_reasoning("fast-model")
     assert_received {:req, "deep-model", 0}
     CoreAI.reason("q")
     assert_received {:req, "fast-model", _}
+
+    # Switch back to deep → reason uses the deep model again.
+    assert :ok = CoreAI.set_reasoning("deep-model")
+    CoreAI.reason("q")
+    assert_received {:req, "deep-model", _}
 
     # An unknown model is rejected.
     assert {:error, :unknown_model} = CoreAI.set_reasoning("bogus")
