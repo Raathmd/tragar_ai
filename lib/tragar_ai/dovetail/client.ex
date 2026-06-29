@@ -214,10 +214,54 @@ defmodule TragarAi.Dovetail.Client do
       max_retries: 2,
       # We decode JSON ourselves (in `decode/1`) after scrubbing non-UTF-8 bytes.
       decode_body: false,
+      # The Dovetail server presents only its leaf certificate (no intermediate),
+      # and Erlang's TLS doesn't chase AIA to fetch the missing one — so default
+      # verification fails with `unknown_ca`. We verify against the OS trust store
+      # plus the bundled Sectigo intermediate, completing the chain ourselves.
+      connect_options: [
+        transport_opts: [
+          verify: :verify_peer,
+          depth: 5,
+          cacerts: ca_certs(),
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ]
+      ],
       headers: [{"content-type", "application/json"}, {"accept", "application/json"}]
     ]
     |> Keyword.merge(Keyword.get(config(), :req_options, []))
     |> Req.new()
+  end
+
+  # OS root CAs plus the bundled Sectigo intermediate, as DER binaries — built
+  # once and cached (decoding ~160 roots on every request would be wasteful).
+  defp ca_certs do
+    case :persistent_term.get({__MODULE__, :cacerts}, nil) do
+      nil ->
+        certs = build_ca_certs()
+        :persistent_term.put({__MODULE__, :cacerts}, certs)
+        certs
+
+      certs ->
+        certs
+    end
+  end
+
+  defp build_ca_certs do
+    os_roots = Enum.map(:public_key.cacerts_get(), fn {:cert, der, _} -> der end)
+    os_roots ++ extra_ca_certs()
+  end
+
+  # The intermediate(s) the server omits, shipped in priv/cert and trusted so the
+  # path to a known root can be built. Missing file → no extras (verify still on).
+  defp extra_ca_certs do
+    path = Path.join(:code.priv_dir(:tragar_ai), "cert/sectigo_intermediate.pem")
+
+    case File.read(path) do
+      {:ok, pem} -> for {:Certificate, der, _} <- :public_key.pem_decode(pem), do: der
+      {:error, _} -> []
+    end
   end
 
   # FreightWare wraps request bodies in a "request" envelope. If the caller has
