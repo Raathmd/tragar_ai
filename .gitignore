@@ -47,3 +47,6 @@ npm-debug.log
 # Zig build artifacts (zig/ Pastel ingestion programs)
 /zig/**/.zig-cache/
 /zig/**/zig-out/
+
+# macOS
+.DS_Store
