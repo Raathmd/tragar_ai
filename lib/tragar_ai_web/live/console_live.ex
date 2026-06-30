@@ -1323,7 +1323,40 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  defp run_waybill_search(socket, account, status, date_from \\ nil, date_to \\ nil) do
+  # Account isn't in the FreightWare allocated-accounts directory — show a clear
+  # message in the relevant tab instead of running a query that returns nothing.
+  defp invalid_account_search(socket, account, status, "quotes") do
+    assign(socket,
+      quote_results: [],
+      quote_meta: %{account: account, status: status, error: account_error(account)},
+      right_tab: "quotes"
+    )
+  end
+
+  defp invalid_account_search(socket, account, status, _search) do
+    assign(socket,
+      search_results: [],
+      search_meta: %{account: account, status: status, error: account_error(account)},
+      right_tab: "search"
+    )
+  end
+
+  defp account_error(account),
+    do: "\"#{account}\" isn't a recognised FreightWare account."
+
+  defp run_waybill_search(socket, account, status, date_from \\ nil, date_to \\ nil)
+
+  defp run_waybill_search(socket, account, status, date_from, date_to) do
+    cond do
+      not TragarAi.Freight.Accounts.valid?(account) ->
+        invalid_account_search(socket, account, status, "search")
+
+      true ->
+        run_waybill_search!(socket, account, status, date_from, date_to)
+    end
+  end
+
+  defp run_waybill_search!(socket, account, status, date_from, date_to) do
     # A real status code filters server-side; a group (undelivered/delivered/all)
     # fetches the window and filters client-side.
     code = if status in Statuses.waybill_codes(), do: status, else: nil
@@ -1409,7 +1442,19 @@ defmodule TragarAiWeb.ConsoleLive do
     end)
   end
 
-  defp run_quote_search(socket, account, status, date_from \\ nil, date_to \\ nil) do
+  defp run_quote_search(socket, account, status, date_from \\ nil, date_to \\ nil)
+
+  defp run_quote_search(socket, account, status, date_from, date_to) do
+    cond do
+      not TragarAi.Freight.Accounts.valid?(account) ->
+        invalid_account_search(socket, account, status, "quotes")
+
+      true ->
+        run_quote_search!(socket, account, status, date_from, date_to)
+    end
+  end
+
+  defp run_quote_search!(socket, account, status, date_from, date_to) do
     code = if status in Enum.map(Statuses.quote(), &elem(&1, 0)), do: status, else: nil
 
     case fetch_quotes(account, code, date_from, date_to) do

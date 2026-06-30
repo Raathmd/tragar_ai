@@ -38,6 +38,9 @@ defmodule TragarAi.DataCase do
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(TragarAi.Repo, shared: not tags[:async])
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+    # The FreightWare accounts directory is a global persistent_term cache; clear
+    # it between tests (DataCase + ConnCase) so stubbed accounts can't leak across.
+    :persistent_term.erase({TragarAi.Freight.Accounts, :directory})
   end
 
   @doc """

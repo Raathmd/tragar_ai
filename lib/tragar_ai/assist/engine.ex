@@ -110,15 +110,34 @@ defmodule TragarAi.Assist.Engine do
   end
 
   defp process(question, %{intent: intent, entities: entities}, context, log) do
-    case Validator.validate(%{intent: intent, entities: entities}) do
-      :ok ->
-        fetch_and_phrase(question, intent, entities, context, log)
+    with :ok <- Validator.validate(%{intent: intent, entities: entities}),
+         :ok <- validate_account(entities) do
+      fetch_and_phrase(question, intent, entities, context, log)
+    else
+      {:error, {:unknown_account, ref}} ->
+        # The account isn't one the FreightWare user is allocated to — say so
+        # plainly instead of running a query that can only come back empty.
+        fail(question, intent, entities, context,
+          error: "unknown_account:#{ref}",
+          draft:
+            "\"#{ref}\" isn't a recognised FreightWare account. Please check the account code and try again.",
+          tool_log: log
+        )
 
       {:error, reason} ->
         # Intent/entity doesn't match Tragar — the AI prompts the user back.
         clarify_fail(question, intent, entities, context, reason, log)
     end
   end
+
+  # Validate any account reference against the FreightWare allocated-accounts
+  # directory (cached). Applies to accounts from a ticket or typed in the console/
+  # chat. Fails open if the directory is unavailable (see Freight.Accounts).
+  defp validate_account(%{account: ref}) when is_binary(ref) and ref != "" do
+    if TragarAi.Freight.Accounts.valid?(ref), do: :ok, else: {:error, {:unknown_account, ref}}
+  end
+
+  defp validate_account(_), do: :ok
 
   defp fetch_and_phrase(question, intent, entities, context, log) do
     source = source_name(intent)
