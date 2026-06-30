@@ -17,10 +17,74 @@ defmodule TragarAi.Freshdesk do
   """
 
   alias TragarAi.QuoteIntake.Server
+  alias TragarAi.Freshdesk.Client
 
   # Default Company custom-field key holding the account code(s). Override with
   # `config :tragar_ai, :freshdesk_account_field, "cf_..."`.
   @default_account_field "freightware_accounts"
+
+  # Freshdesk numeric ticket statuses.
+  @status_names %{2 => "open", 3 => "pending", 4 => "resolved", 5 => "closed"}
+
+  @doc """
+  Live ticket list for the console's left panel. `filters` may include
+  `:status` (default `"open"`; `"all"` for every status) and `:agent_id`.
+  Returns display maps, newest-first.
+  """
+  def console_tickets(filters \\ %{}) do
+    status = Map.get(filters, :status, "open")
+    agent_id = Map.get(filters, :agent_id)
+
+    with {:ok, list} when is_list(list) <-
+           Client.list_tickets(%{per_page: 100, order_by: "updated_at", order_type: "desc"}) do
+      tickets =
+        list
+        |> Enum.filter(fn t ->
+          status in [nil, "", "all"] or @status_names[t["status"]] == status
+        end)
+        |> Enum.filter(fn t -> is_nil(agent_id) or t["responder_id"] == agent_id end)
+        |> Enum.map(&ticket_summary/1)
+
+      {:ok, tickets}
+    end
+  end
+
+  @doc "Helpdesk agents as `[%{id, name}]` for the console's agent filter."
+  def agents do
+    with {:ok, list} when is_list(list) <- Client.list_agents(%{per_page: 100}) do
+      {:ok,
+       Enum.map(list, fn a ->
+         %{id: a["id"], name: get_in(a, ["contact", "name"]) || "Agent #{a["id"]}"}
+       end)}
+    end
+  end
+
+  @doc "Subject + plain-text body for a ticket, ready to distil into a prompt."
+  def ticket_text(id) do
+    with {:ok, t} <- Client.get_ticket(id) do
+      subject = t["subject"] || ""
+      body = t["description_text"] || strip_html(t["description"] || "")
+      {:ok, %{subject: subject, body: body, text: String.trim("#{subject}\n\n#{body}")}}
+    end
+  end
+
+  defp ticket_summary(t) do
+    %{
+      id: to_string(t["id"]),
+      subject: t["subject"] || "(no subject)",
+      status: @status_names[t["status"]] || to_string(t["status"]),
+      priority: t["priority"],
+      responder_id: t["responder_id"],
+      updated_at: t["updated_at"]
+    }
+  end
+
+  defp strip_html(html) do
+    html
+    |> String.replace(~r/<[^>]*>/, " ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
 
   @doc """
   The FreightWare account code(s) the ticket's requester is entitled to, read
