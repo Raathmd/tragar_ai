@@ -639,18 +639,53 @@ defmodule TragarAi.Assist.Engine do
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
 
-  # Persist, stamping the ticket (for grouping on the dashboard) and the loop
-  # latency (request → response) from the context.
+  # The PII-bearing fields fetched/produced for a turn — never persisted; carried
+  # only in the in-memory record the engine returns for this turn.
+  @transient_keys [:facts, :tool_log, :draft_answer, :final_answer]
+
+  # Persist only the slim dashboard-stats metadata (stamping the ticket for
+  # grouping and the loop latency), then return an in-memory record that also
+  # carries the transient fields for this turn's rendering / ticket draft.
   defp create(attrs, context) do
-    result =
+    attrs =
       attrs
       |> Map.put(:ticket_id, context[:ticket_id])
       |> Map.put(:duration_ms, elapsed_ms(context))
-      |> Assist.create_interaction()
 
-    # Push the live monitor; harmless when there are no subscribers.
-    with {:ok, _} <- result, do: TragarAi.Dashboard.broadcast()
-    result
+    {transient, slim} = Map.split(attrs, @transient_keys)
+
+    case Assist.create_interaction(slim) do
+      {:ok, rec} ->
+        # Push the live monitor; harmless when there are no subscribers.
+        TragarAi.Dashboard.broadcast()
+        {:ok, live_record(rec, transient)}
+
+      err ->
+        err
+    end
+  end
+
+  # The persisted slim row + the turn's transient (PII) fields, as a plain map so
+  # `record.facts` / `record.draft_answer` etc. keep working downstream.
+  defp live_record(rec, transient) do
+    %{
+      id: rec.id,
+      question: rec.question,
+      intent: rec.intent,
+      entities: rec.entities,
+      source: rec.source,
+      status: rec.status,
+      error: rec.error,
+      agent: rec.agent,
+      ticket_id: rec.ticket_id,
+      duration_ms: rec.duration_ms,
+      inserted_at: rec.inserted_at,
+      facts: %{},
+      tool_log: [],
+      draft_answer: nil,
+      final_answer: nil
+    }
+    |> Map.merge(transient)
   end
 
   defp elapsed_ms(%{started_at: t}) when is_integer(t),

@@ -1,9 +1,14 @@
 defmodule TragarAi.Assist.Interaction do
   @moduledoc """
-  A single support-assist interaction: the customer question, how the model
-  interpreted it, the live facts fetched, the drafted answer, and what the agent
-  did with it. Serves as the history shown in the console and the audit log
-  (e.g. after-hours lookups a person reviews in the morning).
+  A single support-assist interaction — the durable **dashboard-stats** record:
+  the customer question, how the model interpreted it, which source served it,
+  the outcome status and loop latency.
+
+  The fetched source data (`facts`/`tool_log`) and the rehydrated answer are
+  customer PII and are deliberately **not** persisted — they live only in the
+  in-memory record the engine returns for the active turn (console/chat render +
+  ticket draft), and are discarded after. Only the metadata below is stored, so
+  the dashboard stats survive restarts without keeping PII at rest.
   """
 
   use Ash.Resource,
@@ -22,15 +27,7 @@ defmodule TragarAi.Assist.Interaction do
     attribute :question, :string, allow_nil?: false
     attribute :intent, :string
     attribute :entities, :map, default: %{}
-    attribute :facts, :map, default: %{}
     attribute :source, :string, description: "Source system that served the fact."
-
-    attribute :tool_log, {:array, :map},
-      default: [],
-      description: "Ordered AI + source/tool calls made for this question, with their data."
-
-    attribute :draft_answer, :string
-    attribute :final_answer, :string
 
     attribute :status, :atom,
       constraints: [one_of: [:drafted, :relayed, :discarded, :failed, :reasoned]],
@@ -57,10 +54,7 @@ defmodule TragarAi.Assist.Interaction do
         :question,
         :intent,
         :entities,
-        :facts,
         :source,
-        :tool_log,
-        :draft_answer,
         :status,
         :error,
         :agent,
@@ -70,7 +64,7 @@ defmodule TragarAi.Assist.Interaction do
     end
 
     update :relay do
-      accept [:final_answer, :agent]
+      accept [:agent]
       change set_attribute(:status, :relayed)
     end
 

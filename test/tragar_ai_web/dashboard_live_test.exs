@@ -11,7 +11,6 @@ defmodule TragarAiWeb.DashboardLiveTest do
         question: "Where is waybill 4821?",
         intent: "load_status",
         source: "FreightWare",
-        draft_answer: "It's in transit.",
         status: :drafted,
         ticket_id: "T-555",
         duration_ms: 1234,
@@ -31,8 +30,7 @@ defmodule TragarAiWeb.DashboardLiveTest do
     {:ok, _} =
       Assist.create_interaction(%{
         question: "console lookup",
-        status: :drafted,
-        draft_answer: "x"
+        status: :drafted
       })
 
     {:ok, _view, html} = live(conn, ~p"/")
