@@ -28,6 +28,11 @@ FORCE="${1:-}"
 cd "$APP_DIR"
 export MIX_ENV=prod
 RELEASE_BIN="_build/prod/rel/tragar_ai/bin/tragar_ai"
+# Stamp of the commit the current release was actually built from. We compare it
+# to the deployed HEAD (not just "does a release exist") so a stale release — or
+# a dir whose HEAD was advanced out-of-band (e.g. a manual pull) — can never cause
+# a silent no-op that leaves old code serving.
+BUILT_STAMP="_build/prod/rel/tragar_ai/BUILT_COMMIT"
 
 echo "==> Updating source to origin/main"
 BEFORE="$(git rev-parse HEAD 2>/dev/null || echo none)"
@@ -35,18 +40,21 @@ git fetch --prune origin
 git checkout main
 git reset --hard origin/main
 AFTER="$(git rev-parse HEAD)"
+BUILT="$( [ -f "$BUILT_STAMP" ] && cat "$BUILT_STAMP" || echo none )"
 
-# Nothing new and a release already exists → no work to do.
-if [ "$FORCE" != "--full" ] && [ "$BEFORE" = "$AFTER" ] && [ -x "$RELEASE_BIN" ]; then
-  echo "==> Already at $AFTER with a built release; nothing to deploy."
+# Skip ONLY when the existing release was built from exactly the target commit.
+if [ "$FORCE" != "--full" ] && [ -x "$RELEASE_BIN" ] && [ "$BUILT" = "$AFTER" ]; then
+  echo "==> Release already built from $AFTER; nothing to deploy."
   exit 0
 fi
 
-# What changed between the old and new HEAD? (Everything, on first build / --full.)
-if [ "$FORCE" = "--full" ] || [ "$BEFORE" = "none" ] || [ ! -x "$RELEASE_BIN" ]; then
+# What changed since the release was last built? (Everything, on first build /
+# --full / unknown baseline.) Using BUILT (not BEFORE) means a no-op'd or
+# out-of-band HEAD can't hide migration/asset changes from the diff.
+if [ "$FORCE" = "--full" ] || [ "$BUILT" = "none" ] || [ ! -x "$RELEASE_BIN" ]; then
   CHANGED="__ALL__"
 else
-  CHANGED="$(git diff --name-only "$BEFORE" "$AFTER")"
+  CHANGED="$(git diff --name-only "$BUILT" "$AFTER")"
 fi
 changed() { [ "$CHANGED" = "__ALL__" ] || grep -qE "$1" <<<"$CHANGED"; }
 
@@ -72,6 +80,10 @@ fi
 # only changed modules recompile.
 echo "==> Building release (incremental compile)"
 mix release --overwrite
+
+# Record the commit this release was built from, so the next run's skip check is
+# accurate even if the dir HEAD is later advanced out-of-band.
+echo "$AFTER" > "$BUILT_STAMP"
 
 # Migrations: only when a migration file was added/changed.
 if changed '^priv/repo/migrations/'; then
