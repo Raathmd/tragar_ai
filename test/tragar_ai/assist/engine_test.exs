@@ -90,13 +90,29 @@ defmodule TragarAi.Assist.EngineTest do
     assert i.draft_answer =~ "couldn't find that reference in Tragar"
   end
 
-  test "relay marks the interaction relayed" do
+  test "relay marks the interaction relayed (engine returns an in-memory record)" do
     {:ok, i} = Engine.answer("Where is load 4821?")
 
-    assert {:ok, relayed} =
-             Assist.relay_interaction(i, %{final_answer: "Your load is in transit."})
-
+    # The engine's return is the live, in-memory record (a plain map) carrying the
+    # turn's transient PII fields; relay reloads the slim row by id and updates it.
+    assert i.facts["status"] == "In transit"
+    assert {:ok, relayed} = Assist.relay_interaction(i, %{agent: "thandi"})
     assert relayed.status == :relayed
-    assert relayed.final_answer == "Your load is in transit."
+    assert relayed.agent == "thandi"
+  end
+
+  test "facts and tool_log are not persisted (ephemeral) — only the slim row is" do
+    {:ok, i} = Engine.answer("Where is load 4821?")
+
+    # The returned record carries the heavy fields for the turn...
+    assert i.facts != %{}
+    assert i.tool_log != []
+
+    # ...but the persisted row has no such columns (PII not at rest).
+    {:ok, stored} = Assist.get_interaction(i.id)
+    refute Map.has_key?(stored, :facts)
+    refute Map.has_key?(stored, :tool_log)
+    assert stored.question =~ "4821"
+    assert stored.status == :drafted
   end
 end
