@@ -21,8 +21,6 @@ defmodule TragarAi.Dovetail.Client do
   Configure via `config/runtime.exs` under `TragarAi.Dovetail.Client`.
   """
 
-  require Logger
-
   @api_path "/FreightWare/V2"
   @auth_header "x-freightware"
 

@@ -459,7 +459,7 @@ defmodule TragarAi.CoreAI do
   # reasoning in a separate `message.thinking` field (which we ignore) and keeps
   # `message.content` clean. The `into` fun runs in THIS process, so the
   # cross-chunk line buffer + accumulator live in the process dictionary.
-  defp ollama_chat_stream(messages, on_chunk, model, think \\ false) do
+  defp ollama_chat_stream(messages, on_chunk, model, think) do
     body =
       %{
         model: model,

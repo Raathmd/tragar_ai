@@ -456,7 +456,7 @@ defmodule TragarAiWeb.ConsoleLive do
       </section>
 
       <section
-        :if={@interaction}
+        :if={present?(@interaction)}
         id="resource-panel"
         class="rounded-lg border border-base-300 p-4 space-y-4"
       >
@@ -1274,7 +1274,7 @@ defmodule TragarAiWeb.ConsoleLive do
      assign(socket, messages: update_steps(socket.assigns.messages, id, &upsert_step(&1, step)))}
   end
 
-  def handle_info({:event, id, {:source_done, intent, source, entities, ok?}}, socket) do
+  def handle_info({:event, id, {:source_done, intent, _source, entities, ok?}}, socket) do
     key = ev_key(intent, entities)
     status = if ok?, do: :ok, else: :fail
 
@@ -1524,6 +1524,10 @@ defmodule TragarAiWeb.ConsoleLive do
 
   defp multi_results(%{facts: %{"results" => rows}}) when is_list(rows), do: rows
   defp multi_results(_), do: []
+
+  # Nil-guard via a function call so the type-checker doesn't constant-fold the
+  # `:if` (the assign starts as nil, so the runtime guard is required).
+  defp present?(v), do: not is_nil(v)
 
   defp group_by_source(rows), do: rows |> Enum.group_by(& &1["source"]) |> Enum.to_list()
 

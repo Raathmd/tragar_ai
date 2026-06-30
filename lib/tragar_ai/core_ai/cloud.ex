@@ -13,8 +13,6 @@ defmodule TragarAi.CoreAI.Cloud do
   emitted, so no partial token can leak an un-rehydrated placeholder.
   """
 
-  require Logger
-
   @anthropic_version "2023-06-01"
 
   defp config, do: Application.get_env(:tragar_ai, TragarAi.CoreAI, [])
