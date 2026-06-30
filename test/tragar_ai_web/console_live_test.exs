@@ -7,6 +7,7 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
 
+    # FreightWare (Dovetail) — waybill 4821 lookups for the ask/relay flow.
     Req.Test.stub(TragarAi.Dovetail.Client, fn conn ->
       cond do
         String.ends_with?(conn.request_path, "/system/auth/login") ->
@@ -15,9 +16,7 @@ defmodule TragarAiWeb.ConsoleLiveTest do
           |> Req.Test.json(%{"response" => %{}})
 
         String.contains?(conn.request_path, "/trackAndTrace") ->
-          Req.Test.json(conn, %{
-            "response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}
-          })
+          Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
 
         String.contains?(conn.request_path, "/waybills/4821") ->
           Req.Test.json(conn, %{
@@ -33,17 +32,42 @@ defmodule TragarAiWeb.ConsoleLiveTest do
       end
     end)
 
+    # Freshdesk — the left-panel ticket list, agent filter, and ticket fetch.
+    Req.Test.stub(TragarAi.Freshdesk.Client, fn conn ->
+      cond do
+        String.ends_with?(conn.request_path, "/agents") ->
+          Req.Test.json(conn, [%{"id" => 1, "contact" => %{"name" => "Thandi"}}])
+
+        String.ends_with?(conn.request_path, "/tickets/55") ->
+          Req.Test.json(conn, %{
+            "id" => 55,
+            "subject" => "Where is parcel 4821",
+            "description_text" => "Customer asks where waybill 4821 is."
+          })
+
+        String.ends_with?(conn.request_path, "/tickets") ->
+          Req.Test.json(conn, [
+            %{"id" => 55, "subject" => "Where is parcel 4821", "status" => 2, "responder_id" => 1}
+          ])
+
+        true ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+      end
+    end)
+
     :ok
   end
 
-  test "renders the console", %{conn: conn} do
+  test "renders the console with the Freshdesk ticket panel", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/console")
     assert html =~ "Support Assist"
+    assert html =~ "Freshdesk tickets"
+    # The open ticket from the stub is listed.
+    assert html =~ "Where is parcel 4821"
   end
 
   test "the console nav links to the dashboard and chat", %{conn: conn} do
-    {:ok, view, html} = live(conn, ~p"/console")
-    assert html =~ "Support Assist"
+    {:ok, view, _html} = live(conn, ~p"/console")
     assert view |> element(~s{nav a[href="/"]}) |> has_element?()
     assert view |> element(~s{nav a[href="/chat"]}) |> has_element?()
   end
@@ -57,7 +81,6 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "In transit"
     assert html =~ "FreightWare"
 
-    # Query mode shows details only; reveal the reply box (the agent writes it).
     view |> element("button", "Write a reply") |> render_click()
 
     html =
@@ -68,102 +91,14 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "relayed"
   end
 
-  test "a general query resolves the customer name to an account (demo)", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/console")
-
-    view
-    |> form("form[phx-submit=ask]", %{question: "Does Acme have an open invoice?", demo: "true"})
-    |> render_submit()
-
-    html = render_async(view, 5000)
-    assert html =~ "INV-55012"
-    assert html =~ "Outstanding"
-  end
-
-  test "customer lookup by invoice number resolves the account (demo)", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/console")
-
-    html =
-      view
-      |> form("form[phx-submit=ask]", %{
-        question: "Who is the customer on INV-55012?",
-        demo: "true"
-      })
-      |> render_submit()
-
-    assert render_async(view, 5000) =~ "Acme Distributors"
-  end
-
-  test "an unrecognized query offers grounded, clickable suggestions", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/console")
-
-    view
-    |> form("form[phx-submit=ask]", %{question: "What's the weather like?", demo: "true"})
-    |> render_submit()
-
-    html = render_async(view, 5000)
-    assert html =~ "match that to anything in Tragar"
-    assert html =~ "Track a waybill"
-
-    # Clicking a suggestion runs that query and resolves it.
-    view |> element("button", "Track a waybill") |> render_click()
-    assert render_async(view, 5000) =~ "In transit"
-  end
-
-  test "a clarifying chat resolves the intent across turns", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/console")
-
-    # Turn 1: invoice intent but no account → the AI asks back.
-    view
-    |> form("form[phx-submit=ask]", %{question: "Is there an invoice?", demo: "true"})
-    |> render_submit()
-
-    assert render_async(view, 5000) =~ "account number"
-
-    # Turn 2: supply the account → the carried intent now resolves.
-    view
-    |> form("form[phx-submit=ask]", %{question: "ACC1001", demo: "true"})
-    |> render_submit()
-
-    assert render_async(view, 5000) =~ "INV-55012"
-  end
-
-  test "a waybill-search query lists account-scoped waybills in the Search tab", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/console")
-
-    html =
-      view
-      |> form("form[phx-submit=ask]", %{
-        question: "show me undelivered waybills for ACC1001",
-        demo: "true"
-      })
-      |> render_submit()
-
-    # 1 undelivered (4821) of 2 total (4990 is delivered) — account-scoped.
-    assert html =~ "1 of 2"
-    assert html =~ "account-scoped"
-  end
-
-  test "a quote-search query lists account-scoped quotes in the Quotes tab", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/console")
-
-    html =
-      view
-      |> form("form[phx-submit=ask]", %{question: "show me quotes for ACC1001", demo: "true"})
-      |> render_submit()
-
-    assert html =~ "1 of 1"
-    assert html =~ "7012"
-  end
-
-  test "selecting a ticket and drafting a reply enters reply mode", %{conn: conn} do
-    TragarAi.Demo.seed()
+  test "clicking a ticket distils it into a pre-filled prompt", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
     view |> element(~s|button[phx-value-id="55"]|) |> render_click()
-    view |> element("button", "Draft reply") |> render_click()
+    html = render_async(view, 5000)
 
-    # Reply mode shows the relay form for the customer email (after the async loop).
-    assert render_async(view, 5000) =~ "Relay to customer"
+    # Stub CoreAI distils to the first line of the ticket (subject); it lands in
+    # the prompt textarea for the agent to edit and submit.
+    assert html =~ "Where is parcel 4821"
   end
 end

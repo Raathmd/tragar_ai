@@ -82,6 +82,9 @@ defmodule TragarAi.Freshdesk.Client do
   def list_companies(params \\ %{}), do: get("/companies", params: params)
   def get_company(id), do: get("/companies/#{id}")
 
+  @doc "List helpdesk agents (used to populate the console's agent filter)."
+  def list_agents(params \\ %{}), do: get("/agents", params: params)
+
   @doc "Lightweight connectivity probe against the account's settings endpoint."
   @spec health() :: :ok | {:error, term()}
   def health do

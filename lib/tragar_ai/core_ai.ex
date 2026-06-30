@@ -158,6 +158,67 @@ defmodule TragarAi.CoreAI do
     end
   end
 
+  @doc """
+  Distil a raw support ticket (subject + body, often with email noise, quoted
+  history, signatures) into ONE concise, specific query for the assist loop.
+  Returns `{:ok, query}`. Uses the fast local model; falls back to the subject
+  line when the model is unavailable, so the console always pre-fills something.
+  """
+  def distil(text) when is_binary(text) do
+    case mode() do
+      :ollama ->
+        with_fallback(
+          fn -> ollama_distil(text) end,
+          fn -> {:ok, fallback_distil(text)} end,
+          "distil"
+        )
+
+      _ ->
+        {:ok, fallback_distil(text)}
+    end
+  end
+
+  defp ollama_distil(text) do
+    messages = [
+      %{role: "system", content: distil_system_prompt()},
+      %{role: "user", content: String.slice(text, 0, 6000)}
+    ]
+
+    case ollama_chat(messages, model: ollama_model()) do
+      {:ok, content} -> {:ok, content |> strip_think() |> String.trim() |> dequote()}
+      err -> err
+    end
+  end
+
+  # First non-blank line of the ticket, as a safe deterministic fallback.
+  defp fallback_distil(text) do
+    text
+    |> String.split("\n", trim: true)
+    |> Enum.find("", &(String.trim(&1) != ""))
+    |> String.slice(0, 200)
+    |> String.trim()
+  end
+
+  defp dequote(s), do: String.trim(s, "\"")
+
+  defp distil_system_prompt do
+    """
+    You turn a customer support ticket (subject + body) into ONE concise, specific
+    question for an internal South African courier assistant that looks up
+    waybills, accounts, quotes, tickets and vehicles.
+
+    Rules:
+    - Output ONLY the question — no preamble, quotes, or explanation.
+    - Preserve concrete references exactly (waybill/order number, account,
+      registration, quote number).
+    - If the ticket asks several things, capture the main request in one sentence.
+    - Ignore email signatures, disclaimers, and quoted history.
+    - If unsure, restate the subject as a question.
+
+    /no_think
+    """
+  end
+
   # Reason fallback chain: the deep reason model first (thinking on), then the
   # fast local model, before ever using the stub — so a flaky/unavailable 30B
   # degrades to the 14B's answer, not a canned rule-based reply. (Cloud models,

@@ -23,9 +23,8 @@ defmodule TragarAi.Assist.Engine do
   require Logger
 
   @doc """
-  Run the loop for a question. `context` may carry `:agent`, `:entities`
-  (structured fields the agent supplied), and `:demo` (fetch from fixtures).
-  Always returns `{:ok, interaction}`.
+  Run the loop for a question. `context` may carry `:agent` and `:entities`
+  (structured fields the agent supplied). Always returns `{:ok, interaction}`.
   """
   @spec answer(String.t(), map()) :: {:ok, Ash.Resource.record()} | {:error, term()}
   def answer(question, context \\ %{}) when is_binary(question) do
@@ -548,13 +547,10 @@ defmodule TragarAi.Assist.Engine do
   defp error_code({:unknown_intent, intent}), do: "unknown_intent:#{intent}"
   defp error_code(other), do: inspect(other)
 
-  # In demo mode, fact-check against fixtures; otherwise the live adapters.
-  # A misconfigured/unreachable source (e.g. missing Dovetail credentials) raises
-  # or exits deep in an adapter/GenServer; catch it here so a single source being
-  # down degrades to a graceful "not connected" reply instead of crashing the turn.
-  defp fetch_facts(intent, entities, %{demo: true}),
-    do: safe_fetch(fn -> TragarAi.Demo.fetch(intent, entities) end, intent)
-
+  # Fetch the live fact via the source adapters. A misconfigured/unreachable
+  # source (e.g. missing Dovetail credentials) raises or exits deep in an
+  # adapter/GenServer; catch it here so a single source being down degrades to a
+  # graceful "not connected" reply instead of crashing the turn.
   defp fetch_facts(intent, entities, _context),
     do: safe_fetch(fn -> Adapters.fetch(intent, entities) end, intent)
 

@@ -4,13 +4,13 @@ defmodule TragarAiWeb.ConsoleLive do
 
   Three panes:
 
-    * left — the Freshdesk ticket queue (sortable; FIFO by default). Selecting a
-      ticket opens its detail; "Draft reply" runs the loop in **reply mode**.
-    * centre — the prompt. It surfaces entity details for any use case (waybill,
-      quote, invoice, …). The **reply box** only appears for the customer-email
-      use case (from a ticket, or via "Draft customer reply").
-    * right — switchable between Recents (history) and Details (look up a
-      waybill/quote/invoice/account, or click a waybill to load it here).
+    * left — the live Freshdesk ticket queue, filterable by status (default open)
+      and agent. Clicking a ticket fetches it and asks the local model to distil
+      its subject + body into a concise prompt, pre-filled for the agent to edit.
+    * centre — the prompt + the chat conversation, plus the surfaced entity
+      details / reply box for the customer-email use case.
+    * right — the AI progress log (interpret → validate → fetch → phrase, with the
+      per-source calls), plus Recents/Details/Waybills/Quotes tabs.
   """
   use TragarAiWeb, :live_view
 
@@ -19,7 +19,6 @@ defmodule TragarAiWeb.ConsoleLive do
   alias TragarAi.Assist
   alias TragarAi.Assist.Engine
   alias TragarAi.Freight.Statuses
-  alias TragarAi.Support
 
   @impl true
   def mount(_params, _session, socket) do
@@ -27,14 +26,16 @@ defmodule TragarAiWeb.ConsoleLive do
      socket
      |> assign(question: "", agent: "")
      |> assign(messages: [], frame: %{intent: nil, entities: %{}})
-     |> assign(interaction: nil, reply: false, demo: true)
+     |> assign(interaction: nil, reply: false)
      |> assign(model: TragarAi.CoreAI.info())
-     |> assign(right_tab: "chat", detail: nil, detail_title: nil)
+     |> assign(right_tab: "log", detail: nil, detail_title: nil)
      |> assign(search_results: [], search_meta: nil)
      |> assign(quote_results: [], quote_meta: nil)
-     |> assign(selected_ticket: nil, ticket_sort: "fifo")
+     |> assign(selected_ticket: nil, distilling: false)
+     |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
      |> assign(next_msg_id: 0)
      |> load_history()
+     |> load_agents()
      |> load_tickets()}
   end
 
@@ -46,11 +47,7 @@ defmodule TragarAiWeb.ConsoleLive do
   def handle_event("ask", params, socket) do
     text = String.trim(params["question"] || "")
 
-    socket =
-      assign(socket,
-        demo: params["demo"] == "true",
-        agent: params["agent"] || socket.assigns.agent
-      )
+    socket = assign(socket, agent: params["agent"] || socket.assigns.agent)
 
     cond do
       text == "" ->
@@ -118,17 +115,6 @@ defmodule TragarAiWeb.ConsoleLive do
     |> then(&{:noreply, &1})
   end
 
-  # Run a demo query as a fresh conversation seeded with its entities.
-  def handle_event("run_sample", %{"idx" => idx}, socket) do
-    entry = Enum.at(TragarAi.Demo.catalog(), String.to_integer(idx))
-
-    socket
-    |> reset_chat_state()
-    |> assign(frame: %{intent: nil, entities: entry.entities}, demo: true)
-    |> converse(entry.question, false)
-    |> then(&{:noreply, &1})
-  end
-
   def handle_event("reset_chat", _params, socket),
     do: {:noreply, reset_chat_state(socket)}
 
@@ -159,40 +145,46 @@ defmodule TragarAiWeb.ConsoleLive do
     {:noreply, socket |> reset_chat_state() |> load_history()}
   end
 
-  def handle_event("seed_demo", _params, socket) do
-    :ok = TragarAi.Demo.seed()
+  # ── Tickets (left, from Freshdesk) ──────────────────────────────────────────
+
+  def handle_event("refresh_tickets", _params, socket),
+    do: {:noreply, load_tickets(socket)}
+
+  # Filter by status (default open) and/or agent — re-queries Freshdesk.
+  def handle_event("filter_tickets", params, socket) do
+    agent_id =
+      case params["agent_id"] do
+        v when v in [nil, "", "all"] -> nil
+        v -> String.to_integer(v)
+      end
 
     {:noreply,
      socket
-     |> put_flash(:info, "Demo data loaded across all sources.")
-     |> load_tickets()
-     |> load_history()}
+     |> assign(ticket_status: params["status"] || "open", ticket_agent: agent_id)
+     |> load_tickets()}
   end
 
-  # ── Tickets (left) ──────────────────────────────────────────────────────────
-
-  def handle_event("sort_tickets", %{"sort" => sort}, socket),
-    do: {:noreply, socket |> assign(ticket_sort: sort) |> load_tickets()}
-
   def handle_event("select_ticket", %{"id" => id}, socket) do
-    ticket = Enum.find(socket.assigns.tickets, &(&1.ticket_id == id))
+    ticket = Enum.find(socket.assigns.tickets, &(&1.id == id))
     {:noreply, assign(socket, selected_ticket: ticket)}
   end
 
   def handle_event("close_ticket", _params, socket),
     do: {:noreply, assign(socket, selected_ticket: nil)}
 
-  # Draft a customer reply for a ticket: look up the linked waybill if there is
-  # one (so the facts are the answer), otherwise the ticket itself. Reply mode on.
+  # Click a ticket → fetch it from Freshdesk and let the local model distil its
+  # subject + body into a concise query, then pre-fill the prompt for editing.
+  # Runs async (the distil call takes ~1s) with a spinner.
   def handle_event("prompt_ticket", %{"id" => id}, socket) do
-    ticket = Enum.find(socket.assigns.tickets, &(&1.ticket_id == id))
-    {question, entities} = ticket_prompt(ticket)
-
-    socket
-    |> reset_chat_state()
-    |> assign(frame: %{intent: nil, entities: entities}, selected_ticket: nil)
-    |> converse(question, true)
-    |> then(&{:noreply, &1})
+    {:noreply,
+     socket
+     |> assign(distilling: true, selected_ticket: nil)
+     |> start_async(:distil_ticket, fn ->
+       with {:ok, %{text: text}} <- TragarAi.Freshdesk.ticket_text(id),
+            {:ok, query} <- TragarAi.CoreAI.distil(text) do
+         {id, query}
+       end
+     end)}
   end
 
   # ── Right panel ─────────────────────────────────────────────────────────────
@@ -236,11 +228,16 @@ defmodule TragarAiWeb.ConsoleLive do
       </header>
 
       <div class="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)_320px]">
-        <.tickets_pane tickets={@tickets} ticket_sort={@ticket_sort} demo={@demo} />
+        <.tickets_pane
+          tickets={@tickets}
+          ticket_status={@ticket_status}
+          ticket_agent={@ticket_agent}
+          agents={@agents}
+        />
         <.centre
           question={@question}
           agent={@agent}
-          demo={@demo}
+          distilling={@distilling}
           messages={@messages}
           interaction={@interaction}
           reply={@reply}
@@ -249,6 +246,8 @@ defmodule TragarAiWeb.ConsoleLive do
         <.right_panel
           right_tab={@right_tab}
           messages={@messages}
+          interaction={@interaction}
+          model={@model}
           history={@history}
           detail={@detail}
           detail_title={@detail_title}
@@ -313,76 +312,51 @@ defmodule TragarAiWeb.ConsoleLive do
   defp tickets_pane(assigns) do
     ~H"""
     <aside class="space-y-3">
-      <div class="space-y-2">
-        <div class="flex items-center justify-between">
-          <h2 class="text-sm font-medium">
-            Tickets <span class="text-xs text-base-content/50">(reply)</span>
-          </h2>
-          <form phx-change="sort_tickets">
-            <select name="sort" class="select select-bordered select-xs">
-              <option value="fifo" selected={@ticket_sort == "fifo"}>FIFO (oldest)</option>
-              <option value="recent" selected={@ticket_sort == "recent"}>Newest</option>
-              <option value="priority" selected={@ticket_sort == "priority"}>Priority</option>
-              <option value="status" selected={@ticket_sort == "status"}>Status</option>
-            </select>
-          </form>
-        </div>
-
-        <ul class="max-h-[40vh] overflow-y-auto divide-y divide-base-200 rounded-lg border border-base-300">
-          <li :for={t <- @tickets}>
-            <button
-              type="button"
-              phx-click="select_ticket"
-              phx-value-id={t.ticket_id}
-              class="w-full p-2 text-left hover:bg-base-200"
-            >
-              <div class="flex items-start justify-between gap-2">
-                <span class="text-xs font-medium">#{t.ticket_id}</span>
-                <span class={"badge badge-xs " <> ticket_badge(t.status)}>{t.status}</span>
-              </div>
-              <div class="text-xs truncate">{t.subject}</div>
-              <div class="text-[11px] text-base-content/50">
-                {t.account_reference} · {t.priority} · {fmt_dt(t.received_at)}
-              </div>
-            </button>
-          </li>
-          <li :if={@tickets == []} class="p-3 text-xs text-base-content/60">
-            No tickets yet — click “Load demo data”.
-          </li>
-        </ul>
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-medium">
+          Freshdesk tickets
+        </h2>
+        <button type="button" phx-click="refresh_tickets" class="btn btn-ghost btn-xs">
+          Refresh
+        </button>
       </div>
 
-      <div :if={@demo} class="space-y-2">
-        <div>
-          <h2 class="text-sm font-medium">Demo queries</h2>
-          <p class="text-[11px] text-base-content/50">
-            Retrieve details unrelated to a ticket — click to run.
-          </p>
-        </div>
+      <form phx-change="filter_tickets" class="grid grid-cols-2 gap-2">
+        <select name="status" class="select select-bordered select-xs">
+          <option
+            :for={s <- ~w(open pending resolved closed all)}
+            value={s}
+            selected={@ticket_status == s}
+          >
+            {String.capitalize(s)}
+          </option>
+        </select>
+        <select name="agent_id" class="select select-bordered select-xs">
+          <option value="all" selected={is_nil(@ticket_agent)}>All agents</option>
+          <option :for={a <- @agents} value={a.id} selected={@ticket_agent == a.id}>{a.name}</option>
+        </select>
+      </form>
 
-        <% catalog = TragarAi.Demo.catalog() %>
-        <% sources = catalog |> Enum.map(& &1.source) |> Enum.uniq() %>
-        <div class="max-h-[42vh] overflow-y-auto space-y-2 rounded-lg border border-base-300 p-2">
-          <div :for={source <- sources} class="space-y-1">
-            <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">
-              {source}
+      <ul class="max-h-[70vh] overflow-y-auto divide-y divide-base-200 rounded-lg border border-base-300">
+        <li :for={t <- @tickets}>
+          <button
+            type="button"
+            phx-click="prompt_ticket"
+            phx-value-id={t.id}
+            class="w-full p-2 text-left hover:bg-base-200"
+            title="Click to distil this ticket into a prompt"
+          >
+            <div class="flex items-start justify-between gap-2">
+              <span class="text-xs font-medium">#{t.id}</span>
+              <span class={"badge badge-xs " <> ticket_badge(t.status)}>{t.status}</span>
             </div>
-            <%= for {e, i} <- Enum.with_index(catalog), e.source == source do %>
-              <button
-                type="button"
-                phx-click="run_sample"
-                phx-value-idx={i}
-                draggable="true"
-                data-snippet={e.question}
-                class="block w-full rounded-md border border-base-300 bg-base-100 px-2 py-1.5 text-left hover:border-primary"
-              >
-                <span class="block text-xs">{e.question}</span>
-                <span class="block text-[11px] text-base-content/50">{e.surfaces}</span>
-              </button>
-            <% end %>
-          </div>
-        </div>
-      </div>
+            <div class="text-xs truncate">{t.subject}</div>
+          </button>
+        </li>
+        <li :if={@tickets == []} class="p-3 text-xs text-base-content/60">
+          No tickets for this filter.
+        </li>
+      </ul>
     </aside>
     """
   end
@@ -395,13 +369,14 @@ defmodule TragarAiWeb.ConsoleLive do
       <form phx-submit="ask" class="space-y-2">
         <textarea
           name="question"
-          rows="2"
+          rows="3"
           data-drop
+          disabled={@distilling}
           class="textarea textarea-bordered w-full"
-          placeholder="Ask Tragar AI — e.g. “Where is load 4821?”, “an invoice”, then “ACC1001”…"
+          placeholder="Ask Tragar AI — or click a Freshdesk ticket on the left to distil it into a prompt…"
         >{@question}</textarea>
         <div class="flex flex-wrap items-center gap-3">
-          <button type="submit" class="btn btn-primary">Send</button>
+          <button type="submit" class="btn btn-primary" disabled={@distilling}>Send</button>
           <button
             :if={@messages != []}
             type="button"
@@ -416,20 +391,43 @@ defmodule TragarAiWeb.ConsoleLive do
             placeholder="Your name"
             class="input input-bordered input-sm w-32"
           />
-          <label class="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="checkbox"
-              name="demo"
-              value="true"
-              checked={@demo}
-              class="checkbox checkbox-sm"
-            /> Demo mode
-          </label>
-          <button type="button" phx-click="seed_demo" class="btn btn-ghost btn-sm">
-            Load demo data
-          </button>
+          <span :if={@distilling} class="flex items-center gap-2 text-sm text-base-content/60">
+            <span class="loading loading-spinner loading-xs"></span> Distilling ticket…
+          </span>
         </div>
       </form>
+
+      <div :if={@messages != []} class="space-y-2 max-h-[40vh] overflow-y-auto">
+        <div :for={m <- @messages} class={chat_row(m.role)}>
+          <div class={chat_bubble(m)}>
+            <div class="text-[10px] uppercase tracking-wide opacity-60">
+              {if m.role == :user, do: "You", else: "Tragar AI"}
+            </div>
+            <%= cond do %>
+              <% m.role == :user -> %>
+                {m.text}
+              <% m[:pending] && m[:stream] not in [nil, ""] -> %>
+                <span class="whitespace-pre-line">{m.stream}</span><span class="loading loading-dots loading-xs ml-1"></span>
+              <% m[:pending] -> %>
+                <span class="loading loading-dots loading-sm"></span>
+                <span class="opacity-60">thinking…</span>
+              <% true -> %>
+                {m.text}
+            <% end %>
+            <div :if={m[:suggestions] not in [nil, []]} class="mt-2 flex flex-wrap gap-1">
+              <button
+                :for={s <- m.suggestions}
+                type="button"
+                phx-click="suggest"
+                phx-value-q={s.q}
+                class="btn btn-xs"
+              >
+                {s.label}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <section
         :if={multi_results(@interaction) != []}
@@ -468,7 +466,6 @@ defmodule TragarAiWeb.ConsoleLive do
           <span :if={@interaction.source} class="text-base-content/60">
             via {@interaction.source}
           </span>
-          <span :if={@demo} class="badge badge-warning badge-sm">demo</span>
           <% pe = primary_entity(@interaction) %>
           <button
             :if={pe}
@@ -538,49 +535,6 @@ defmodule TragarAiWeb.ConsoleLive do
           <pre class="bg-base-200 rounded p-3 mt-2 overflow-x-auto">{facts_text(@interaction.facts)}</pre>
         </details>
       </section>
-
-      <section :if={@interaction} class="rounded-lg border border-base-300 bg-base-200/40 p-3">
-        <div class="flex items-center justify-between mb-2">
-          <h3 class="text-xs font-medium uppercase tracking-wide text-base-content/60">
-            AI steps · interpret → validate → fetch → phrase
-          </h3>
-          <span class="text-[11px] text-base-content/50">model: {@model.label}</span>
-        </div>
-        <ol class="space-y-1.5">
-          <li
-            :for={s <- loop_trace(@interaction, @model.label)}
-            class="flex items-start gap-2 text-xs"
-          >
-            <span class={"badge badge-xs mt-0.5 " <> step_class(s.status)}>{s.status}</span>
-            <div class="min-w-0">
-              <div class="font-medium">{s.label}</div>
-              <div class="text-base-content/60 break-words">{s.detail}</div>
-            </div>
-          </li>
-        </ol>
-      </section>
-
-      <section
-        :if={@interaction && @interaction.tool_log not in [nil, []]}
-        class="rounded-lg border border-base-300 p-3"
-      >
-        <h3 class="text-xs font-medium uppercase tracking-wide text-base-content/60 mb-2">
-          Source & tool calls
-        </h3>
-        <ol class="space-y-2">
-          <li :for={c <- @interaction.tool_log} class="text-xs">
-            <div class="flex items-center gap-2">
-              <span class={"badge badge-xs " <> call_class(c["kind"], c["ok"])}>{c["kind"]}</span>
-              <code class="text-[12px]">{c["tool"]}({format_params(c["params"])})</code>
-              <span :if={c["ok"] == false} class="badge badge-xs badge-error">error</span>
-            </div>
-            <details class="mt-1">
-              <summary class="cursor-pointer text-base-content/50">data</summary>
-              <pre class="bg-base-200 rounded p-2 mt-1 overflow-x-auto">{call_data(c["result"])}</pre>
-            </details>
-          </li>
-        </ol>
-      </section>
     </main>
     """
   end
@@ -594,10 +548,10 @@ defmodule TragarAiWeb.ConsoleLive do
         <button
           type="button"
           phx-click="switch_right"
-          phx-value-tab="chat"
-          class={tab_class(@right_tab == "chat")}
+          phx-value-tab="log"
+          class={tab_class(@right_tab == "log")}
         >
-          Chat
+          AI log
         </button>
         <button
           type="button"
@@ -751,48 +705,63 @@ defmodule TragarAiWeb.ConsoleLive do
         </div>
       </div>
 
-      <div
-        :if={@right_tab == "chat"}
-        class="space-y-2 max-h-[74vh] overflow-y-auto rounded-lg border border-base-300 p-3"
-      >
-        <div :for={m <- @messages} class={chat_row(m.role)}>
-          <div class={chat_bubble(m)}>
-            <div class="text-[10px] uppercase tracking-wide opacity-60">
-              {if m.role == :user, do: "You", else: "Tragar AI"}
-            </div>
-            <ul :if={m[:steps] not in [nil, []]} class="mb-1 space-y-0.5 text-[11px] opacity-80">
-              <li :for={s <- m.steps} class="flex items-center gap-1.5">
-                <span class={"badge badge-xs " <> step_badge(s.status)}>{step_icon(s.status)}</span>
-                <span>{s.source} · {s.intent}</span>
-                <span :if={s.entity} class="opacity-60">{s.entity}</span>
-              </li>
-            </ul>
-            <%= cond do %>
-              <% m.role == :user -> %>
-                {m.text}
-              <% m[:pending] && m[:stream] not in [nil, ""] -> %>
-                <span class="whitespace-pre-line">{m.stream}</span><span class="loading loading-dots loading-xs ml-1"></span>
-              <% m[:pending] -> %>
-                <span class="loading loading-dots loading-sm"></span>
-                <span class="opacity-60">thinking…</span>
-              <% true -> %>
-                {m.text}
-            <% end %>
-            <div :if={m[:suggestions] not in [nil, []]} class="mt-2 flex flex-wrap gap-1">
-              <button
-                :for={s <- m.suggestions}
-                type="button"
-                phx-click="suggest"
-                phx-value-q={s.q}
-                class="btn btn-xs"
-              >
-                {s.label}
-              </button>
-            </div>
+      <div :if={@right_tab == "log"} class="space-y-3 max-h-[74vh] overflow-y-auto">
+        <ul :if={live_steps(@messages) != []} class="space-y-0.5 text-[11px]">
+          <li :for={s <- live_steps(@messages)} class="flex items-center gap-1.5">
+            <span class={"badge badge-xs " <> step_badge(s.status)}>{step_icon(s.status)}</span>
+            <span>{s.source} · {s.intent}</span>
+            <span :if={s.entity} class="opacity-60">{s.entity}</span>
+          </li>
+        </ul>
+
+        <section :if={@interaction} class="rounded-lg border border-base-300 bg-base-200/40 p-3">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-xs font-medium uppercase tracking-wide text-base-content/60">
+              AI steps · interpret → validate → fetch → phrase
+            </h3>
+            <span class="text-[11px] text-base-content/50">model: {@model.label}</span>
           </div>
-        </div>
-        <div :if={@messages == []} class="p-2 text-xs text-base-content/60">
-          Ask Tragar AI on the left — the conversation appears here.
+          <ol class="space-y-1.5">
+            <li
+              :for={s <- loop_trace(@interaction, @model.label)}
+              class="flex items-start gap-2 text-xs"
+            >
+              <span class={"badge badge-xs mt-0.5 " <> step_class(s.status)}>{s.status}</span>
+              <div class="min-w-0">
+                <div class="font-medium">{s.label}</div>
+                <div class="text-base-content/60 break-words">{s.detail}</div>
+              </div>
+            </li>
+          </ol>
+        </section>
+
+        <section
+          :if={@interaction && @interaction.tool_log not in [nil, []]}
+          class="rounded-lg border border-base-300 p-3"
+        >
+          <h3 class="text-xs font-medium uppercase tracking-wide text-base-content/60 mb-2">
+            Source & tool calls
+          </h3>
+          <ol class="space-y-2">
+            <li :for={c <- @interaction.tool_log} class="text-xs">
+              <div class="flex items-center gap-2">
+                <span class={"badge badge-xs " <> call_class(c["kind"], c["ok"])}>{c["kind"]}</span>
+                <code class="text-[12px]">{c["tool"]}({format_params(c["params"])})</code>
+                <span :if={c["ok"] == false} class="badge badge-xs badge-error">error</span>
+              </div>
+              <details class="mt-1">
+                <summary class="cursor-pointer text-base-content/50">data</summary>
+                <pre class="bg-base-200 rounded p-2 mt-1 overflow-x-auto">{call_data(c["result"])}</pre>
+              </details>
+            </li>
+          </ol>
+        </section>
+
+        <div
+          :if={is_nil(@interaction) and live_steps(@messages) == []}
+          class="p-2 text-xs text-base-content/60"
+        >
+          The AI progress log appears here when you run a query.
         </div>
       </div>
 
@@ -990,52 +959,32 @@ defmodule TragarAiWeb.ConsoleLive do
     assign(socket, history: history)
   end
 
+  # Live tickets from Freshdesk, filtered by status (default open) + agent.
   defp load_tickets(socket) do
     tickets =
-      case Support.list_tickets() do
-        {:ok, list} -> sort_tickets(list, socket.assigns.ticket_sort)
+      case TragarAi.Freshdesk.console_tickets(%{
+             status: socket.assigns.ticket_status,
+             agent_id: socket.assigns.ticket_agent
+           }) do
+        {:ok, list} -> list
         _ -> []
       end
 
     assign(socket, tickets: tickets)
   end
 
-  @epoch ~U[1970-01-01 00:00:00Z]
+  defp load_agents(socket) do
+    agents =
+      case TragarAi.Freshdesk.agents() do
+        {:ok, list} -> list
+        _ -> []
+      end
 
-  defp sort_tickets(list, "recent"),
-    do: Enum.sort_by(list, &(&1.received_at || @epoch), {:desc, DateTime})
-
-  defp sort_tickets(list, "priority"),
-    do:
-      Enum.sort_by(
-        list,
-        &{priority_rank(&1.priority), DateTime.to_unix(&1.received_at || @epoch)}
-      )
-
-  defp sort_tickets(list, "status"),
-    do: Enum.sort_by(list, &{&1.status || "", DateTime.to_unix(&1.received_at || @epoch)})
-
-  defp sort_tickets(list, _fifo),
-    do: Enum.sort_by(list, &(&1.received_at || @epoch), {:asc, DateTime})
-
-  defp priority_rank(p) do
-    case String.downcase(to_string(p)) do
-      "urgent" -> 0
-      "high" -> 1
-      "medium" -> 2
-      "low" -> 3
-      _ -> 4
-    end
+    assign(socket, agents: agents)
   end
 
-  defp ticket_prompt(%{waybill_reference: wb}) when is_binary(wb) and wb != "",
-    do: {"Where is waybill #{wb}?", %{waybill: wb}}
-
-  defp ticket_prompt(t),
-    do: {"Show ticket #{t.ticket_id}", %{ticket_id: t.ticket_id}}
-
   defp load_detail(socket, type, key) do
-    case fetch_detail(type, key, socket.assigns.demo) do
+    case fetch_detail(type, key) do
       {:ok, facts} when map_size(facts) > 0 ->
         assign(socket,
           detail: facts,
@@ -1052,44 +1001,7 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  # In demo mode, resolve a known customer name in the question to its account.
-  defp resolve_demo_entities(question, entities) do
-    if Map.has_key?(entities, :account) do
-      entities
-    else
-      case demo_account_for(String.downcase(question)) do
-        nil -> entities
-        acc -> Map.put(entities, :account, acc)
-      end
-    end
-  end
-
-  # Map a customer name, invoice number, or waybill mentioned in the question to
-  # its account, so account-scoped intents (customer/invoice) resolve in demo.
-  defp demo_account_for(q) do
-    name =
-      TragarAi.Demo.Fixtures.customer()["name"]
-      |> String.split()
-      |> List.first()
-      |> String.downcase()
-
-    invoice = TragarAi.Demo.Fixtures.invoice()
-    invoice_no = String.downcase(invoice["invoice_number"])
-
-    cond do
-      String.contains?(q, name) -> TragarAi.Demo.Fixtures.account_reference()
-      String.contains?(q, invoice_no) -> invoice["account_reference"]
-      true -> waybill_account(q)
-    end
-  end
-
-  defp waybill_account(q) do
-    Enum.find_value(TragarAi.Demo.Fixtures.shipments(), fn {wb, s} ->
-      if String.contains?(q, wb), do: s["account_reference"]
-    end)
-  end
-
-  defp fetch_detail(type, key, demo) do
+  defp fetch_detail(type, key) do
     {intent, entities} =
       case type do
         "shipment" -> {:load_status, %{waybill: key}}
@@ -1101,7 +1013,6 @@ defmodule TragarAiWeb.ConsoleLive do
 
     cond do
       is_nil(intent) -> {:error, :unknown_type}
-      demo -> TragarAi.Demo.fetch(intent, entities)
       # Fetch the full live record (incl. pod_image_url, items, sundries) rather
       # than the reduced domain shape the cache/adapter returns.
       type == "quote" -> ok_map(TragarAi.Freight.get_quote(key))
@@ -1155,17 +1066,12 @@ defmodule TragarAiWeb.ConsoleLive do
   # interaction is applied in handle_async (frame accumulation, reply mode).
   defp converse(socket, text, reply?) do
     frame = socket.assigns.frame
-
-    base =
-      if socket.assigns.demo,
-        do: resolve_demo_entities(text, frame.entities),
-        else: frame.entities
+    base = frame.entities
 
     id = socket.assigns.next_msg_id
     lv = self()
 
     context = %{
-      demo: socket.assigns.demo,
       agent: blank_to_nil(socket.assigns.agent),
       entities: base,
       intent: frame.intent,
@@ -1189,7 +1095,7 @@ defmodule TragarAiWeb.ConsoleLive do
       messages: socket.assigns.messages ++ [%{role: :user, text: text}, pending],
       question: "",
       next_msg_id: id + 1,
-      right_tab: "chat"
+      right_tab: "log"
     )
     |> start_async({:converse, id}, fn ->
       {Engine.answer(text, context), base, reply?, frame.intent}
@@ -1227,11 +1133,40 @@ defmodule TragarAiWeb.ConsoleLive do
         # Keep the interaction (even if unresolved) so the agent can always reply.
         interaction: interaction,
         reply: reply?,
-        right_tab: "chat"
+        right_tab: "log"
       )
       |> load_history()
 
     {:noreply, socket}
+  end
+
+  # Ticket distilled into a prompt → pre-fill the input for editing, carrying the
+  # ticket_id so a relayed answer can post back to that ticket.
+  def handle_async(:distil_ticket, {:ok, {ticket_id, query}}, socket) when is_binary(query) do
+    {:noreply,
+     socket
+     |> reset_chat_state()
+     |> assign(
+       question: query,
+       frame: %{intent: nil, entities: %{ticket_id: ticket_id}},
+       distilling: false
+     )}
+  end
+
+  def handle_async(:distil_ticket, {:ok, _}, socket) do
+    {:noreply,
+     socket
+     |> assign(distilling: false)
+     |> put_flash(:error, "Couldn't load that ticket from Freshdesk.")}
+  end
+
+  def handle_async(:distil_ticket, {:exit, reason}, socket) do
+    Logger.error("[console] distil crashed: #{inspect(reason)}")
+
+    {:noreply,
+     socket
+     |> assign(distilling: false)
+     |> put_flash(:error, "Couldn't prepare a prompt from that ticket.")}
   end
 
   def handle_async({:converse, id}, {:exit, reason}, socket) do
@@ -1288,6 +1223,14 @@ defmodule TragarAiWeb.ConsoleLive do
     Enum.map(messages, fn m ->
       if Map.get(m, :id) == id, do: Map.put(m, :steps, fun.(Map.get(m, :steps, []))), else: m
     end)
+  end
+
+  # The per-source progress steps of the in-flight turn, for the right-panel log.
+  defp live_steps(messages) do
+    Enum.find_value(messages, [], fn m ->
+      steps = Map.get(m, :steps, [])
+      if Map.get(m, :pending) && steps != [], do: steps
+    end) || []
   end
 
   defp ev_key(intent, entities), do: {intent, ev_entity(entities)}
@@ -1385,7 +1328,7 @@ defmodule TragarAiWeb.ConsoleLive do
     # fetches the window and filters client-side.
     code = if status in Statuses.waybill_codes(), do: status, else: nil
 
-    case fetch_waybills(account, socket.assigns.demo, code, date_from, date_to) do
+    case fetch_waybills(account, code, date_from, date_to) do
       {:ok, list} ->
         results = list |> apply_group(status) |> Enum.map(&waybill_summary/1)
 
@@ -1404,10 +1347,7 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  defp fetch_waybills(account, true, _code, _from, _to),
-    do: {:ok, TragarAi.Demo.waybills_for(account)}
-
-  defp fetch_waybills(account, false, code, from, to) do
+  defp fetch_waybills(account, code, from, to) do
     params =
       %{account_reference: account}
       |> put_if(:status_code, code)
@@ -1472,7 +1412,7 @@ defmodule TragarAiWeb.ConsoleLive do
   defp run_quote_search(socket, account, status, date_from \\ nil, date_to \\ nil) do
     code = if status in Enum.map(Statuses.quote(), &elem(&1, 0)), do: status, else: nil
 
-    case fetch_quotes(account, socket.assigns.demo, code, date_from, date_to) do
+    case fetch_quotes(account, code, date_from, date_to) do
       {:ok, list} ->
         assign(socket,
           quote_results: Enum.map(list, &quote_summary/1),
@@ -1489,10 +1429,7 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  defp fetch_quotes(account, true, _code, _from, _to),
-    do: {:ok, TragarAi.Demo.quotes_for(account)}
-
-  defp fetch_quotes(account, false, code, from, to) do
+  defp fetch_quotes(account, code, from, to) do
     params =
       %{account_reference: account}
       |> put_if(:status_code, code)
