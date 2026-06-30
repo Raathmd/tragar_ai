@@ -12,8 +12,6 @@ defmodule TragarAi.Freshdesk.Client do
   Configure via `config/runtime.exs` under `TragarAi.Freshdesk.Client`.
   """
 
-  require Logger
-
   @api_path "/api/v2"
 
   # ── Configuration ───────────────────────────────────────────────────────────

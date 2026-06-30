@@ -15,8 +15,6 @@ defmodule TragarAi.Vantage do
 
   alias TragarAi.Vantage.{Client, Normalize}
 
-  require Logger
-
   @default_days 7
   @max_pages 50
   @cache_ttl_ms 120_000

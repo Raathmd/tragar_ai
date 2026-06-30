@@ -110,7 +110,7 @@ defmodule TragarAiWeb.ChatLive do
      )}
   end
 
-  def handle_info({:event, id, {:source_done, intent, source, entities, ok?}}, socket) do
+  def handle_info({:event, id, {:source_done, intent, _source, entities, ok?}}, socket) do
     status = if ok?, do: :ok, else: :fail
     key = step_key(intent, entities)
 

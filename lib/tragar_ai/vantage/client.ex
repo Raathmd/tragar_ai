@@ -10,7 +10,6 @@ defmodule TragarAi.Vantage.Client do
   (`base_url`, `email`, `password`).
   """
 
-  require Logger
   alias TragarAi.Vantage.TokenStore
 
   @api "/api"

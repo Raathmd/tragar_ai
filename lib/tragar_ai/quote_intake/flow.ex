@@ -201,13 +201,11 @@ defmodule TragarAi.QuoteIntake.Flow do
   defp blank?(v) when is_binary(v), do: String.trim(v) == ""
   defp blank?(_), do: false
 
-  # A 4-digit South African postal code.
-  defp postal(nil), do: nil
+  # A 4-digit South African postal code. Only ever called with a binary (the sole
+  # caller, party_fields/2, guards on `is_binary(text)`).
   defp postal(text), do: Regex.run(~r/\b(\d{4})\b/, text) |> List.last()
 
   # Everything that isn't the postal code, as the location/contact name.
-  defp name_part(nil), do: nil
-
   defp name_part(text) do
     text |> String.replace(~r/\b\d{4}\b/, "") |> String.trim() |> String.trim(",")
   end
