@@ -354,9 +354,17 @@ defmodule TragarAi.Assist.Engine do
 
     case groups do
       [] ->
-        clarify_fail(question, :load_status, %{waybill: hd(values)}, context, :not_found, [
-          interpret_entry | fetch_entries
-        ])
+        # The identifier couldn't be scoped to any entity in any source — say what
+        # we tried and ask the user to clarify what it refers to.
+        ref = hd(values)
+
+        fail(question, :load_status, %{waybill: ref}, context,
+          error: "unscoped_reference:#{ref}",
+          draft:
+            "I couldn't match \"#{ref}\" to a waybill or quote in FreightWare or Vantage. " <>
+              "Can you clarify what it refers to (a waybill, a quote, an account, or something else)?",
+          tool_log: [interpret_entry | fetch_entries]
+        )
 
       _ ->
         {results, phrase_entries} = harmonize_and_phrase(question, groups, context)

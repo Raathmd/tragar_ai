@@ -120,11 +120,12 @@ defmodule TragarAi.Assist.EngineTest do
     assert i.error == "not_understood"
   end
 
-  test "an unknown waybill fails safe as not_found with an AI prompt-back" do
+  test "an unscoped identifier is flagged and clarification requested" do
     assert {:ok, i} = Engine.answer("where is 0000?")
     assert i.status == :failed
-    assert i.error == "not_found"
-    assert i.draft_answer =~ "couldn't find that reference in Tragar"
+    assert i.error =~ "unscoped_reference"
+    assert i.draft_answer =~ "couldn't match"
+    assert i.draft_answer =~ "clarify"
   end
 
   test "relay marks the interaction relayed (engine returns an in-memory record)" do
