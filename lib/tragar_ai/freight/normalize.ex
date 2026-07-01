@@ -222,6 +222,8 @@ defmodule TragarAi.Freight.Normalize do
     {"accountDescription", "account_description"},
     {"accountProfileDesc", "account_description"},
     {"shortName", "short_name"},
+    {"otherName", "other_name"},
+    {"contactName", "contact_name"},
     {"currentStatus", "status"},
     {"physicalCity", "city"},
     {"eMailAddress", "email"},

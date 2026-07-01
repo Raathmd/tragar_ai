@@ -45,12 +45,34 @@ defmodule TragarAi.Assist.EngineTest do
             }
           })
 
+        # allocated-accounts directory (for account validation/resolution)
+        String.contains?(conn.request_path, "/system/baseData/accounts") ->
+          Req.Test.json(conn, %{
+            "response" => %{
+              "esAccounts" => %{
+                "Accounts" => [
+                  %{"accountReference" => "ITD02", "name" => "INTERNATIONAL TAP DISTRIBUTERS"}
+                ]
+              }
+            }
+          })
+
         true ->
           conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
       end
     end)
 
+    :persistent_term.erase({TragarAi.Freight.Accounts, :directory})
     :ok
+  end
+
+  test "an unresolvable account is asked about softly, not hard-rejected" do
+    {:ok, i} = Engine.answer("check the invoice for ITD001", %{entities: %{account: "ITD001"}})
+
+    assert i.status == :failed
+    assert i.error == "account_needed"
+    assert i.draft_answer =~ "account code"
+    refute i.draft_answer =~ "isn't a recognised"
   end
 
   test "answers a live FreightWare status question and drafts an answer" do

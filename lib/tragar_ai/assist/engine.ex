@@ -18,6 +18,7 @@ defmodule TragarAi.Assist.Engine do
   alias TragarAi.Assist.Validator
   alias TragarAi.Adapters
   alias TragarAi.CoreAI
+  alias TragarAi.Freight.Accounts
   alias TragarAi.Harmonize
 
   require Logger
@@ -110,19 +111,17 @@ defmodule TragarAi.Assist.Engine do
   end
 
   defp process(question, %{intent: intent, entities: entities}, context, log) do
-    with :ok <- Validator.validate(%{intent: intent, entities: entities}),
-         :ok <- validate_account(entities) do
-      fetch_and_phrase(question, intent, entities, context, log)
-    else
-      {:error, {:unknown_account, ref}} ->
-        # The account isn't one the FreightWare user is allocated to — say so
-        # plainly instead of running a query that can only come back empty.
-        fail(question, intent, entities, context,
-          error: "unknown_account:#{ref}",
-          draft:
-            "\"#{ref}\" isn't a recognised FreightWare account. Please check the account code and try again.",
-          tool_log: log
-        )
+    case Validator.validate(%{intent: intent, entities: entities}) do
+      :ok ->
+        case resolve_account(intent, entities, context) do
+          {:ok, entities} ->
+            fetch_and_phrase(question, intent, entities, context, log)
+
+          {:ask, message} ->
+            # Never a hard stop when a user is prompting — ask for/confirm the
+            # account instead of rejecting the request.
+            ask_for_account(question, intent, entities, context, message, log)
+        end
 
       {:error, reason} ->
         # Intent/entity doesn't match Tragar — the AI prompts the user back.
@@ -130,14 +129,63 @@ defmodule TragarAi.Assist.Engine do
     end
   end
 
-  # Validate any account reference against the FreightWare allocated-accounts
-  # directory (cached). Applies to accounts from a ticket or typed in the console/
-  # chat. Fails open if the directory is unavailable (see Freight.Accounts).
-  defp validate_account(%{account: ref}) when is_binary(ref) and ref != "" do
-    if TragarAi.Freight.Accounts.valid?(ref), do: :ok, else: {:error, {:unknown_account, ref}}
+  # Soft account handling. Returns `{:ok, entities}` (account resolved/valid, or
+  # dropped when not needed) or `{:ask, message}` to prompt the user — never a
+  # hard failure. A Freshdesk-derived scope (`context.accounts`) is authoritative
+  # and trusted as-is.
+  defp resolve_account(intent, entities, context) do
+    requires? = :account in Map.get(Validator.required(), intent, [])
+    account = entities[:account]
+
+    cond do
+      is_list(context[:accounts]) and context[:accounts] != [] ->
+        {:ok, entities}
+
+      is_binary(account) and account != "" ->
+        if Accounts.valid?(account) do
+          {:ok, entities}
+        else
+          # A model-guessed code may be wrong, or actually a company name — try to
+          # resolve it before giving up.
+          case Accounts.resolve(%{code: account, company: account}) do
+            {:ok, ref} ->
+              {:ok, Map.put(entities, :account, ref)}
+
+            {:ambiguous, refs} ->
+              {:ask, ambiguity_message(refs)}
+
+            :none ->
+              if requires?,
+                do: {:ask, need_account_message()},
+                else: {:ok, Map.delete(entities, :account)}
+          end
+        end
+
+      requires? ->
+        {:ask, need_account_message()}
+
+      true ->
+        {:ok, entities}
+    end
   end
 
-  defp validate_account(_), do: :ok
+  defp ask_for_account(question, intent, entities, context, message, log) do
+    fail(question, intent, entities, context,
+      error: "account_needed",
+      draft: message,
+      tool_log: log
+    )
+  end
+
+  defp need_account_message,
+    do:
+      "To look that up I need the FreightWare account code — please include it in your prompt " <>
+        "(e.g. \"invoices for ITD02\")."
+
+  defp ambiguity_message(refs),
+    do:
+      "A few accounts match — which one did you mean? #{Enum.join(refs, ", ")}. " <>
+        "Add the code to your prompt."
 
   defp fetch_and_phrase(question, intent, entities, context, log) do
     source = source_name(intent)

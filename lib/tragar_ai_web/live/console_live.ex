@@ -31,7 +31,7 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(right_tab: "log", detail: nil, detail_title: nil)
      |> assign(search_results: [], search_meta: nil)
      |> assign(quote_results: [], quote_meta: nil)
-     |> assign(selected_ticket: nil, distilling: false)
+     |> assign(selected_ticket: nil, distilling: false, account_choices: [])
      |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
      |> assign(next_msg_id: 0)
      |> load_history()
@@ -53,11 +53,15 @@ defmodule TragarAiWeb.ConsoleLive do
       text == "" ->
         {:noreply, put_flash(socket, :error, "Type a message first.")}
 
+      ticket = parse_ticket_fetch(text) ->
+        # "ticket 227703" / "#227703" → fetch that ticket, distil + resolve it.
+        {:noreply, start_ticket_distil(socket, ticket)}
+
       spec = parse_quote_search(text) ->
-        {:noreply, run_quote_search(socket, spec.account, spec.status)}
+        {:noreply, search_or_converse(socket, text, :quotes, spec)}
 
       spec = parse_waybill_search(text) ->
-        {:noreply, run_waybill_search(socket, spec.account, spec.status)}
+        {:noreply, search_or_converse(socket, text, :waybills, spec)}
 
       true ->
         {:noreply, converse(socket, text, false)}
@@ -172,19 +176,23 @@ defmodule TragarAiWeb.ConsoleLive do
   def handle_event("close_ticket", _params, socket),
     do: {:noreply, assign(socket, selected_ticket: nil)}
 
-  # Click a ticket → fetch it from Freshdesk and let the local model distil its
-  # subject + body into a concise query, then pre-fill the prompt for editing.
-  # Runs async (the distil call takes ~1s) with a spinner.
-  def handle_event("prompt_ticket", %{"id" => id}, socket) do
-    {:noreply,
-     socket
-     |> assign(distilling: true, selected_ticket: nil)
-     |> start_async(:distil_ticket, fn ->
-       with {:ok, %{text: text}} <- TragarAi.Freshdesk.ticket_text(id),
-            {:ok, query} <- TragarAi.CoreAI.distil(text) do
-         {id, query}
-       end
-     end)}
+  # Click a ticket → fetch it from Freshdesk, distil its subject+body into a
+  # concise query, and resolve its account — then pre-fill the prompt for editing.
+  def handle_event("prompt_ticket", %{"id" => id}, socket),
+    do: {:noreply, start_ticket_distil(socket, id)}
+
+  # Fetch a ticket by number (listed or not) via the input above the ticket list.
+  def handle_event("fetch_ticket", %{"ticket_no" => id}, socket) do
+    case String.trim(to_string(id)) do
+      "" -> {:noreply, put_flash(socket, :error, "Enter a ticket number.")}
+      n -> {:noreply, start_ticket_distil(socket, n)}
+    end
+  end
+
+  # Pick one account when the resolver returned several candidates.
+  def handle_event("pick_account", %{"ref" => ref}, socket) do
+    frame = put_in(socket.assigns.frame.entities[:account], ref)
+    {:noreply, assign(socket, frame: frame, account_choices: [])}
   end
 
   # ── Right panel ─────────────────────────────────────────────────────────────
@@ -238,6 +246,8 @@ defmodule TragarAiWeb.ConsoleLive do
           question={@question}
           agent={@agent}
           distilling={@distilling}
+          account_choices={@account_choices}
+          frame={@frame}
           messages={@messages}
           interaction={@interaction}
           reply={@reply}
@@ -321,6 +331,16 @@ defmodule TragarAiWeb.ConsoleLive do
         </button>
       </div>
 
+      <form phx-submit="fetch_ticket" class="flex gap-1">
+        <input
+          name="ticket_no"
+          inputmode="numeric"
+          placeholder="Fetch ticket # (any)"
+          class="input input-bordered input-xs flex-1"
+        />
+        <button type="submit" class="btn btn-xs btn-primary">Fetch</button>
+      </form>
+
       <form phx-change="filter_tickets" class="grid grid-cols-2 gap-2">
         <select name="status" class="select select-bordered select-xs">
           <option
@@ -366,6 +386,30 @@ defmodule TragarAiWeb.ConsoleLive do
   defp centre(assigns) do
     ~H"""
     <main class="space-y-4">
+      <div
+        :if={@account_choices != []}
+        class="rounded-lg border border-warning/40 bg-warning/10 p-2 text-sm space-y-1"
+      >
+        <div class="text-xs text-base-content/70">
+          Several accounts match — pick one to scope this:
+        </div>
+        <div class="flex flex-wrap gap-1">
+          <button
+            :for={ref <- @account_choices}
+            type="button"
+            phx-click="pick_account"
+            phx-value-ref={ref}
+            class="btn btn-xs btn-outline"
+          >
+            {ref}
+          </button>
+        </div>
+      </div>
+
+      <div :if={@frame.entities[:account]} class="text-xs text-base-content/60">
+        Scoped to account <span class="badge badge-xs badge-ghost">{@frame.entities[:account]}</span>
+      </div>
+
       <form phx-submit="ask" class="space-y-2">
         <textarea
           name="question"
@@ -959,6 +1003,27 @@ defmodule TragarAiWeb.ConsoleLive do
     assign(socket, history: history)
   end
 
+  # A bare ticket reference ("ticket 227703", "case 227703", "#227703").
+  defp parse_ticket_fetch(text) do
+    case Regex.run(~r/^\s*(?:ticket|case|#)\s*#?\s*(\d{4,})\s*$/i, text) do
+      [_, id] -> id
+      _ -> nil
+    end
+  end
+
+  # Fetch a ticket → distil its content into a query → resolve its account.
+  # Async (the model call takes ~1s); result handled in handle_async(:distil_ticket).
+  defp start_ticket_distil(socket, id) do
+    socket
+    |> assign(distilling: true, selected_ticket: nil, account_choices: [])
+    |> start_async(:distil_ticket, fn ->
+      with {:ok, info} <- TragarAi.Freshdesk.ticket_text(id),
+           {:ok, query} <- TragarAi.CoreAI.distil(info.text) do
+        {info.ticket_id, query, TragarAi.Freshdesk.resolve_account(info)}
+      end
+    end)
+  end
+
   # Live tickets from Freshdesk, filtered by status (default open) + agent.
   defp load_tickets(socket) do
     tickets =
@@ -1141,15 +1206,27 @@ defmodule TragarAiWeb.ConsoleLive do
   end
 
   # Ticket distilled into a prompt → pre-fill the input for editing, carrying the
-  # ticket_id so a relayed answer can post back to that ticket.
-  def handle_async(:distil_ticket, {:ok, {ticket_id, query}}, socket) when is_binary(query) do
+  # ticket_id (so a relayed answer posts back) and the resolved account. If the
+  # resolver returned several candidates, offer a chooser instead of guessing.
+  def handle_async(:distil_ticket, {:ok, {ticket_id, query, resolution}}, socket)
+      when is_binary(query) do
+    {account, choices} =
+      case resolution do
+        {:ok, ref} -> {ref, []}
+        {:ambiguous, refs} -> {nil, refs}
+        _ -> {nil, []}
+      end
+
+    entities = %{ticket_id: ticket_id} |> put_if(:account, account)
+
     {:noreply,
      socket
      |> reset_chat_state()
      |> assign(
        question: query,
-       frame: %{intent: nil, entities: %{ticket_id: ticket_id}},
-       distilling: false
+       frame: %{intent: nil, entities: entities},
+       distilling: false,
+       account_choices: choices
      )}
   end
 
@@ -1343,6 +1420,25 @@ defmodule TragarAiWeb.ConsoleLive do
 
   defp account_error(account),
     do: "\"#{account}\" isn't a recognised FreightWare account."
+
+  # Run the account-scoped search only when the account resolves (valid code, or a
+  # company name that maps to one). Otherwise DON'T hard-fail — fall through to the
+  # normal assist loop, which handles the account softly (asks for a valid code).
+  defp search_or_converse(socket, text, kind, spec) do
+    case resolve_search_account(spec.account) do
+      {:ok, ref} when kind == :quotes -> run_quote_search(socket, ref, spec.status)
+      {:ok, ref} -> run_waybill_search(socket, ref, spec.status)
+      _ -> converse(socket, text, false)
+    end
+  end
+
+  defp resolve_search_account(account) do
+    if TragarAi.Freight.Accounts.valid?(account) do
+      {:ok, account}
+    else
+      TragarAi.Freight.Accounts.resolve(%{code: account, company: account})
+    end
+  end
 
   defp run_waybill_search(socket, account, status, date_from \\ nil, date_to \\ nil)
 
