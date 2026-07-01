@@ -58,10 +58,10 @@ defmodule TragarAiWeb.ConsoleLive do
         {:noreply, start_ticket_distil(socket, ticket)}
 
       spec = parse_quote_search(text) ->
-        {:noreply, run_quote_search(socket, spec.account, spec.status)}
+        {:noreply, search_or_converse(socket, text, :quotes, spec)}
 
       spec = parse_waybill_search(text) ->
-        {:noreply, run_waybill_search(socket, spec.account, spec.status)}
+        {:noreply, search_or_converse(socket, text, :waybills, spec)}
 
       true ->
         {:noreply, converse(socket, text, false)}
@@ -1420,6 +1420,25 @@ defmodule TragarAiWeb.ConsoleLive do
 
   defp account_error(account),
     do: "\"#{account}\" isn't a recognised FreightWare account."
+
+  # Run the account-scoped search only when the account resolves (valid code, or a
+  # company name that maps to one). Otherwise DON'T hard-fail — fall through to the
+  # normal assist loop, which handles the account softly (asks for a valid code).
+  defp search_or_converse(socket, text, kind, spec) do
+    case resolve_search_account(spec.account) do
+      {:ok, ref} when kind == :quotes -> run_quote_search(socket, ref, spec.status)
+      {:ok, ref} -> run_waybill_search(socket, ref, spec.status)
+      _ -> converse(socket, text, false)
+    end
+  end
+
+  defp resolve_search_account(account) do
+    if TragarAi.Freight.Accounts.valid?(account) do
+      {:ok, account}
+    else
+      TragarAi.Freight.Accounts.resolve(%{code: account, company: account})
+    end
+  end
 
   defp run_waybill_search(socket, account, status, date_from \\ nil, date_to \\ nil)
 
