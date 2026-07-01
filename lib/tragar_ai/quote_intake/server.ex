@@ -14,7 +14,9 @@ defmodule TragarAi.QuoteIntake.Server do
   @type input :: %{
           required(:ticket_id) => String.t(),
           optional(:message) => String.t(),
-          optional(:requester_email) => String.t()
+          optional(:requester_email) => String.t(),
+          # Console/chat supply a pre-resolved account (skips Freshdesk derivation).
+          optional(:account) => String.t()
         }
 
   @doc """
@@ -39,12 +41,22 @@ defmodule TragarAi.QuoteIntake.Server do
     end
   end
 
-  # First message — verify the requester and derive their entitled account(s).
+  # First message — establish the account, then start collecting.
+  #
+  # Console/chat pass a pre-resolved `:account` (from the app's account
+  # resolution) — trusted as-is, no Freshdesk lookup. Freshdesk-driven intake has
+  # no account in the input, so we derive the requester's entitled account(s).
   defp open(ticket_id, input, message, fd) do
-    case fd.accounts_for_requester(ticket_id) do
-      {:ok, [account]} -> start_collecting(ticket_id, account, input, message)
-      {:ok, [_ | _] = accounts} -> start_choosing(ticket_id, accounts, input, message)
-      _ -> {:ok, refusal(ticket_id)}
+    case Map.get(input, :account) do
+      account when is_binary(account) and account != "" ->
+        start_collecting(ticket_id, account, input, message)
+
+      _ ->
+        case fd.accounts_for_requester(ticket_id) do
+          {:ok, [account]} -> start_collecting(ticket_id, account, input, message)
+          {:ok, [_ | _] = accounts} -> start_choosing(ticket_id, accounts, input, message)
+          _ -> {:ok, refusal(ticket_id)}
+        end
     end
   end
 
@@ -450,9 +462,57 @@ defmodule TragarAi.QuoteIntake.Server do
         account: session.account_reference,
         status: session.status,
         reply: reply,
-        complete: complete?
+        complete: complete?,
+        # The slot being asked + the clickable/searchable choices for it, so a UI
+        # can render selectable options (the customer clicks one to answer).
+        slot: current_slot(session),
+        options: options(session)
       },
       Map.new(extra)
     )
   end
+
+  # Which datum the customer is being asked for right now.
+  defp current_slot(%{status: "choosing_account"}), do: "account"
+  defp current_slot(%{status: "ready"}), do: "confirm"
+
+  defp current_slot(%{status: "collecting", slots: slots}) do
+    cond do
+      slots["_pending"] -> slots["_pending"]
+      true -> Flow.next_unfilled(slots)
+    end
+  end
+
+  defp current_slot(%{status: status}), do: status
+
+  # The selectable options for the current slot — what the UI renders as clickable
+  # chips. Clicking sends the option's `value` back as the next message.
+  defp options(%{status: "choosing_account", slots: slots}) do
+    (slots["_accounts"] || []) |> Enum.map(&%{value: &1, label: &1})
+  end
+
+  defp options(%{status: "ready"}) do
+    [%{value: "ACCEPT", label: "Accept & create quote"}, %{value: "REJECT", label: "Reject"}]
+  end
+
+  defp options(%{status: "collecting", slots: %{"_pending" => _} = slots}) do
+    # Site candidates already offered — the customer picks one by number.
+    (slots["_candidates"] || [])
+    |> Enum.with_index(1)
+    |> Enum.map(fn {c, i} -> %{value: to_string(i), label: candidate_label(c)} end)
+  end
+
+  # The service slot's options (live service types) are supplied by the UI via
+  # `QuoteIntake.service_options/0` — kept out of the Server so result-shaping
+  # stays free of live API calls. Sites are searched; goods are free text.
+  defp options(_), do: []
+
+  defp candidate_label(%{} = c) do
+    name = c["site_name"] || c["name"] || c[:site_name]
+    place = c["suburb"] || c["city"] || c[:suburb]
+    code = c["site_code"] || c[:site_code]
+    [name, place, code] |> Enum.reject(&(&1 in [nil, ""])) |> Enum.join(" · ")
+  end
+
+  defp candidate_label(c), do: to_string(c)
 end
