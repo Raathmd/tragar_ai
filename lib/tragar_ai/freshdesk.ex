@@ -59,14 +59,64 @@ defmodule TragarAi.Freshdesk do
     end
   end
 
-  @doc "Subject + plain-text body for a ticket, ready to distil into a prompt."
+  @doc """
+  A ticket's full content + the signals used to resolve its account, in ONE
+  Freshdesk call (`?include=requester,company`): subject/body/text plus the
+  requester email + domain and the company name.
+  """
   def ticket_text(id) do
-    with {:ok, t} <- Client.get_ticket(id) do
+    with {:ok, t} <- Client.get_ticket(id, %{include: "requester,company"}) do
       subject = t["subject"] || ""
       body = t["description_text"] || strip_html(t["description"] || "")
-      {:ok, %{subject: subject, body: body, text: String.trim("#{subject}\n\n#{body}")}}
+      email = get_in(t, ["requester", "email"]) || t["email"]
+
+      {:ok,
+       %{
+         ticket_id: to_string(t["id"] || id),
+         subject: subject,
+         body: body,
+         text: String.trim("#{subject}\n\n#{body}"),
+         requester_email: email,
+         requester_domain: email_domain(email),
+         company_id: t["company_id"],
+         company_name: get_in(t, ["company", "name"])
+       }}
     end
   end
+
+  @doc """
+  Resolve the FreightWare account for a ticket from its content — a valid account
+  code found in the body, the company name, or the requester's email domain —
+  via `Freight.Accounts.resolve/1`. Returns `{:ok, ref}` | `{:ambiguous, refs}` |
+  `:none`. Complements the authoritative Company custom-field gate
+  (`accounts_for_requester/2`) as a fallback when that field is unset.
+  """
+  def resolve_account(info) when is_map(info) do
+    TragarAi.Freight.Accounts.resolve(%{
+      code: account_code_in(info[:body] || info["body"]),
+      company: info[:company_name] || info["company_name"],
+      domain: info[:requester_domain] || info["requester_domain"]
+    })
+  end
+
+  # First account-code-shaped token in the text that is actually a valid account.
+  defp account_code_in(text) when is_binary(text) do
+    ~r/\b[A-Za-z]{2,}\d{1,}[A-Za-z0-9]*\b/
+    |> Regex.scan(text)
+    |> List.flatten()
+    |> Enum.find(&TragarAi.Freight.Accounts.valid?/1)
+  end
+
+  defp account_code_in(_), do: nil
+
+  defp email_domain(email) when is_binary(email) do
+    case String.split(email, "@", parts: 2) do
+      [_, dom] -> dom |> String.trim() |> String.downcase()
+      _ -> nil
+    end
+  end
+
+  defp email_domain(_), do: nil
 
   defp ticket_summary(t) do
     %{

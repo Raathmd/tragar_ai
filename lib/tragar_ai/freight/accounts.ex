@@ -60,6 +60,92 @@ defmodule TragarAi.Freight.Accounts do
   @doc "Force a fresh load of the directory (bypasses the cache)."
   def refresh, do: load()
 
+  @doc """
+  Resolve the account from whatever signals we have, in priority order:
+
+    1. an explicit, valid account `:code`
+    2. a `:company` name matched against account_name / short_name / other_name /
+       contact_name (normalised substring, either direction)
+    3. a requester email `:domain` matched against the account email's domain
+
+  Returns `{:ok, ref}` for a single confident match, `{:ambiguous, [refs]}` when
+  several accounts match (the caller asks the user which), or `:none`.
+  """
+  @spec resolve(map()) :: {:ok, String.t()} | {:ambiguous, [String.t()]} | :none
+  def resolve(signals) when is_map(signals) do
+    code = signals[:code] || signals["code"]
+    company = signals[:company] || signals["company"]
+    domain = signals[:domain] || signals["domain"]
+
+    cond do
+      is_binary(code) and code != "" and valid?(code) -> {:ok, norm(code)}
+      match = match_first([by_name(company), by_domain(domain)]) -> match
+      true -> :none
+    end
+  end
+
+  def resolve(_), do: :none
+
+  @doc "Account references whose name-ish fields match `company` (normalised substring)."
+  @spec by_name(term()) :: [String.t()]
+  def by_name(company) when is_binary(company) and company != "" do
+    q = norm(company)
+
+    with {:ok, dir} <- directory() do
+      for {ref, a} <- dir, name_match?(a, q), do: ref
+    else
+      _ -> []
+    end
+    |> Enum.uniq()
+  end
+
+  def by_name(_), do: []
+
+  @doc "Account references whose account email domain equals `domain`."
+  @spec by_domain(term()) :: [String.t()]
+  def by_domain(domain) when is_binary(domain) and domain != "" do
+    d = domain |> String.trim() |> String.downcase()
+
+    with {:ok, dir} <- directory() do
+      for {ref, a} <- dir, email_domain(a["email"]) == d, do: ref
+    else
+      _ -> []
+    end
+    |> Enum.uniq()
+  end
+
+  def by_domain(_), do: []
+
+  # First non-empty match list → {:ok, one} | {:ambiguous, many}; else fall through.
+  defp match_first(lists) do
+    Enum.find_value(lists, fn
+      [one] -> {:ok, one}
+      [_ | _] = many -> {:ambiguous, Enum.sort(many)}
+      _ -> nil
+    end)
+  end
+
+  defp name_match?(account, q) do
+    [
+      account["account_name"],
+      account["short_name"],
+      account["other_name"],
+      account["contact_name"]
+    ]
+    |> Enum.any?(fn v ->
+      is_binary(v) and v != "" and (String.contains?(norm(v), q) or String.contains?(q, norm(v)))
+    end)
+  end
+
+  defp email_domain(email) when is_binary(email) do
+    case String.split(email, "@", parts: 2) do
+      [_, dom] -> dom |> String.trim() |> String.downcase()
+      _ -> nil
+    end
+  end
+
+  defp email_domain(_), do: nil
+
   # ── internals ────────────────────────────────────────────────────────────────
 
   defp load do

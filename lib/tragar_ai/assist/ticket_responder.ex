@@ -25,6 +25,11 @@ defmodule TragarAi.Assist.TicketResponder do
     accounts = accounts_for(ticket_id, opts, fd)
     account = List.first(accounts)
 
+    # Distil the raw ticket into a clean query first — same step the console runs —
+    # so the loop looks up the shipment references in the ticket instead of just
+    # echoing the ticket metadata.
+    query = distil(content)
+
     # `:accounts` enforces scope in the Engine — facts must be on the requester's
     # account, so a ticket can't pull another account's records.
     context = %{
@@ -34,7 +39,7 @@ defmodule TragarAi.Assist.TicketResponder do
       ticket_id: ticket_id
     }
 
-    case Engine.answer(content, context) do
+    case Engine.answer(query, context) do
       {:ok, interaction} ->
         result = %{
           ticket_id: ticket_id,
@@ -68,7 +73,27 @@ defmodule TragarAi.Assist.TicketResponder do
   defp derive_accounts(ticket_id, fd) do
     case fd.accounts_for_requester(ticket_id) do
       {:ok, accounts} when is_list(accounts) -> accounts
+      # No authoritative Company custom field — resolve from ticket content
+      # (account code / company name / requester email domain).
+      _ -> resolve_from_content(ticket_id, fd)
+    end
+  end
+
+  defp resolve_from_content(ticket_id, fd) do
+    with true <- function_exported?(fd, :ticket_text, 1),
+         {:ok, info} <- fd.ticket_text(ticket_id),
+         {:ok, ref} <- fd.resolve_account(info) do
+      [ref]
+    else
       _ -> []
+    end
+  end
+
+  # Reuse the console's distiller; fall back to the raw content if it's unavailable.
+  defp distil(content) do
+    case TragarAi.CoreAI.distil(content) do
+      {:ok, query} when is_binary(query) and query != "" -> query
+      _ -> content
     end
   end
 
