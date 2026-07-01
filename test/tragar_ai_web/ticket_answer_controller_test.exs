@@ -60,6 +60,7 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
       end
     end)
 
+    TragarAi.DataCase.warm_engine_sources()
     :ok
   end
 

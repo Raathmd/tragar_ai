@@ -55,14 +55,23 @@ defmodule TragarAi.Assist.Engine do
           end)
           |> Enum.uniq()
 
-        case requests do
-          [one] ->
-            if narrow?(one) do
-              # A deliberately-narrow single request keeps the exact one-intent path.
-              Logger.info(
-                "[assist] interpret #{inspect(question)} -> #{one.intent} #{inspect(one.entities)}"
-              )
+        refs = reference_values(requests)
 
+        cond do
+          # A reference number in the request → don't trust the model's single
+          # guess. Test it against EVERY reference endpoint across all sources
+          # (broad), then frame the answer from all discovered facts.
+          refs != [] ->
+            Logger.info("[assist] reference surface #{inspect(refs)} <- #{inspect(question)}")
+            process_reference(question, refs, context)
+
+          # Non-reference single request (account/ticket/vehicle/service): keep the
+          # existing narrow-or-broad handling (account soft-gate, source-specific
+          # errors); only a broad request fans out.
+          match?([_], requests) ->
+            one = hd(requests)
+
+            if narrow?(one) do
               log = [interpret_entry(question, one.intent, one.entities)]
 
               process(
@@ -75,14 +84,12 @@ defmodule TragarAi.Assist.Engine do
               process_surface(question, expand_request(one), context)
             end
 
-          many ->
-            # Broad single OR multiple → expand (per-entity capability fan-out
-            # across sources), gather concurrently, harmonise per domain entity.
+          true ->
             Logger.info(
-              "[assist] interpret #{inspect(question)} -> surface #{inspect(Enum.map(many, &{&1.intent, &1.scope}))}"
+              "[assist] interpret #{inspect(question)} -> surface #{inspect(Enum.map(requests, &{&1.intent, &1.scope}))}"
             )
 
-            process_surface(question, expand_requests(many), context)
+            process_surface(question, expand_requests(requests), context)
         end
 
       {:error, reason} ->
@@ -236,10 +243,52 @@ defmodule TragarAi.Assist.Engine do
   # results are a list, not keyed by intent.
   @gather_timeout 60_000
 
-  # A request is narrow (single-intent path) when the model asked for one fact or
-  # the entity has no domain capability group to fan out over.
+  # The reference slots a bare number can be tested against, and the shipment
+  # entities to probe each value across — a bare id is a waybill or a quote, so
+  # this fans out over load_status/track/route (FreightWare + Vantage) AND
+  # quote_lookup. (Account/vehicle/ticket are typed differently, not bare ids.)
+  @ref_slots [:waybill, :quote]
+  @probe_entities [:waybill, :quote]
+
+  # A request is narrow when the model asked for one fact or the entity has no
+  # domain capability group to fan out over.
   defp narrow?(%{scope: scope, entities: entities}),
     do: scope == "one" or is_nil(Entities.entity_for(entities))
+
+  # Every bare reference number the model extracted (from any request).
+  defp reference_values(requests) do
+    for(r <- requests, slot <- @ref_slots, v = r.entities[slot], is_binary(v) and v != "", do: v)
+    |> Enum.uniq()
+  end
+
+  # Test each reference value against EVERY reference capability across all
+  # sources — is it a waybill? a quote? — so the answer is framed from whatever
+  # any source knows about it, not the model's single guess.
+  defp expand_probe(values) do
+    for(
+      value <- values,
+      entity <- @probe_entities,
+      %{param: param, capabilities: caps} = Entities.group(entity),
+      cap <- caps,
+      do: sub(cap, %{param => value}, entity, value)
+    )
+    |> Enum.uniq()
+  end
+
+  # The capability whose phrasing best represents an entity's harmonised record.
+  @canonical_intent %{
+    waybill: :load_status,
+    account: :customer_lookup,
+    quote: :quote_lookup,
+    ticket: :ticket_context,
+    vehicle: :vehicle_status
+  }
+
+  defp phrasing_intent(entity, slices) do
+    intents = Enum.map(slices, & &1.intent)
+    canon = Map.get(@canonical_intent, entity)
+    if canon in intents, do: canon, else: hd(intents)
+  end
 
   # Expand a request into the concrete sub-lookups to gather. Broad + grouped →
   # one sub-request per capability in the entity's group; otherwise the single
@@ -295,6 +344,40 @@ defmodule TragarAi.Assist.Engine do
 
   # Validate the sub-lookups, gather them concurrently, harmonise the slices per
   # domain entity, phrase one answer per entity, and persist a single interaction.
+  # Probe reference values across every reference endpoint; harmonise + frame from
+  # all discovered facts, or prompt back when the reference is nowhere to be found.
+  defp process_reference(question, values, context) do
+    subs = expand_probe(values)
+    interpret_entry = multi_interpret_entry(question, subs)
+    valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
+    {groups, fetch_entries} = gather(valid, context)
+
+    case groups do
+      [] ->
+        # The identifier couldn't be scoped to any entity in any source — say what
+        # we tried and ask the user to clarify what it refers to.
+        ref = hd(values)
+
+        fail(question, :load_status, %{waybill: ref}, context,
+          error: "unscoped_reference:#{ref}",
+          draft:
+            "I couldn't match \"#{ref}\" to a waybill or quote in FreightWare or Vantage. " <>
+              "Can you clarify what it refers to (a waybill, a quote, an account, or something else)?",
+          tool_log: [interpret_entry | fetch_entries]
+        )
+
+      _ ->
+        {results, phrase_entries} = harmonize_and_phrase(question, groups, context)
+
+        create_surface(
+          question,
+          results,
+          context,
+          [interpret_entry | fetch_entries] ++ phrase_entries
+        )
+    end
+  end
+
   defp process_surface(question, subreqs, context) do
     interpret_entry = multi_interpret_entry(question, subreqs)
     valid = Enum.filter(subreqs, &(Validator.validate(&1) == :ok))
@@ -345,11 +428,14 @@ defmodule TragarAi.Assist.Engine do
         slices = Enum.filter(groups, &(&1.entity == entity and &1.entity_key == key))
         merged = Harmonize.project(Enum.map(slices, &%{source: &1.source, data: &1.facts}))
         rep = hd(slices)
+        # Phrase the harmonised record via the entity's canonical capability (so a
+        # waybill reads as its status, not whichever slice returned first).
+        intent = phrasing_intent(entity, slices)
 
         if is_function(on_chunk, 1),
-          do: on_chunk.("\n\n#{entity_label(entity, key, rep.intent)}\n")
+          do: on_chunk.("\n\n#{entity_label(entity, key, intent)}\n")
 
-        {:ok, answer} = CoreAI.phrase(rep.intent, merged.fields, %{question: question}, on_chunk)
+        {:ok, answer} = CoreAI.phrase(intent, merged.fields, %{question: question}, on_chunk)
 
         entry =
           ai_entry(

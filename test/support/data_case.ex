@@ -44,6 +44,25 @@ defmodule TragarAi.DataCase do
   end
 
   @doc """
+  For tests that drive the assist Engine with a reference: the broad probe fans
+  out over Vantage (route) and warms the FreightWare token. Call AFTER setting the
+  Dovetail `Req.Test` stub + shared mode. Stubs Vantage to return no trips and
+  pre-warms the token from the test process (so the concurrent gather tasks reuse
+  the cached token instead of logging in from a spawned process that can't see the
+  stub).
+  """
+  def warm_engine_sources do
+    Req.Test.stub(TragarAi.Vantage.Client, fn conn ->
+      if String.ends_with?(conn.request_path, "/api/auth/login"),
+        do: Req.Test.json(conn, %{"auth_token" => "vt"}),
+        else: Req.Test.json(conn, %{"items" => [], "hasNext" => false})
+    end)
+
+    {:ok, _} = TragarAi.Dovetail.TokenStore.token()
+    :ok
+  end
+
+  @doc """
   A helper that transforms changeset errors into a map of messages.
 
       assert {:error, changeset} = Accounts.create_user(%{password: "short"})
