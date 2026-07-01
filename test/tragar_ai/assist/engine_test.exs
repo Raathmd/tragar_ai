@@ -62,6 +62,21 @@ defmodule TragarAi.Assist.EngineTest do
       end
     end)
 
+    # The broad reference probe also hits Vantage (route). Stub it to return no
+    # trips so route resolves as not-found rather than erroring.
+    Req.Test.stub(TragarAi.Vantage.Client, fn conn ->
+      if String.ends_with?(conn.request_path, "/api/auth/login") do
+        Req.Test.json(conn, %{"auth_token" => "vt"})
+      else
+        Req.Test.json(conn, %{"items" => [], "hasNext" => false})
+      end
+    end)
+
+    # Warm the FreightWare token from the test process so the concurrent gather
+    # tasks reuse the cached token instead of logging in from a spawned process
+    # (which can't see the Req.Test stub).
+    {:ok, _} = TragarAi.Dovetail.TokenStore.token()
+
     :persistent_term.erase({TragarAi.Freight.Accounts, :directory})
     :ok
   end

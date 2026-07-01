@@ -55,6 +55,7 @@ defmodule TragarAiWeb.ConsoleLiveTest do
       end
     end)
 
+    TragarAi.DataCase.warm_engine_sources()
     :ok
   end
 

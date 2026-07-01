@@ -62,6 +62,7 @@ defmodule TragarAiWeb.McpControllerTest do
       end
     end)
 
+    TragarAi.DataCase.warm_engine_sources()
     :ok
   end
 
