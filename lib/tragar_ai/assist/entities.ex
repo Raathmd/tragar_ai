@@ -14,11 +14,15 @@ defmodule TragarAi.Assist.Entities do
   """
 
   # entity => %{param: entity-key atom, capabilities: [intent]}
-  # waybill is curated to non-redundant facets: load_status carries the shipment
-  # record, track the events, route the planned/live route (Vantage). eta/pod are
-  # subsets of the same FreightWare shipment map, so they're omitted from the fan-out.
+  # waybill is curated to non-redundant facets: load_status carries the whole
+  # shipment record — details AND events (both adapters read the same cached
+  # `Logistics.Cache.shipment/1`) — and route the planned/live route (Vantage).
+  # track/eta/pod are all projections of that same shipment map, so they're
+  # omitted from the fan-out (running them would re-fetch the same shipment —
+  # concurrently, and the cache isn't single-flight). They remain available as
+  # narrow single-intent lookups.
   @entities %{
-    waybill: %{param: :waybill, capabilities: [:load_status, :track, :route]},
+    waybill: %{param: :waybill, capabilities: [:load_status, :route]},
     account: %{param: :account, capabilities: [:customer_lookup, :invoice]},
     quote: %{param: :quote, capabilities: [:quote_lookup]},
     ticket: %{param: :ticket_id, capabilities: [:ticket_context]},
