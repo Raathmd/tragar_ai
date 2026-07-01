@@ -264,6 +264,45 @@ defmodule TragarAi.QuoteIntakeTest do
       assert r1.reply =~ "service"
     end
 
+    test "console/chat facade drives the flow with a pre-resolved account and clickable options" do
+      sid = "console-#{System.unique_integer([:positive])}"
+      opts = [freightware: FakeFreightWare, account: "ITD02"]
+
+      # Opening the conversation asks for the service and reports the current slot.
+      {:ok, r0} = TragarAi.QuoteIntake.converse(sid, "", opts)
+      assert r0.status == "collecting"
+      assert r0.slot == "service"
+      assert is_list(r0.options)
+
+      {:ok, _} = TragarAi.QuoteIntake.converse(sid, "Economy", opts)
+
+      # A place name → the matched sites come back as clickable options (pick by
+      # number); the slot being answered is surfaced for the UI.
+      {:ok, c1} = TragarAi.QuoteIntake.converse(sid, "Italtile Menlyn", opts)
+      assert c1.slot == "collection"
+      assert [%{value: "1", label: label} | _] = c1.options
+      assert label =~ "I902"
+
+      # Clicking option "1" submits it and advances to delivery.
+      {:ok, c2} = TragarAi.QuoteIntake.converse(sid, "1", opts)
+      assert c2.reply =~ "delivering"
+
+      {:ok, _} = TragarAi.QuoteIntake.converse(sid, "Italtile Bryanston", opts)
+      {:ok, _} = TragarAi.QuoteIntake.converse(sid, "1", opts)
+      {:ok, ready} = TragarAi.QuoteIntake.converse(sid, "3 pallets, 1200kg, 120x100x150", opts)
+
+      # Ready → rate shown + Accept/Reject offered as clickable options.
+      assert ready.status == "ready"
+      assert ready.slot == "confirm"
+      assert ready.rate == "1234.00"
+      assert Enum.map(ready.options, & &1.value) == ["ACCEPT", "REJECT"]
+
+      # Clicking Accept creates the matching quote in FreightWare.
+      {:ok, done} = TragarAi.QuoteIntake.converse(sid, "ACCEPT", opts)
+      assert done.status == "accepted"
+      assert done.quote_number == "Q9001"
+    end
+
     test "REJECT cancels the request" do
       tid = "T-#{System.unique_integer([:positive])}"
       base = %{ticket_id: tid, account: "ITD02"}
