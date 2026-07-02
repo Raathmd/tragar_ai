@@ -39,17 +39,45 @@ defmodule TragarAiWeb.ArchitectureLive do
   # (Freshdesk-facing REST + the MCP server). Descriptive and stable — kept as a
   # narrative here rather than reflected out of the router.
   @internal_surfaces [
-    %{name: "Dashboard", path: "/", note: "Integration monitor — ticket answers & quote sessions, with response times."},
-    %{name: "Console", path: "/console", note: "Support-assist console — surface facts, draft a reply, relay to the customer."},
-    %{name: "Architecture", path: "/architecture", note: "This page — a live tour of the design."},
+    %{
+      name: "Dashboard",
+      path: "/",
+      note: "Integration monitor — ticket answers & quote sessions, with response times."
+    },
+    %{
+      name: "Console",
+      path: "/console",
+      note: "Support-assist console — surface facts, draft a reply, relay to the customer."
+    },
+    %{
+      name: "Architecture",
+      path: "/architecture",
+      note: "This page — a live tour of the design."
+    },
     %{name: "Chat", path: "/chat", note: "Plain chat with the local model."},
-    %{name: "Admin", path: "/admin", note: "AshAdmin — browse persisted resources (dev only until real auth)."}
+    %{
+      name: "Admin",
+      path: "/admin",
+      note: "AshAdmin — browse persisted resources (dev only until real auth)."
+    }
   ]
 
   @api_surfaces [
-    %{verb: "GET", path: "/api/quotes/workflow", note: "The guided-quote workflow descriptor (+ live service types)."},
-    %{verb: "POST", path: "/api/quotes/intake", note: "One customer message in a ticket → the next quote question."},
-    %{verb: "POST", path: "/api/tickets/answer", note: "Freshdesk ticket → interpret → fetch → answer as a private note."},
+    %{
+      verb: "GET",
+      path: "/api/quotes/workflow",
+      note: "The guided-quote workflow descriptor (+ live service types)."
+    },
+    %{
+      verb: "POST",
+      path: "/api/quotes/intake",
+      note: "One customer message in a ticket → the next quote question."
+    },
+    %{
+      verb: "POST",
+      path: "/api/tickets/answer",
+      note: "Freshdesk ticket → interpret → fetch → answer as a private note."
+    },
     %{verb: "POST", path: "/mcp", note: "MCP (JSON-RPC) server registered in Freshdesk."}
   ]
 
@@ -197,7 +225,10 @@ defmodule TragarAiWeb.ArchitectureLive do
                 <p class="text-xs text-base-content/60">{s.note}</p>
               </div>
             </div>
-            <div :if={i < length(@loop) - 1} class="hidden self-center text-xl text-base-content/30 lg:block">
+            <div
+              :if={i < length(@loop) - 1}
+              class="hidden self-center text-xl text-base-content/30 lg:block"
+            >
               →
             </div>
           </div>
@@ -246,7 +277,9 @@ defmodule TragarAiWeb.ArchitectureLive do
                 </span>
               </div>
               <div class="flex flex-wrap gap-1">
-                <span :for={c <- sys.capabilities} class="badge badge-xs badge-outline font-mono">{c}</span>
+                <span :for={c <- sys.capabilities} class="badge badge-xs badge-outline font-mono">
+                  {c}
+                </span>
               </div>
             </div>
           </div>
@@ -339,7 +372,9 @@ defmodule TragarAiWeb.ArchitectureLive do
         <div class="space-y-3">
           <h2 class="text-lg font-semibold">Ticket auto-answer</h2>
           <ol class="steps steps-vertical">
-            <li class="step step-primary">Freshdesk posts a ticket to <code>/api/tickets/answer</code></li>
+            <li class="step step-primary">
+              Freshdesk posts a ticket to <code>/api/tickets/answer</code>
+            </li>
             <li class="step step-primary">The safe loop interprets, validates and fetches</li>
             <li class="step step-primary">The answer is posted back as a private note</li>
             <li class="step step-primary">The agent reviews and replies to the customer</li>

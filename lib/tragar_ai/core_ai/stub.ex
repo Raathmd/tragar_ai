@@ -89,7 +89,16 @@ defmodule TragarAi.CoreAI.Stub do
   # context (so "how much stock is on hand?" stays a stock lookup, not a quote).
   @explicit_quote ["quote for", "quote to", "get a quote", "quoted", "rate for", "rate to"]
   @price_terms ["cost", "price", "how much"]
-  @shipping_terms ["ship", "deliver", "transport", "send", "collect", "move", "freight", "courier"]
+  @shipping_terms [
+    "ship",
+    "deliver",
+    "transport",
+    "send",
+    "collect",
+    "move",
+    "freight",
+    "courier"
+  ]
 
   defp quick_quote?(q, entities) do
     is_nil(entities[:quote]) and is_nil(entities[:waybill]) and
