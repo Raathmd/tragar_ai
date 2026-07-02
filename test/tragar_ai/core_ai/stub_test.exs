@@ -21,6 +21,23 @@ defmodule TragarAi.CoreAI.StubTest do
     test "unknown question" do
       assert %{intent: :unknown} = Stub.interpret("hello there")
     end
+
+    test "classifies a delivery-price request as quick_quote" do
+      assert %{intent: :quick_quote} =
+               Stub.interpret("What is the delivery cost to transport a TV to Rendo's Audio?")
+
+      assert %{intent: :quick_quote} = Stub.interpret("how much to ship a pallet to Durban?")
+    end
+
+    test "an existing quote number is still quote_lookup, not quick_quote" do
+      assert %{intent: :quote_lookup, entities: %{quote: "7012"}} =
+               Stub.interpret("what's the status of quote 7012?")
+    end
+
+    test "a price word without shipping context is not a quick_quote" do
+      # "how much" alone must not hijack a stock lookup.
+      assert %{intent: :stock} = Stub.interpret("how much stock is on hand?")
+    end
   end
 
   describe "phrase/2" do

@@ -20,6 +20,7 @@ defmodule TragarAi.Assist.Engine do
   alias TragarAi.CoreAI
   alias TragarAi.Freight.Accounts
   alias TragarAi.Harmonize
+  alias TragarAi.QuoteIntake.Flow
 
   require Logger
 
@@ -58,6 +59,14 @@ defmodule TragarAi.Assist.Engine do
         refs = reference_values(requests)
 
         cond do
+          # A request to be quoted / priced for a NEW shipment. This isn't a read
+          # of an existing record — it's the entry to the guided quote flow — so it
+          # never touches the read fan-out. We recognise it and pull out whatever
+          # the message already stated, rather than dead-ending on "which quote?".
+          Enum.any?(requests, &(&1.intent == :quick_quote)) ->
+            Logger.info("[assist] quick_quote <- #{inspect(question)}")
+            process_quick_quote(question, context)
+
           # A reference number in the request → don't trust the model's single
           # guess. Test it against EVERY reference endpoint across all sources
           # (broad), then frame the answer from all discovered facts.
@@ -115,6 +124,42 @@ defmodule TragarAi.Assist.Engine do
           )
         end
     end
+  end
+
+  # Recognise a "price this shipment" request and surface what the message already
+  # told us, plus what the guided quote still needs, as a drafted answer. Pricing +
+  # creation is the stateful `QuoteIntake` flow (quick_quote → accept → FreightWare
+  # quote); this is the assist-loop front door that names it instead of failing.
+  defp process_quick_quote(question, context) do
+    seed = Flow.seed_from_text(question)
+
+    known =
+      Flow.slot_keys()
+      |> Enum.flat_map(fn key -> if v = seed[key], do: ["#{key}: #{v}"], else: [] end)
+
+    needed = Enum.reject(Flow.slot_keys(), &Map.has_key?(seed, &1))
+    understood = if known == [], do: "", else: " So far I've got — #{Enum.join(known, "; ")}."
+
+    draft =
+      "That's a request for a delivery price — I can put it through a quick quote." <>
+        understood <>
+        " To rate it in FreightWare I still need: #{Enum.join(needed, ", ")}. " <>
+        "Start a guided quote to price it (and create it on FreightWare if accepted)."
+
+    create(
+      %{
+        question: question,
+        intent: "quick_quote",
+        entities: %{},
+        facts: %{"seed" => seed, "needed" => needed},
+        source: "FreightWare",
+        tool_log: [interpret_entry(question, :quick_quote, %{})],
+        draft_answer: draft,
+        status: :drafted,
+        agent: context[:agent]
+      },
+      context
+    )
   end
 
   defp process(question, %{intent: intent, entities: entities}, context, log) do

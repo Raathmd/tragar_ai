@@ -32,6 +32,9 @@ defmodule TragarAiWeb.Router do
     # Phase 1 — the support-assist agent console.
     live "/console", ConsoleLive
 
+    # Read-only tour of the application's design (systems, surfaces, flows).
+    live "/architecture", ArchitectureLive
+
     # Plain chat with the local AI.
     live "/chat", ChatLive
   end
