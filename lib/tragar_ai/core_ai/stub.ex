@@ -106,6 +106,60 @@ defmodule TragarAi.CoreAI.Stub do
          (contains?(q, @price_terms) and contains?(q, @shipping_terms)))
   end
 
+  @doc """
+  Deterministic best-effort extraction of quick-quote slots from a (possibly
+  multi-message) conversation — the fallback when qwen is down, and the engine
+  used in tests. Only what it can read confidently; the real extraction is the
+  model's (`CoreAI.quote_extract/1`).
+  """
+  def quote_extract(transcript) when is_binary(transcript) do
+    %{}
+    |> put_slot(
+      "service",
+      Map.get(TragarAi.QuoteIntake.Flow.seed_from_text(transcript), "service")
+    )
+    |> put_slot(
+      "collection",
+      place(transcript, ~r/.*\bfrom\s+([^,.?;\n]+?)(?=\s+to\s+|[,.?;\n]|$)/is)
+    )
+    |> put_slot(
+      "delivery",
+      place(transcript, ~r/.*\bto\s+([^,.?;\n]+?)(?=\s+on\s+|\s+for\s+|[,.?;\n]|$)/is)
+    )
+    |> put_slot("goods", goods(transcript))
+  end
+
+  def quote_extract(_), do: %{}
+
+  defp put_slot(map, _key, nil), do: map
+  defp put_slot(map, key, value), do: Map.put(map, key, value)
+
+  # Greedy `.*` anchors to the LAST from/to so a leading verb ("to transport…")
+  # doesn't get mistaken for the destination.
+  defp place(text, regex) do
+    case Regex.run(regex, text) do
+      [_, captured] ->
+        place = captured |> String.trim() |> String.trim(",")
+        if String.length(place) >= 2, do: place
+
+      _ ->
+        nil
+    end
+  end
+
+  # A goods clause is only read when a weight or dimensions are present (i.e. the
+  # customer is actually describing freight), captured as its surrounding phrase.
+  @kg_re ~r/([^.?;\n]*\b\d+(?:\.\d+)?\s*kg[^.?;\n]*)/i
+  @dims_re ~r/([^.?;\n]*\d+\s*[x×]\s*\d+[^.?;\n]*)/i
+
+  defp goods(text) do
+    cond do
+      m = Regex.run(@kg_re, text) -> String.trim(List.last(m))
+      m = Regex.run(@dims_re, text) -> String.trim(List.last(m))
+      true -> nil
+    end
+  end
+
   # A request to change something (not a read) — outside the read-only scope.
   @action_verbs [
     "add to",

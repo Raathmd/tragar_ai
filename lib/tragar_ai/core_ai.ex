@@ -137,6 +137,29 @@ defmodule TragarAi.CoreAI do
   end
 
   @doc """
+  Extract the quick-quote slots a customer has stated across a (possibly
+  multi-message) freight-quote conversation. Returns `{:ok, slots}` where `slots`
+  is a string-keyed map holding ONLY the slots the model could read — any of
+  `"service"`, `"collection"`, `"delivery"`, `"goods"`. The model only proposes;
+  the caller validates completeness and calls FreightWare (`quick_quote` /
+  `create_quote`). Falls back to the deterministic stub when qwen is down.
+  """
+  @spec quote_extract(String.t()) :: {:ok, map()}
+  def quote_extract(transcript) when is_binary(transcript) do
+    case mode() do
+      :ollama ->
+        with_fallback(
+          fn -> ollama_quote_extract(transcript) end,
+          fn -> {:ok, __MODULE__.Stub.quote_extract(transcript)} end,
+          "quote_extract"
+        )
+
+      _ ->
+        {:ok, __MODULE__.Stub.quote_extract(transcript)}
+    end
+  end
+
+  @doc """
   Free-form reasoning over a question, *without* a grounded fact lookup — used by
   the "reason freely" mode when validation or a lookup returns nothing. The answer
   is explicitly ungrounded (the model is told not to fabricate Tragar specifics).
@@ -439,6 +462,51 @@ defmodule TragarAi.CoreAI do
       {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
       {:error, _} = err -> err
     end
+  end
+
+  defp ollama_quote_extract(transcript) do
+    messages = [
+      %{role: "system", content: quote_extract_prompt()},
+      %{role: "user", content: transcript}
+    ]
+
+    with {:ok, content} <- ollama_chat(messages, format: "json"),
+         {:ok, body} <- Jason.decode(content) do
+      {:ok, take_quote_slots(body)}
+    else
+      {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
+      {:error, _} = err -> err
+    end
+  end
+
+  # Keep only the known slot keys with non-blank string values.
+  defp take_quote_slots(body) when is_map(body) do
+    for key <- ~w(service collection delivery goods),
+        value = body[key],
+        is_binary(value),
+        String.trim(value) != "",
+        into: %{},
+        do: {key, String.trim(value)}
+  end
+
+  defp take_quote_slots(_), do: %{}
+
+  defp quote_extract_prompt do
+    """
+    You extract shipment details from a customer's freight-quote conversation for
+    Tragar (a South African courier). Read EVERYTHING the customer has said so far
+    and return ONLY a JSON object — no prose, no markdown, no code fences — with
+    any of these keys you can determine. OMIT a key entirely if it isn't stated;
+    never guess.
+
+      - "service": one of Economy, Road Express, Overnight, Same-day, Abnormal
+      - "collection": where it is collected FROM (the site/place, as stated)
+      - "delivery": where it is delivered TO (the site/place, as stated)
+      - "goods": what is shipped — contents, number of items, total mass, and the
+        per-item dimensions, as stated
+
+    Example: {"delivery":"Rendo's Audio, Moffett On Main","goods":"one 85\\" TV, 53.4 kg, 209x21x128 cm"}
+    """
   end
 
   defp ollama_phrase(intent, facts, context, on_chunk) do
