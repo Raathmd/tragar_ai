@@ -29,6 +29,9 @@ defmodule TragarAi.CoreAI.Stub do
       contains?(q, ["service type", "service types", "services available"]) ->
         :service_types
 
+      quick_quote?(q, entities) ->
+        :quick_quote
+
       contains?(q, ["quote"]) ->
         :quote_lookup
 
@@ -79,6 +82,29 @@ defmodule TragarAi.CoreAI.Stub do
   defp put_match(acc, _key, _), do: acc
 
   defp contains?(q, terms), do: Enum.any?(terms, &String.contains?(q, &1))
+
+  # A request to be quoted / priced for a NEW shipment (no existing quote number),
+  # as opposed to looking up an existing quote or an existing waybill's cost.
+  # Either an explicit "quote/rate" ask, or a price word paired with shipping
+  # context (so "how much stock is on hand?" stays a stock lookup, not a quote).
+  @explicit_quote ["quote for", "quote to", "get a quote", "quoted", "rate for", "rate to"]
+  @price_terms ["cost", "price", "how much"]
+  @shipping_terms [
+    "ship",
+    "deliver",
+    "transport",
+    "send",
+    "collect",
+    "move",
+    "freight",
+    "courier"
+  ]
+
+  defp quick_quote?(q, entities) do
+    is_nil(entities[:quote]) and is_nil(entities[:waybill]) and
+      (contains?(q, @explicit_quote) or
+         (contains?(q, @price_terms) and contains?(q, @shipping_terms)))
+  end
 
   # A request to change something (not a read) — outside the read-only scope.
   @action_verbs [

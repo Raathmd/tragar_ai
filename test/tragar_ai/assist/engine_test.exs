@@ -114,6 +114,18 @@ defmodule TragarAi.Assist.EngineTest do
     assert i.draft_answer =~ "Granite"
   end
 
+  test "a delivery-price request drafts a quick quote instead of asking for a quote number" do
+    assert {:ok, i} = Engine.answer("How much would it cost to ship a TV to Rendo's Audio?")
+
+    assert i.status == :drafted
+    assert i.intent == "quick_quote"
+    assert i.source == "FreightWare"
+    assert i.draft_answer =~ "quick quote"
+    # It names what the guided flow still needs.
+    assert i.draft_answer =~ "service"
+    refute i.draft_answer =~ "quote number"
+  end
+
   test "an uninterpretable question fails safe" do
     assert {:ok, i} = Engine.answer("hello there")
     assert i.status == :failed
