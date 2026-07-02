@@ -19,7 +19,11 @@ defmodule TragarAi.Assist.Tools do
     waybill_lookup: "A waybill's details, by waybill.",
     track: "Tracking events for a shipment, by waybill.",
     route: "Planned / live route for a shipment, by waybill.",
-    quote_lookup: "A freight quote, by quote number.",
+    quote_lookup: "An EXISTING freight quote, by quote number.",
+    quick_quote:
+      "Price a NEW shipment — a delivery cost / quick quote — from a description of the goods " <>
+        "and where it's going. Use when the customer wants a price/rate and has NO existing quote " <>
+        "number (that's quote_lookup). Starts the guided quote flow.",
     customer_lookup: "A customer / account, by account reference.",
     invoice: "An account's invoice / balance, by account reference.",
     ticket_context: "A support ticket's context, by ticket id.",

@@ -22,4 +22,8 @@ defmodule TragarAi.Assist.ValidatorTest do
   test "intents without required entities pass" do
     assert :ok = Validator.validate(%{intent: :stock, entities: %{}})
   end
+
+  test "quick_quote needs no entities (it's the entry to the guided quote flow)" do
+    assert :ok = Validator.validate(%{intent: :quick_quote, entities: %{}})
+  end
 end

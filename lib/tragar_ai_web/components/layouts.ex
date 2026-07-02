@@ -12,19 +12,32 @@ defmodule TragarAiWeb.Layouts do
   embed_templates "layouts/*"
 
   @doc """
-  Top navigation between the internal LiveViews (Console ↔ Chat). Uses verified
-  routes so moving between them is live navigation, not a full page reload.
+  The single shared, fixed (sticky) top menu across every internal LiveView.
+  Rendered as the first element of each page, it pins to the top on scroll and
+  uses verified routes so moving between pages is live navigation, not a full
+  reload. Add a page here once and every LiveView that drops in `app_nav` picks
+  it up.
+
+  The Admin link (AshAdmin) only appears when `:dev_routes` is enabled — the same
+  gate the `/admin` route itself uses in the router — so it never dangles to a
+  404 (or exposes admin) in production.
 
   ## Examples
 
       <Layouts.app_nav active={:console} />
-      <Layouts.app_nav active={:chat} />
+      <Layouts.app_nav active={:architecture} />
   """
-  attr :active, :atom, default: nil, doc: "the current page — :console or :chat"
+  attr :active, :atom,
+    default: nil,
+    doc: "current page — :dashboard | :console | :architecture | :chat"
 
   def app_nav(assigns) do
     ~H"""
-    <nav class="flex items-center gap-1">
+    <nav class="sticky top-0 z-40 flex items-center gap-1 rounded-lg border border-base-300 bg-base-100/95 px-2 py-1.5 shadow-sm backdrop-blur">
+      <span class="select-none px-2 text-sm font-semibold tracking-tight text-base-content/80">
+        Tragar<span class="text-primary">·</span>AI
+      </span>
+      <span class="mx-1 h-5 w-px bg-base-300"></span>
       <.link
         navigate={~p"/"}
         class={["btn btn-sm", (@active == :dashboard && "btn-primary") || "btn-ghost"]}
@@ -38,14 +51,32 @@ defmodule TragarAiWeb.Layouts do
         Console
       </.link>
       <.link
+        navigate={~p"/architecture"}
+        class={["btn btn-sm", (@active == :architecture && "btn-primary") || "btn-ghost"]}
+      >
+        Architecture
+      </.link>
+      <.link
         navigate={~p"/chat"}
         class={["btn btn-sm", (@active == :chat && "btn-primary") || "btn-ghost"]}
       >
         Chat
       </.link>
+
+      <div class="ml-auto flex items-center gap-1">
+        <.theme_toggle />
+        <.link :if={dev_routes?()} href="/admin" class="btn btn-sm btn-ghost">
+          Admin <span aria-hidden="true">↗</span>
+        </.link>
+      </div>
     </nav>
     """
   end
+
+  # Admin (AshAdmin) is mounted only under `:dev_routes`; mirror that gate so the
+  # menu link tracks the actual route rather than dangling in production.
+  @dev_routes Application.compile_env(:tragar_ai, :dev_routes, false)
+  defp dev_routes?, do: @dev_routes
 
   @doc """
   Renders your app layout.

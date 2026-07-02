@@ -102,6 +102,42 @@ defmodule TragarAi.QuoteIntake.Flow do
     }
   end
 
+  # Tragar's FreightWare service types, as named in the opening question. Used to
+  # recognise a service the customer already stated.
+  @service_names ["Economy", "Road Express", "Overnight", "Same-day", "Abnormal"]
+
+  @doc "The service types the quote flow recognises."
+  def service_names, do: @service_names
+
+  @doc """
+  Best-effort extraction of quote slots the customer already stated in a free-text
+  request, so the guided flow can skip what it already knows. **Deliberately
+  conservative** — only the service type, which matches an exact known name, is
+  read here. Places and goods are NOT parsed deterministically (a verb like "to
+  transport…" or a place like "Moffett **On** Main" fools naive patterns); those
+  are left to the flow's own prompts (or a future model-backed extraction step),
+  so seeding can save a question but never mis-fills.
+
+  Returns a map keyed by slot ("service"), omitting anything it can't read.
+  """
+  @spec seed_from_text(term()) :: %{optional(String.t()) => String.t()}
+  def seed_from_text(text) when is_binary(text) do
+    %{}
+    |> maybe_put("service", detect_service(text))
+  end
+
+  def seed_from_text(_), do: %{}
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp detect_service(text) do
+    down = String.downcase(text)
+
+    Enum.find(@service_names, &String.contains?(down, String.downcase(&1))) ||
+      if(String.contains?(down, "same day"), do: "Same-day")
+  end
+
   @doc "The first slot not yet filled, or nil when the quote is ready."
   def next_unfilled(slots), do: Enum.find(slot_keys(), &(not filled?(slots, &1)))
 
