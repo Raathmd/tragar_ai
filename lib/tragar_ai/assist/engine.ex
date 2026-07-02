@@ -131,7 +131,10 @@ defmodule TragarAi.Assist.Engine do
   # creation is the stateful `QuoteIntake` flow (quick_quote → accept → FreightWare
   # quote); this is the assist-loop front door that names it instead of failing.
   defp process_quick_quote(question, context) do
-    seed = Flow.seed_from_text(question)
+    # The model reads whatever the customer already stated; Elixir lists what the
+    # guided quote still needs. Extraction is best-effort — anything missing is
+    # simply asked for.
+    {:ok, seed} = CoreAI.quote_extract(question)
 
     known =
       Flow.slot_keys()

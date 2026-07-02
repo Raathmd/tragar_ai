@@ -40,6 +40,30 @@ defmodule TragarAi.CoreAI.StubTest do
     end
   end
 
+  describe "quote_extract/1" do
+    test "reads service, collection, delivery and goods from a full request" do
+      slots =
+        Stub.quote_extract("I need an Overnight delivery from Menlyn to Durban, 53.4 kg")
+
+      assert slots["service"] == "Overnight"
+      assert slots["collection"] == "Menlyn"
+      assert slots["delivery"] == "Durban"
+      assert slots["goods"] =~ "53.4"
+    end
+
+    test "a leading verb ('to ship') is not mistaken for the destination" do
+      slots = Stub.quote_extract("how much to ship from Sandton to Umhlanga?")
+
+      assert slots["collection"] == "Sandton"
+      assert slots["delivery"] == "Umhlanga"
+    end
+
+    test "empty when nothing is stated, and safe on non-binary input" do
+      assert Stub.quote_extract("hello there") == %{}
+      assert Stub.quote_extract(nil) == %{}
+    end
+  end
+
   describe "phrase/2" do
     test "load_status mentions waybill and status" do
       text = Stub.phrase(:load_status, %{"waybill_number" => "4821", "status" => "In transit"})
