@@ -32,14 +32,27 @@ defmodule TragarAi.Logistics.Cache do
     cached = cached_shipment(waybill)
 
     if cached && fresh?(cached.cached_at) do
-      {:ok, shipment_domain(cached)}
+      {:ok, cached_domain(cached)}
     else
       case fetch_live_shipment(waybill) do
         {:ok, domain} -> {:ok, domain}
-        {:error, reason} -> stale_or_error(cached, &shipment_domain/1, reason)
+        {:error, reason} -> stale_or_error(cached, &cached_domain/1, reason)
       end
     end
   end
+
+  # Rebuild the full domain shipment from the raw waybill we cached — it carries
+  # the rated items + charges that the slim `Shipment` columns don't — so a cache
+  # hit surfaces the same detail as a live fetch. Falls back to the columns.
+  defp cached_domain(cached) do
+    case get_in(cached.source_data || %{}, [@source, "waybill"]) do
+      %{} = wb -> Mapper.shipment(wb, cached_events(cached))
+      _ -> shipment_domain(cached)
+    end
+  end
+
+  defp cached_events(cached),
+    do: get_in(cached.source_data || %{}, [@source, "tracking"]) || cached.events || []
 
   defp fetch_live_shipment(waybill) do
     with {:ok, wb} when is_map(wb) <- Freight.get_waybill(waybill),

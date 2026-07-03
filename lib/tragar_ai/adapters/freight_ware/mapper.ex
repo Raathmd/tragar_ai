@@ -12,10 +12,21 @@ defmodule TragarAi.Adapters.FreightWare.Mapper do
       "account_reference" => waybill["account_reference"],
       "status" => waybill["status_description"] || waybill["status_code"],
       "status_code" => waybill["status_code"],
-      "service_type" => waybill["service_type"],
+      "service_type" => waybill["service_type_description"] || waybill["service_type"],
       "consignor" => waybill["consignor_name"],
       "consignee" => waybill["consignee_name"],
       "consignee_city" => waybill["consignee_city"],
+      # The rated items + charges FreightWare supplies on the waybill, so the model
+      # can answer costing / quantities / contents — not just status.
+      "contents" => waybill["contents"],
+      "number_of_items" => waybill["number_of_items"],
+      "items" => waybill["items"] || [],
+      "freight_charge" => waybill["freight_charge"],
+      "sundry_charge" => waybill["sundry_charge"],
+      "tax_amount" => waybill["tax_amount"],
+      "charged_amount" => waybill["charged_amount"],
+      "consignment_value" => waybill["consignment_value"],
+      "currency_code" => waybill["currency_code"],
       "events" => events,
       "pod" => pod_from(events, waybill)
     }
