@@ -32,6 +32,41 @@ defmodule TragarAi.FreshdeskTest do
     def accounts_for_requester(_ticket, _opts \\ []), do: {:ok, ["ITD02"]}
   end
 
+  # A client returning a ticket + a mixed conversation (incoming reply, agent
+  # note, our own bot note, agent public reply).
+  defmodule ThreadClient do
+    def get_ticket(_id, _params) do
+      {:ok,
+       %{
+         "id" => 55,
+         "subject" => "Where is my parcel",
+         "description_text" => "Please find waybill DSV37713735.",
+         "requester" => %{"email" => "cust@acme.com"},
+         "company" => %{"name" => "Acme"},
+         "company_id" => 10
+       }}
+    end
+
+    def conversations(_id) do
+      {:ok,
+       [
+         c(true, false, "Any update?", "04:00:00"),
+         c(false, true, "Checked with ops.", "04:05:00"),
+         c(false, true, "Tragar AI\n\nStatus is To Deliver.", "04:06:00"),
+         c(false, false, "We're on it.", "04:07:00")
+       ]}
+    end
+
+    defp c(incoming, private, text, at) do
+      %{
+        "incoming" => incoming,
+        "private" => private,
+        "body_text" => text,
+        "created_at" => "2026-07-03T#{at}Z"
+      }
+    end
+  end
+
   describe "accounts_for_requester/2 (the authorization gate)" do
     test "returns the requester company's account code(s), upper-cased + split" do
       assert {:ok, ["ITD01", "ITD02"]} =
@@ -46,6 +81,23 @@ defmodule TragarAi.FreshdeskTest do
     test "refuses when the company carries no account code" do
       assert {:error, :company_has_no_account} =
                Freshdesk.accounts_for_requester("t3", client: NoAccountClient)
+    end
+  end
+
+  describe "ticket_thread/2 (full context for the model)" do
+    test "labels each message Requestor/Agent and excludes our own notes" do
+      {:ok, thread} = Freshdesk.ticket_thread("55", client: ThreadClient)
+      t = thread.transcript
+
+      assert t =~ "Requestor: Please find waybill DSV37713735."
+      assert t =~ "Requestor (reply): Any update?"
+      assert t =~ "Agent (note): Checked with ops."
+      assert t =~ "Agent (reply): We're on it."
+      # Our own bot note is filtered out — the model never reads its own answer.
+      refute t =~ "Status is To Deliver."
+
+      assert thread.requester_email == "cust@acme.com"
+      assert thread.company_name == "Acme"
     end
   end
 
