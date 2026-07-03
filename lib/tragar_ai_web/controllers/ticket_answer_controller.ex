@@ -54,12 +54,9 @@ defmodule TragarAiWeb.TicketAnswerController do
       # Answer the webhook immediately and run the assist loop (interpret → fetch →
       # phrase → post note) off the request path — Freshdesk's webhook timeout is
       # short, and the loop can take much longer. The answer is delivered as a
-      # ticket note, not in this response.
-      Task.Supervisor.start_child(TragarAi.TaskSupervisor, fn ->
-        with {:error, reason} <- TicketResponder.respond(ticket_id, content, opts) do
-          Logger.warning("[tickets/answer] #{ticket_id} failed: #{inspect(reason)}")
-        end
-      end)
+      # ticket note, not in this response. Runs inline under `ticket_async: false`
+      # (tests) so it stays deterministic.
+      deliver(ticket_id, content, opts)
 
       conn |> put_status(:accepted) |> json(%{status: "accepted", ticket_id: ticket_id})
     else
@@ -70,6 +67,22 @@ defmodule TragarAiWeb.TicketAnswerController do
         conn
         |> put_status(:bad_request)
         |> json(%{error: "ticket content (subject/description) is required"})
+    end
+  end
+
+  # Run the assist loop and post the answer as a ticket note. Off the request path
+  # via a Task in prod; inline when `:ticket_async` is false (tests).
+  defp deliver(ticket_id, content, opts) do
+    work = fn ->
+      with {:error, reason} <- TicketResponder.respond(ticket_id, content, opts) do
+        Logger.warning("[tickets/answer] #{ticket_id} failed: #{inspect(reason)}")
+      end
+    end
+
+    if Application.get_env(:tragar_ai, :ticket_async, true) do
+      Task.Supervisor.start_child(TragarAi.TaskSupervisor, work)
+    else
+      work.()
     end
   end
 
