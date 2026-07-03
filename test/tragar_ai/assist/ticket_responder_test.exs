@@ -85,9 +85,12 @@ defmodule TragarAi.Assist.TicketResponderTest do
 
     # The trigger checkbox is cleared (unchecked) — the loop-breaker.
     assert_received {:update_ticket, "55", %{custom_fields: %{"cf_tragar_ai" => false}}}
-    # A resolved answer is posted as a private note labelled as a requestor draft.
+    # A resolved answer is posted as a private note labelled as a requestor draft,
+    # laid out as HTML so it reads cleanly in Freshdesk.
     assert_received {:add_note, "55", %{body: body, private: true}}
     assert body =~ "Suggested reply to requestor"
+    assert body =~ "<strong>"
+    assert body =~ "<p>"
   end
 
   test "an unresolved turn is posted as an agent note (the model needs input)" do

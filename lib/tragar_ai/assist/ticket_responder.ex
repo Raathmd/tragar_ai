@@ -138,13 +138,14 @@ defmodule TragarAi.Assist.TicketResponder do
     answer = interaction.draft_answer
 
     if Keyword.get(opts, :post_reply, true) and is_binary(answer) and answer != "" do
-      # Prefix the bot marker (so this note is excluded from the thread next time)
-      # and label the note's purpose: a resolved answer is a draft the agent can
-      # send to the requestor; an unresolved turn is the model asking the agent
-      # for what it needs. Both are private — the agent reviews everything. The
-      # draft is generated from source FACTS (not the private notes), so internal
-      # note content never bleeds into the customer-facing reply.
-      body = "#{TragarAi.Freshdesk.bot_marker()} — #{note_label(interaction)}\n\n#{answer}"
+      # Lay the note out as HTML so it reads cleanly in Freshdesk (whose notes
+      # render HTML): a bold header — which also carries the bot marker for thread
+      # exclusion and labels the note's purpose (a resolved answer is a draft the
+      # agent can send to the requestor; an unresolved turn is the model asking the
+      # agent for input) — then the answer with links, emphasis and paragraphs.
+      # The draft is built from source FACTS, so private-note content never bleeds
+      # into the customer-facing reply.
+      body = format_note(note_label(interaction), answer)
       client.add_note(ticket_id, %{body: body, private: Keyword.get(opts, :private, true)})
     else
       {:ok, :skipped}
@@ -153,6 +154,14 @@ defmodule TragarAi.Assist.TicketResponder do
 
   defp note_label(%{status: :drafted}), do: "Suggested reply to requestor"
   defp note_label(_), do: "Agent note (needs input)"
+
+  # Lay out the note as HTML — a bold header (bot marker + purpose label) then the
+  # answer rendered via the shared markdown formatter, so the note reads the same
+  # as the console/chat.
+  defp format_note(label, answer) do
+    header = "<strong>#{TragarAi.Freshdesk.bot_marker()} — #{label}</strong>"
+    "<p>#{header}</p>\n#{TragarAi.Markdown.to_html(answer)}"
+  end
 
   # The whole ticket thread as the model's context, or the webhook body if the
   # Freshdesk fetch fails.
