@@ -55,7 +55,7 @@ defmodule TragarAiWeb.ConsoleLive do
 
       ticket = parse_ticket_fetch(text) ->
         # "ticket 227703" / "#227703" → fetch that ticket, distil + resolve it.
-        {:noreply, start_ticket_distil(socket, ticket)}
+        {:noreply, start_ticket_load(socket, ticket)}
 
       spec = parse_quote_search(text) ->
         {:noreply, search_or_converse(socket, text, :quotes, spec)}
@@ -156,13 +156,13 @@ defmodule TragarAiWeb.ConsoleLive do
   # Click a ticket → fetch it from Freshdesk, distil its subject+body into a
   # concise query, and resolve its account — then pre-fill the prompt for editing.
   def handle_event("prompt_ticket", %{"id" => id}, socket),
-    do: {:noreply, start_ticket_distil(socket, id)}
+    do: {:noreply, start_ticket_load(socket, id)}
 
   # Fetch a ticket by number (listed or not) via the input above the ticket list.
   def handle_event("fetch_ticket", %{"ticket_no" => id}, socket) do
     case String.trim(to_string(id)) do
       "" -> {:noreply, put_flash(socket, :error, "Enter a ticket number.")}
-      n -> {:noreply, start_ticket_distil(socket, n)}
+      n -> {:noreply, start_ticket_load(socket, n)}
     end
   end
 
@@ -347,7 +347,7 @@ defmodule TragarAiWeb.ConsoleLive do
             phx-click="prompt_ticket"
             phx-value-id={t.id}
             class="w-full p-2 text-left hover:bg-base-200"
-            title="Click to distil this ticket into a prompt"
+            title="Click to load this ticket into a prompt"
           >
             <div class="flex items-start justify-between gap-2">
               <span class="text-xs font-medium">#{t.id}</span>
@@ -400,7 +400,7 @@ defmodule TragarAiWeb.ConsoleLive do
           data-drop
           disabled={@distilling}
           class="textarea textarea-bordered w-full"
-          placeholder="Ask Tragar AI — or click a Freshdesk ticket on the left to distil it into a prompt…"
+          placeholder="Ask Tragar AI — or click a Freshdesk ticket on the left to load it into a prompt…"
         >{@question}</textarea>
         <div class="flex flex-wrap items-center gap-3">
           <button type="submit" class="btn btn-primary" disabled={@distilling}>Send</button>
@@ -419,7 +419,7 @@ defmodule TragarAiWeb.ConsoleLive do
             class="input input-bordered input-sm w-32"
           />
           <span :if={@distilling} class="flex items-center gap-2 text-sm text-base-content/60">
-            <span class="loading loading-spinner loading-xs"></span> Distilling ticket…
+            <span class="loading loading-spinner loading-xs"></span> Loading ticket…
           </span>
         </div>
       </form>
@@ -976,12 +976,12 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  # Fetch a ticket → distil its content into a query → resolve its account.
-  # Async (the model call takes ~1s); result handled in handle_async(:distil_ticket).
-  defp start_ticket_distil(socket, id) do
+  # Fetch a ticket → load its contents into the prompt → resolve its account.
+  # Async (the model call takes ~1s); result handled in handle_async(:load_ticket).
+  defp start_ticket_load(socket, id) do
     socket
     |> assign(distilling: true, selected_ticket: nil, account_choices: [])
-    |> start_async(:distil_ticket, fn ->
+    |> start_async(:load_ticket, fn ->
       # Pre-fill the prompt with the ACTUAL ticket contents (subject + body), not a
       # distilled summary — the agent edits/submits it as-is.
       with {:ok, info} <- TragarAi.Freshdesk.ticket_text(id) do
@@ -1170,10 +1170,10 @@ defmodule TragarAiWeb.ConsoleLive do
     {:noreply, socket}
   end
 
-  # Ticket distilled into a prompt → pre-fill the input for editing, carrying the
+  # Ticket loaded into a prompt → pre-fill the input for editing, carrying the
   # ticket_id (so a relayed answer posts back) and the resolved account. If the
   # resolver returned several candidates, offer a chooser instead of guessing.
-  def handle_async(:distil_ticket, {:ok, {ticket_id, query, resolution}}, socket)
+  def handle_async(:load_ticket, {:ok, {ticket_id, query, resolution}}, socket)
       when is_binary(query) do
     {account, choices} =
       case resolution do
@@ -1195,15 +1195,15 @@ defmodule TragarAiWeb.ConsoleLive do
      )}
   end
 
-  def handle_async(:distil_ticket, {:ok, _}, socket) do
+  def handle_async(:load_ticket, {:ok, _}, socket) do
     {:noreply,
      socket
      |> assign(distilling: false)
      |> put_flash(:error, "Couldn't load that ticket from Freshdesk.")}
   end
 
-  def handle_async(:distil_ticket, {:exit, reason}, socket) do
-    Logger.error("[console] distil crashed: #{inspect(reason)}")
+  def handle_async(:load_ticket, {:exit, reason}, socket) do
+    Logger.error("[console] ticket load crashed: #{inspect(reason)}")
 
     {:noreply,
      socket

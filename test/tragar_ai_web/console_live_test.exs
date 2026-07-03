@@ -83,14 +83,14 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "FreightWare"
   end
 
-  test "clicking a ticket distils it into a pre-filled prompt", %{conn: conn} do
+  test "clicking a ticket loads its contents into a pre-filled prompt", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
     view |> element(~s|button[phx-value-id="55"]|) |> render_click()
     html = render_async(view, 5000)
 
-    # Stub CoreAI distils to the first line of the ticket (subject); it lands in
-    # the prompt textarea for the agent to edit and submit.
+    # The ticket's actual contents (subject + body) land in the prompt textarea for
+    # the agent to edit and submit — no distillation.
     assert html =~ "Where is parcel 4821"
   end
 end
