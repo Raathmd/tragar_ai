@@ -37,7 +37,6 @@ config :tragar_ai, TragarAi.Dovetail.Client,
   username: "test-user",
   password: "test-pass",
   station: "TEST",
-  pod_image_base: "https://dovetail.test/view",
   req_options: [plug: {Req.Test, TragarAi.Dovetail.Client}]
 
 config :tragar_ai, TragarAi.Freshdesk.Client,
