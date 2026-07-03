@@ -73,7 +73,7 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert view |> element(~s{nav a[href="/chat"]}) |> has_element?()
   end
 
-  test "asking drafts an answer the agent can relay", %{conn: conn} do
+  test "asking surfaces the fetched facts as a drafted answer", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
     view |> form("form[phx-submit=ask]", %{question: "Where is load 4821?"}) |> render_submit()
@@ -81,15 +81,6 @@ defmodule TragarAiWeb.ConsoleLiveTest do
 
     assert html =~ "In transit"
     assert html =~ "FreightWare"
-
-    view |> element("button", "Write a reply") |> render_click()
-
-    html =
-      view
-      |> form("form[phx-submit=relay]", %{final_answer: "It is in transit."})
-      |> render_submit()
-
-    assert html =~ "relayed"
   end
 
   test "clicking a ticket distils it into a pre-filled prompt", %{conn: conn} do

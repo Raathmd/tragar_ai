@@ -8,7 +8,7 @@ defmodule TragarAiWeb.ConsoleLive do
       and agent. Clicking a ticket fetches it and asks the local model to distil
       its subject + body into a concise prompt, pre-filled for the agent to edit.
     * centre — the prompt + the chat conversation, plus the surfaced entity
-      details / reply box for the customer-email use case.
+      details for whatever was looked up.
     * right — the AI progress log (interpret → validate → fetch → phrase, with the
       per-source calls), plus Recents/Details/Waybills/Quotes tabs.
   """
@@ -26,7 +26,7 @@ defmodule TragarAiWeb.ConsoleLive do
      socket
      |> assign(question: "", agent: "")
      |> assign(messages: [], frame: %{intent: nil, entities: %{}})
-     |> assign(interaction: nil, reply: false)
+     |> assign(interaction: nil)
      |> assign(model: TragarAi.CoreAI.info())
      |> assign(right_tab: "log", detail: nil, detail_title: nil)
      |> assign(search_results: [], search_meta: nil)
@@ -64,7 +64,7 @@ defmodule TragarAiWeb.ConsoleLive do
         {:noreply, search_or_converse(socket, text, :waybills, spec)}
 
       true ->
-        {:noreply, converse(socket, text, false)}
+        {:noreply, converse(socket, text)}
     end
   end
 
@@ -106,7 +106,7 @@ defmodule TragarAiWeb.ConsoleLive do
     socket
     |> reset_chat_state()
     |> assign(frame: %{intent: nil, entities: %{quote: number}})
-    |> converse("Show quote #{number}", false)
+    |> converse("Show quote #{number}")
     |> then(&{:noreply, &1})
   end
 
@@ -115,7 +115,7 @@ defmodule TragarAiWeb.ConsoleLive do
     socket
     |> reset_chat_state()
     |> assign(frame: %{intent: nil, entities: %{waybill: number}})
-    |> converse("Where is waybill #{number}?", false)
+    |> converse("Where is waybill #{number}?")
     |> then(&{:noreply, &1})
   end
 
@@ -124,30 +124,7 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # Run a suggested query the AI offered to help resolve the request.
   def handle_event("suggest", %{"q" => q}, socket),
-    do: {:noreply, converse(socket, q, false)}
-
-  # Reveal the reply composer for the customer-email use case.
-  def handle_event("draft_reply", _params, socket), do: {:noreply, assign(socket, reply: true)}
-
-  def handle_event("relay", %{"final_answer" => final} = params, socket) do
-    {:ok, _} =
-      Assist.relay_interaction(socket.assigns.interaction, %{
-        final_answer: final,
-        agent: blank_to_nil(params["agent"])
-      })
-
-    {:noreply,
-     socket
-     |> put_flash(:info, "Answer relayed and logged.")
-     |> reset_chat_state()
-     |> assign(right_tab: "recents")
-     |> load_history()}
-  end
-
-  def handle_event("discard", _params, socket) do
-    {:ok, _} = Assist.discard_interaction(socket.assigns.interaction, %{})
-    {:noreply, socket |> reset_chat_state() |> load_history()}
-  end
+    do: {:noreply, converse(socket, q)}
 
   # ── Tickets (left, from Freshdesk) ──────────────────────────────────────────
 
@@ -221,7 +198,7 @@ defmodule TragarAiWeb.ConsoleLive do
         <div>
           <h1 class="text-2xl font-semibold">Tragar · Support Assist</h1>
           <p class="text-sm text-base-content/70">
-            Surface facts from the source systems. Reply to a customer, or just look something up.
+            Surface facts from the source systems — look something up.
           </p>
         </div>
         <div class="text-right shrink-0">
@@ -250,7 +227,6 @@ defmodule TragarAiWeb.ConsoleLive do
           frame={@frame}
           messages={@messages}
           interaction={@interaction}
-          reply={@reply}
           model={@model}
         />
         <.right_panel
@@ -285,7 +261,7 @@ defmodule TragarAiWeb.ConsoleLive do
               el.addEventListener("click", (e) => {
                 const chip = e.target.closest("[data-snippet][data-insert]")
                 if (!chip) return
-                const ta = el.querySelector("textarea[name=final_answer]")
+                const ta = el.querySelector("textarea[name=question]")
                 if (ta) this.insert(ta, chip.getAttribute("data-snippet"))
               })
             }
@@ -526,7 +502,7 @@ defmodule TragarAiWeb.ConsoleLive do
         <%= if (fields = surfaced_fields(@interaction)) != [] do %>
           <div>
             <h3 class="text-sm font-medium mb-2">
-              {@interaction.source || "Source"} details<span :if={@reply}> — drag a field into your reply</span>
+              {@interaction.source || "Source"} details
             </h3>
             <div class="flex flex-wrap gap-2">
               <button
@@ -536,7 +512,7 @@ defmodule TragarAiWeb.ConsoleLive do
                 data-snippet={f.snippet}
                 data-insert
                 class="cursor-grab active:cursor-grabbing rounded-md border border-base-300 bg-base-200 px-2.5 py-1.5 text-left hover:border-primary"
-                title="Drag into the reply (reply mode), or click to copy in"
+                title="Drag or click to add to your prompt"
               >
                 <span class="block text-[10px] uppercase tracking-wide text-base-content/50">
                   {f.label}
@@ -544,33 +520,6 @@ defmodule TragarAiWeb.ConsoleLive do
                 <span class="block text-sm">{f.value}</span>
               </button>
             </div>
-          </div>
-        <% end %>
-
-        <%= if @reply do %>
-          <form phx-submit="relay" class="space-y-3">
-            <input type="hidden" name="agent" value={@agent} />
-            <h3 class="text-sm font-medium">
-              Your reply to the customer — write whatever you want; the AI's draft is only a starting point
-            </h3>
-            <textarea
-              name="final_answer"
-              rows="6"
-              data-drop
-              class="textarea textarea-bordered w-full"
-              placeholder="Type your reply… (drag fields above in, or ignore the AI entirely)"
-            >{reply_seed(@interaction)}</textarea>
-            <div class="flex gap-2">
-              <button type="submit" class="btn btn-primary">Relay to customer</button>
-              <button type="button" phx-click="discard" class="btn btn-ghost">Discard</button>
-            </div>
-          </form>
-        <% else %>
-          <div :if={@interaction} class="flex items-center gap-2">
-            <button type="button" phx-click="draft_reply" class="btn btn-outline btn-sm">
-              Write a reply
-            </button>
-            <span class="text-xs text-base-content/50">you write it; the AI just helps</span>
           </div>
         <% end %>
 
@@ -1129,7 +1078,7 @@ defmodule TragarAiWeb.ConsoleLive do
   # One chat turn: append the user message + a pending AI bubble, then run the
   # loop off the LiveView process. Tokens stream in via {:chunk,...}; the final
   # interaction is applied in handle_async (frame accumulation, reply mode).
-  defp converse(socket, text, reply?) do
+  defp converse(socket, text) do
     frame = socket.assigns.frame
     base = frame.entities
 
@@ -1163,14 +1112,14 @@ defmodule TragarAiWeb.ConsoleLive do
       right_tab: "log"
     )
     |> start_async({:converse, id}, fn ->
-      {Engine.answer(text, context), base, reply?, frame.intent}
+      {Engine.answer(text, context), base, frame.intent}
     end)
   end
 
   @impl true
   def handle_async(
         {:converse, id},
-        {:ok, {{:ok, interaction}, base, reply?, prior_intent}},
+        {:ok, {{:ok, interaction}, base, prior_intent}},
         socket
       ) do
     resolved? = interaction.status == :drafted
@@ -1195,9 +1144,8 @@ defmodule TragarAiWeb.ConsoleLive do
       |> assign(
         messages: replace_msg(socket.assigns.messages, id, ai),
         frame: new_frame,
-        # Keep the interaction (even if unresolved) so the agent can always reply.
+        # Keep the interaction so its source details/fields stay available.
         interaction: interaction,
-        reply: reply?,
         right_tab: "log"
       )
       |> load_history()
@@ -1331,8 +1279,6 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # The composer starts from the AI's answer only when it actually answered;
   # never seed it with a clarify/error message.
-  defp reply_seed(%{status: :drafted, draft_answer: draft}), do: draft
-  defp reply_seed(_), do: ""
 
   # Turn a failed interpretation into actionable next steps: queries the schema
   # can answer, grounded in whatever entity the AI did extract.
@@ -1428,7 +1374,7 @@ defmodule TragarAiWeb.ConsoleLive do
     case resolve_search_account(spec.account) do
       {:ok, ref} when kind == :quotes -> run_quote_search(socket, ref, spec.status)
       {:ok, ref} -> run_waybill_search(socket, ref, spec.status)
-      _ -> converse(socket, text, false)
+      _ -> converse(socket, text)
     end
   end
 
@@ -1627,7 +1573,6 @@ defmodule TragarAiWeb.ConsoleLive do
       messages: [],
       frame: %{intent: nil, entities: %{}},
       interaction: nil,
-      reply: false,
       question: ""
     )
   end
