@@ -45,6 +45,18 @@ defmodule TragarAi.Assist.EngineTest do
             }
           })
 
+        # Waybill SEARCH (the shipper-reference fallback) → resolves to 4821.
+        String.ends_with?(conn.request_path, "/waybills/") ->
+          Req.Test.json(conn, %{
+            "response" => %{
+              "esWaybills" => %{
+                "Waybills" => [
+                  %{"waybillNumber" => "4821", "shipperReference" => "REF123"}
+                ]
+              }
+            }
+          })
+
         # allocated-accounts directory (for account validation/resolution)
         String.contains?(conn.request_path, "/system/baseData/accounts") ->
           Req.Test.json(conn, %{
@@ -139,6 +151,19 @@ defmodule TragarAi.Assist.EngineTest do
     assert {:ok, i} = Engine.answer("hello there")
     assert i.status == :failed
     assert i.error == "not_understood"
+  end
+
+  test "a shipper reference resolves to the waybill via account-scoped search" do
+    # REF123 isn't a waybill/quote number, but it is the customer's shipper
+    # reference — the account-scoped search resolves it to waybill 4821.
+    assert {:ok, i} =
+             Engine.answer("where is my shipment", %{
+               accounts: ["ITD02"],
+               entities: %{account: "ITD02", waybill: "REF123"}
+             })
+
+    assert i.status == :drafted
+    assert i.facts["waybill_number"] == "4821"
   end
 
   test "an unscoped identifier is flagged and clarification requested" do

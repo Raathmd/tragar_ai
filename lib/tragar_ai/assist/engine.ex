@@ -400,6 +400,17 @@ defmodule TragarAi.Assist.Engine do
     valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
     {groups, fetch_entries} = gather(valid, context)
 
+    # Fallback: a value that isn't a waybill/quote NUMBER may be the customer's
+    # own shipper reference — search FreightWare for it (account-scoped) before
+    # giving up.
+    {groups, fetch_entries} =
+      if groups == [] do
+        {ref_groups, ref_entries} = gather_shipper_refs(values, context)
+        {ref_groups, fetch_entries ++ ref_entries}
+      else
+        {groups, fetch_entries}
+      end
+
     case groups do
       [] ->
         # The identifier couldn't be scoped to any entity in any source — say what
@@ -423,6 +434,67 @@ defmodule TragarAi.Assist.Engine do
           context,
           [interpret_entry | fetch_entries] ++ phrase_entries
         )
+    end
+  end
+
+  # Search FreightWare for each value as a shipper reference, resolving it to a
+  # waybill. Tries EVERY account the requester is entitled to (the search must be
+  # account-bounded) — so a Freshdesk ticket resolves the reference across all its
+  # accounts without anyone picking one. Skipped when no account is in context.
+  defp gather_shipper_refs(values, context) do
+    case probe_accounts(context) do
+      [] ->
+        {[], []}
+
+      accounts ->
+        results = for value <- values, do: {value, ref_lookup_any(value, accounts)}
+
+        entries =
+          for {v, r} <- results,
+              do: fetch_entry("FreightWare", :waybill_by_reference, %{reference: v}, r)
+
+        groups =
+          for {v, {:ok, facts}} <- results, not out_of_scope?(facts, context) do
+            key = facts["waybill_number"] || v
+
+            %{
+              intent: :load_status,
+              source: "FreightWare",
+              entities: %{waybill: key},
+              entity: :waybill,
+              entity_key: key,
+              facts: facts
+            }
+          end
+
+        {groups, entries}
+    end
+  end
+
+  # Try the shipper-reference search across each account until one resolves.
+  defp ref_lookup_any(value, accounts) do
+    Enum.find_value(accounts, {:error, :not_found}, fn account ->
+      case ref_lookup(value, account) do
+        {:ok, facts} -> {:ok, facts}
+        _ -> false
+      end
+    end)
+  end
+
+  defp ref_lookup(value, account) do
+    params = %{reference: value, account: account}
+    safe_fetch(fn -> Adapters.fetch(:waybill_by_reference, params) end, :waybill_by_reference)
+  end
+
+  # Every account the request is scoped to (the entitled list, or a single
+  # supplied account) — the shipper-reference search spans them all.
+  defp probe_accounts(context) do
+    case context[:accounts] do
+      accounts when is_list(accounts) and accounts != [] ->
+        Enum.filter(accounts, &(is_binary(&1) and &1 != ""))
+
+      _ ->
+        context |> get_in([:entities, :account]) |> List.wrap()
     end
   end
 
