@@ -57,6 +57,10 @@ config :swoosh, :api_client, false
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# Run the ticket auto-answer inline (not via a background Task) so tests are
+# deterministic and don't leak Req.Test calls into later tests.
+config :tragar_ai, ticket_async: false
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 
