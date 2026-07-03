@@ -481,7 +481,7 @@ defmodule TragarAi.Freight.Normalize do
     |> Application.get_env(TragarAi.Dovetail.Client, [])
     |> Keyword.get(
       :pod_image_base,
-      "https://tragar-db.dovetail.co.za/FWO_UAT/views/viewImage.html"
+      "https://tragar-db.dovetail.co.za/FWO/views/viewImage.html"
     )
   end
 

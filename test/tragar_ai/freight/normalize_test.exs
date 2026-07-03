@@ -22,8 +22,9 @@ defmodule TragarAi.Freight.NormalizeTest do
     assert wb["waybill_number"] == "WB1"
     assert wb["status_description"] == "Delivered"
 
-    assert wb["pod_image_url"] ==
-             "https://tragar-db.dovetail.co.za/FWO_UAT/views/viewImage.html?ABC123"
+    # Env-agnostic: the key is appended to the configured POD viewer base (prod
+    # vs UAT is a config concern — see PodUrlTest).
+    assert wb["pod_image_url"] =~ "/views/viewImage.html?ABC123"
 
     assert [%{"description" => "Box", "line_number" => 1}] = wb["items"]
     assert paging["total_records"] == "5"
