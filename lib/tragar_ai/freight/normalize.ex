@@ -471,7 +471,15 @@ defmodule TragarAi.Freight.Normalize do
           String.trim_leading(url, "/")
       end
 
-    "https://tragar-db.dovetail.co.za/FWO_UAT/views/viewImage.html?#{key}"
+    "#{pod_image_base()}?#{key}"
+  end
+
+  # The Dovetail POD viewer base for the current environment (prod vs UAT) — read
+  # from config, NOT hardcoded, so prod links to the prod viewer.
+  defp pod_image_base do
+    :tragar_ai
+    |> Application.get_env(TragarAi.Dovetail.Client, [])
+    |> Keyword.get(:pod_image_base, "https://tragar-db.dovetail.co.za/FWO_UAT/views/viewImage.html")
   end
 
   defp put_nonempty(map, _key, nil), do: map
