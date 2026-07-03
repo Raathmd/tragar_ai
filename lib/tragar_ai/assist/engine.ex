@@ -899,9 +899,14 @@ defmodule TragarAi.Assist.Engine do
     end
   end
 
-  # Agent-supplied structured entities take precedence over the model's.
+  # This turn's freshly-extracted entities win; carried conversation/agent entities
+  # only FILL what this turn didn't mention. So a follow-up that names a new
+  # waybill switches to it, while a bare "and its ETA?" keeps the prior one. (The
+  # earlier precedence let a carried reference override the new one → every
+  # follow-up re-answered the first waybill.) Account SCOPE is enforced separately
+  # via `context.accounts`, so this never widens what a request may read.
   defp merge_entities(model_entities, context) do
-    Map.merge(model_entities || %{}, Map.get(context, :entities, %{}))
+    Map.merge(Map.get(context, :entities, %{}), model_entities || %{})
   end
 
   # In a conversation, a turn that only supplies an entity keeps the prior intent.
