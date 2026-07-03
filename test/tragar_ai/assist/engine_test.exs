@@ -106,6 +106,15 @@ defmodule TragarAi.Assist.EngineTest do
     assert i.facts["waybill_number"] == "4821"
   end
 
+  test "a new waybill in the prompt overrides the carried one (no stale answer)" do
+    # Prior conversation carried waybill 0000; this turn names 4821 — the fresh
+    # waybill must win, otherwise the follow-up re-answers the first one.
+    assert {:ok, i} = Engine.answer("where is load 4821?", %{entities: %{waybill: "0000"}})
+    assert i.status == :drafted
+    assert i.facts["waybill_number"] == "4821"
+    assert i.draft_answer =~ "4821"
+  end
+
   test "a not-yet-connected source fails safe with a usable message" do
     # Granite (WMS / stock) is still a stub; Vantage (route) is now wired.
     assert {:ok, i} = Engine.answer("what stock is on hand?")
