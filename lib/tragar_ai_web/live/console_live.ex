@@ -126,7 +126,6 @@ defmodule TragarAiWeb.ConsoleLive do
   def handle_event("suggest", %{"q" => q}, socket),
     do: {:noreply, converse(socket, q)}
 
-
   # ── Tickets (left, from Freshdesk) ──────────────────────────────────────────
 
   def handle_event("refresh_tickets", _params, socket),
