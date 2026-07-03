@@ -64,39 +64,19 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
     :ok
   end
 
-  test "interprets the ticket, fetches the fact, and composes an answer", %{conn: conn} do
+  test "accepts the webhook and returns 202 immediately (work runs async)", %{conn: conn} do
+    # The assist loop is slow; the webhook must not make Freshdesk wait on it. The
+    # answer is delivered as a ticket note — see TicketResponderTest for that path.
     body = %{
       "ticket_id" => "55",
       "subject" => "Delivery query",
-      "description" => "Where is load 4821?",
-      "post_reply" => true
+      "description" => "Where is load 4821?"
     }
 
-    resp = conn |> post(~p"/api/tickets/answer", body) |> json_response(200)
+    resp = conn |> post(~p"/api/tickets/answer", body) |> json_response(202)
 
-    assert resp["answer"] =~ "In transit"
-    assert resp["account"] == "ITD02"
-    assert resp["intent"] == "load_status"
-
-    # Custom ticket fields pre-filled from the retrieved facts (assignment untouched).
-    assert resp["filled_fields"]["cf_waybill_number"] == "4821"
-    assert resp["filled_fields"]["cf_waybill_status"] == "In transit"
-  end
-
-  test "uses the account injected in the webhook body over the FD-derived one", %{conn: conn} do
-    # The FD company stub would resolve ITD02; the body asserts ITD99, so the
-    # webhook-supplied value must win (no API derivation).
-    body = %{
-      "ticket_id" => "55",
-      "subject" => "Delivery query",
-      "description" => "Where is load 4821?",
-      "account" => "ITD99"
-    }
-
-    resp = conn |> post(~p"/api/tickets/answer", body) |> json_response(200)
-
-    assert resp["account"] == "ITD99"
-    assert resp["answer"] =~ "In transit"
+    assert resp["status"] == "accepted"
+    assert resp["ticket_id"] == "55"
   end
 
   test "requires ticket content", %{conn: conn} do
