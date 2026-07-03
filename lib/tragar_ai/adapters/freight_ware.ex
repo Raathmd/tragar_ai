@@ -26,7 +26,8 @@ defmodule TragarAi.Adapters.FreightWare do
       :quote_lookup,
       :service_types,
       :customer_lookup,
-      :vehicle_assignment
+      :vehicle_assignment,
+      :waybill_by_reference
     ]
 
   @impl true
@@ -51,6 +52,26 @@ defmodule TragarAi.Adapters.FreightWare do
   def fetch(:quote_lookup, %{quote: quote}) when is_binary(quote) do
     Cache.quote(quote)
   end
+
+  # Resolve a customer's own reference (shipperReference) to a waybill when the
+  # value isn't a waybill/quote NUMBER. Account-scoped, then fetched in full by
+  # the resolved waybill number (so it carries events + charges like any lookup).
+  def fetch(:waybill_by_reference, %{reference: ref, account: account})
+      when is_binary(ref) and is_binary(account) do
+    case Freight.search_waybills(%{shipper_reference: ref, account_reference: account}) do
+      {:ok, %{"waybills" => [%{"waybill_number" => number} | _]}}
+      when is_binary(number) and number != "" ->
+        fetch(:load_status, %{waybill: number})
+
+      {:ok, _} ->
+        {:error, :not_found}
+
+      err ->
+        err
+    end
+  end
+
+  def fetch(:waybill_by_reference, _), do: {:error, :missing_account}
 
   def fetch(:customer_lookup, %{account: account}) when is_binary(account) do
     CustomerCache.customer(account)
