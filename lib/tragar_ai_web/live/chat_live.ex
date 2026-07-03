@@ -212,7 +212,9 @@ defmodule TragarAiWeb.ChatLive do
             </ul>
             <%= cond do %>
               <% turn.i -> %>
-                <div class="chat-bubble whitespace-pre-line">{turn.i.draft_answer}</div>
+                <div class="chat-bubble [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_p]:my-1">
+                  {Phoenix.HTML.raw(TragarAi.Markdown.to_html(turn.i.draft_answer))}
+                </div>
                 <div class="chat-footer mt-1 flex flex-wrap items-center gap-1 text-[11px] opacity-70">
                   <span :if={turn.i.intent} class="badge badge-xs badge-outline">
                     {turn.i.intent}

@@ -5,8 +5,8 @@ defmodule TragarAiWeb.ConsoleLive do
   Three panes:
 
     * left — the live Freshdesk ticket queue, filterable by status (default open)
-      and agent. Clicking a ticket fetches it and asks the local model to distil
-      its subject + body into a concise prompt, pre-filled for the agent to edit.
+      and agent. Clicking a ticket fetches it and pre-fills the prompt with its
+      actual contents (subject + body) for the agent to edit and submit.
     * centre — the prompt + the chat conversation, plus the surfaced entity
       details for whatever was looked up.
     * right — the AI progress log (interpret → validate → fetch → phrase, with the
@@ -166,10 +166,17 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  # Pick one account when the resolver returned several candidates.
+  # Pick one account when the resolver returned several candidates, then CONTINUE
+  # — re-run the pending prompt now that the account is chosen, rather than leaving
+  # the agent to re-submit (which felt like a reset).
   def handle_event("pick_account", %{"ref" => ref}, socket) do
     frame = put_in(socket.assigns.frame.entities[:account], ref)
-    {:noreply, assign(socket, frame: frame, account_choices: [])}
+    socket = assign(socket, frame: frame, account_choices: [])
+
+    case String.trim(socket.assigns.question || "") do
+      "" -> {:noreply, socket}
+      q -> {:noreply, converse(socket, q)}
+    end
   end
 
   # ── Right panel ─────────────────────────────────────────────────────────────
@@ -432,7 +439,9 @@ defmodule TragarAiWeb.ConsoleLive do
                 <span class="loading loading-dots loading-sm"></span>
                 <span class="opacity-60">thinking…</span>
               <% true -> %>
-                {m.text}
+                <div class="text-sm [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_p]:my-1">
+                  {Phoenix.HTML.raw(TragarAi.Markdown.to_html(m.text))}
+                </div>
             <% end %>
             <div :if={m[:suggestions] not in [nil, []]} class="mt-2 flex flex-wrap gap-1">
               <button
@@ -449,29 +458,36 @@ defmodule TragarAiWeb.ConsoleLive do
         </div>
       </div>
 
-      <section
+      <details
         :if={multi_results(@interaction) != []}
-        class="rounded-lg border border-base-300 p-4 space-y-3"
+        class="rounded-lg border border-base-300 p-4"
       >
-        <h3 class="text-sm font-medium">
+        <summary class="cursor-pointer text-sm font-medium">
           Answers by source
           <span class="text-xs text-base-content/50">
             ({length(multi_results(@interaction))} lookups)
           </span>
-        </h3>
-        <div :for={{source, rows} <- group_by_source(multi_results(@interaction))} class="space-y-2">
-          <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">
-            {source}
-          </div>
-          <div :for={r <- rows} class="rounded border border-base-200 p-2 space-y-1">
-            <div class="flex items-center gap-2 text-xs">
-              <span class="badge badge-xs badge-outline">{r["intent"]}</span>
-              <span :if={result_entity(r)} class="text-base-content/60">{result_entity(r)}</span>
+        </summary>
+        <div class="mt-3 space-y-3">
+          <div
+            :for={{source, rows} <- group_by_source(multi_results(@interaction))}
+            class="space-y-2"
+          >
+            <div class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">
+              {source}
             </div>
-            <div class="text-sm whitespace-pre-line">{r["answer"]}</div>
+            <div :for={r <- rows} class="rounded border border-base-200 p-2 space-y-1">
+              <div class="flex items-center gap-2 text-xs">
+                <span class="badge badge-xs badge-outline">{r["intent"]}</span>
+                <span :if={result_entity(r)} class="text-base-content/60">{result_entity(r)}</span>
+              </div>
+              <div class="text-sm [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_p]:my-1">
+                {Phoenix.HTML.raw(TragarAi.Markdown.to_html(r["answer"]))}
+              </div>
+            </div>
           </div>
         </div>
-      </section>
+      </details>
 
       <section
         :if={present?(@interaction)}
@@ -966,9 +982,10 @@ defmodule TragarAiWeb.ConsoleLive do
     socket
     |> assign(distilling: true, selected_ticket: nil, account_choices: [])
     |> start_async(:distil_ticket, fn ->
-      with {:ok, info} <- TragarAi.Freshdesk.ticket_text(id),
-           {:ok, query} <- TragarAi.CoreAI.distil(info.text) do
-        {info.ticket_id, query, TragarAi.Freshdesk.resolve_account(info)}
+      # Pre-fill the prompt with the ACTUAL ticket contents (subject + body), not a
+      # distilled summary — the agent edits/submits it as-is.
+      with {:ok, info} <- TragarAi.Freshdesk.ticket_text(id) do
+        {info.ticket_id, info.text, TragarAi.Freshdesk.resolve_account(info)}
       end
     end)
   end
