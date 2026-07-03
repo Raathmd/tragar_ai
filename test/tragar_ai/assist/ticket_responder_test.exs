@@ -34,6 +34,11 @@ defmodule TragarAi.Assist.TicketResponderTest do
     def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: Where is load 4821?"}}
   end
 
+  # A thread whose reference can't be resolved (waybill 0000 → not found).
+  defmodule UnresolvedFD do
+    def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: Where is load 0000?"}}
+  end
+
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
@@ -80,8 +85,21 @@ defmodule TragarAi.Assist.TicketResponderTest do
 
     # The trigger checkbox is cleared (unchecked) — the loop-breaker.
     assert_received {:update_ticket, "55", %{custom_fields: %{"cf_tragar_ai" => false}}}
-    # The answer is posted back as a private note.
-    assert_received {:add_note, "55", %{private: true}}
+    # A resolved answer is posted as a private note labelled as a requestor draft.
+    assert_received {:add_note, "55", %{body: body, private: true}}
+    assert body =~ "Suggested reply to requestor"
+  end
+
+  test "an unresolved turn is posted as an agent note (the model needs input)" do
+    assert {:ok, _} =
+             TicketResponder.respond("55", "ignored",
+               client: FakeClient,
+               freshdesk: UnresolvedFD,
+               account: "ITD02"
+             )
+
+    assert_received {:add_note, "55", %{body: body, private: true}}
+    assert body =~ "Agent note"
   end
 
   test "the flag field name is overridable" do

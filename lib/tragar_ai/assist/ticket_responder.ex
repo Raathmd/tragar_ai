@@ -62,7 +62,7 @@ defmodule TragarAi.Assist.TicketResponder do
           source: interaction.source
         }
 
-        maybe_post(client, ticket_id, result.answer, opts)
+        maybe_post(client, ticket_id, interaction, opts)
         filled = maybe_fill_fields(client, ticket_id, interaction.facts, opts)
         {:ok, Map.put(result, :filled_fields, filled)}
 
@@ -134,16 +134,25 @@ defmodule TragarAi.Assist.TicketResponder do
   defp flag_field_config,
     do: Application.get_env(:tragar_ai, :ticket_flag_field, @default_flag_field)
 
-  defp maybe_post(client, ticket_id, answer, opts) do
+  defp maybe_post(client, ticket_id, interaction, opts) do
+    answer = interaction.draft_answer
+
     if Keyword.get(opts, :post_reply, true) and is_binary(answer) and answer != "" do
-      # Prefix the bot marker so this note is excluded from the thread next time
-      # (the model must never read its own answers back in as context).
-      body = "#{TragarAi.Freshdesk.bot_marker()}\n\n#{answer}"
+      # Prefix the bot marker (so this note is excluded from the thread next time)
+      # and label the note's purpose: a resolved answer is a draft the agent can
+      # send to the requestor; an unresolved turn is the model asking the agent
+      # for what it needs. Both are private — the agent reviews everything. The
+      # draft is generated from source FACTS (not the private notes), so internal
+      # note content never bleeds into the customer-facing reply.
+      body = "#{TragarAi.Freshdesk.bot_marker()} — #{note_label(interaction)}\n\n#{answer}"
       client.add_note(ticket_id, %{body: body, private: Keyword.get(opts, :private, true)})
     else
       {:ok, :skipped}
     end
   end
+
+  defp note_label(%{status: :drafted}), do: "Suggested reply to requestor"
+  defp note_label(_), do: "Agent note (needs input)"
 
   # The whole ticket thread as the model's context, or the webhook body if the
   # Freshdesk fetch fails.
