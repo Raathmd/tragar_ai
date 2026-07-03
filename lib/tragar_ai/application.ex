@@ -17,6 +17,9 @@ defmodule TragarAi.Application do
       TragarAi.Dovetail.TokenStore,
       # Caches the Vantage auth token.
       TragarAi.Vantage.TokenStore,
+      # Runs the ticket auto-answer work off the request path so the webhook can
+      # return immediately (Freshdesk's webhook timeout is short).
+      {Task.Supervisor, name: TragarAi.TaskSupervisor},
       # Start to serve requests, typically the last entry
       TragarAiWeb.Endpoint
     ]

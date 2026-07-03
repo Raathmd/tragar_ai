@@ -22,6 +22,13 @@ defmodule TragarAi.Assist.TicketResponder do
   def respond(ticket_id, content, opts \\ []) when is_binary(content) do
     fd = Keyword.get(opts, :freshdesk, TragarAi.Freshdesk)
     client = Keyword.get(opts, :client, TragarAi.Freshdesk.Client)
+
+    # The Freshdesk automation fires on the "Tragar AI" checkbox being set. Our own
+    # write-backs (private note, field pre-fill) are ticket updates that would
+    # re-fire it → an answer loop. Uncheck the flag FIRST — before any other update
+    # — so by the time we post the note / fill fields the trigger no longer matches.
+    clear_flag(client, ticket_id, opts)
+
     accounts = accounts_for(ticket_id, opts, fd)
     account = List.first(accounts)
 
@@ -99,6 +106,28 @@ defmodule TragarAi.Assist.TicketResponder do
 
   defp entities(nil), do: %{}
   defp entities(account), do: %{account: account}
+
+  # Uncheck the automation's trigger checkbox so our subsequent write-backs don't
+  # re-fire it. Best-effort and non-fatal. The field's Freshdesk API name is
+  # configurable (`:flag_field` opt or `:ticket_flag_field` app env); `nil`/"" to
+  # disable.
+  @default_flag_field "cf_tragar_ai"
+  defp clear_flag(client, ticket_id, opts) do
+    field = Keyword.get(opts, :flag_field) || flag_field_config()
+
+    if is_binary(field) and field != "" do
+      attrs = %{custom_fields: %{field => false}}
+
+      with {:error, reason} <- client.update_ticket(ticket_id, attrs) do
+        Logger.warning("[ticket_responder] clear flag failed: #{inspect(reason)}")
+      end
+    end
+  rescue
+    error -> Logger.warning("[ticket_responder] clear flag error: #{inspect(error)}")
+  end
+
+  defp flag_field_config,
+    do: Application.get_env(:tragar_ai, :ticket_flag_field, @default_flag_field)
 
   defp maybe_post(client, ticket_id, answer, opts) do
     if Keyword.get(opts, :post_reply, true) and is_binary(answer) and answer != "" do

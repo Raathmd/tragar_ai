@@ -27,11 +27,15 @@ defmodule TragarAiWeb.TicketAnswerController do
 
   use TragarAiWeb, :controller
 
+  require Logger
+
   alias TragarAi.Assist.TicketResponder
 
   def answer(conn, params) do
     with {:ok, ticket_id} <- require_param(params, "ticket_id"),
          content when content != "" <- ticket_text(params) do
+      ticket_id = to_string(ticket_id)
+
       opts = [
         post_reply: truthy(params["post_reply"], true),
         private: truthy(params["private"], true),
@@ -41,16 +45,23 @@ defmodule TragarAiWeb.TicketAnswerController do
         requester_email: params["requester_email"],
         # Pre-fill matching custom ticket fields from the retrieved facts (never
         # assignment). Set "fill_fields": false to skip.
-        fill_fields: truthy(params["fill_fields"], true)
+        fill_fields: truthy(params["fill_fields"], true),
+        # Override the automation trigger checkbox unchecked after answering
+        # (breaks the on-update answer loop). Defaults to the configured field.
+        flag_field: params["flag_field"]
       ]
 
-      case TicketResponder.respond(to_string(ticket_id), content, opts) do
-        {:ok, result} ->
-          json(conn, result)
+      # Answer the webhook immediately and run the assist loop (interpret → fetch →
+      # phrase → post note) off the request path — Freshdesk's webhook timeout is
+      # short, and the loop can take much longer. The answer is delivered as a
+      # ticket note, not in this response.
+      Task.Supervisor.start_child(TragarAi.TaskSupervisor, fn ->
+        with {:error, reason} <- TicketResponder.respond(ticket_id, content, opts) do
+          Logger.warning("[tickets/answer] #{ticket_id} failed: #{inspect(reason)}")
+        end
+      end)
 
-        {:error, reason} ->
-          conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(reason)})
-      end
+      conn |> put_status(:accepted) |> json(%{status: "accepted", ticket_id: ticket_id})
     else
       {:missing, field} ->
         conn |> put_status(:bad_request) |> json(%{error: "#{field} is required"})
