@@ -37,10 +37,9 @@ defmodule TragarAi.Assist.TicketResponder do
     # back to the webhook-supplied body if it can't be fetched.
     content = thread_content(fd, ticket_id, content)
 
-    # Distil the thread into a clean query first — same step the console runs — so
-    # the loop looks up the shipment references in the ticket instead of just
-    # echoing the ticket metadata.
-    query = distil(content)
+    # Feed the model the RAW thread — no distil. Distillation was mangling
+    # references (e.g. gluing a destination onto a waybill: "ITD0048113" ->
+    # "ITD0048113-Lusikisiki"), so it never matched. Same as the console now does.
 
     # `:accounts` enforces scope in the Engine — facts must be on the requester's
     # account, so a ticket can't pull another account's records.
@@ -51,7 +50,7 @@ defmodule TragarAi.Assist.TicketResponder do
       ticket_id: ticket_id
     }
 
-    case Engine.answer(query, context) do
+    case Engine.answer(content, context) do
       {:ok, interaction} ->
         result = %{
           ticket_id: ticket_id,
@@ -98,14 +97,6 @@ defmodule TragarAi.Assist.TicketResponder do
       [ref]
     else
       _ -> []
-    end
-  end
-
-  # Reuse the console's distiller; fall back to the raw content if it's unavailable.
-  defp distil(content) do
-    case TragarAi.CoreAI.distil(content) do
-      {:ok, query} when is_binary(query) and query != "" -> query
-      _ -> content
     end
   end
 
