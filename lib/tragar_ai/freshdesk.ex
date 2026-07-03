@@ -84,6 +84,85 @@ defmodule TragarAi.Freshdesk do
     end
   end
 
+  # Tragar AI's own notes are prefixed with this marker so the thread can exclude
+  # them — the model must never read (and echo) its own prior answers.
+  @bot_marker "Tragar AI"
+
+  @doc "The marker Tragar AI's own notes start with (see `ticket_thread/2`)."
+  def bot_marker, do: @bot_marker
+
+  # Keep the request + the most recent messages so a long ticket can't blow the prompt.
+  @thread_max 25
+
+  @doc """
+  The full ticket thread for the model's context: the original request plus every
+  reply and private note, oldest→newest, each labelled **Requestor** (the
+  customer) or **Agent** (a human agent — public reply or private note). Tragar
+  AI's own notes are excluded so the model never reads its own answers. Returns
+  the assembled `transcript` plus the account-resolution signals; the caller falls
+  back to the webhook body if this can't be fetched.
+  """
+  def ticket_thread(id, opts \\ []) do
+    client = Keyword.get(opts, :client, Client)
+
+    with {:ok, t} <- client.get_ticket(id, %{include: "requester,company"}) do
+      convos =
+        case client.conversations(id) do
+          {:ok, list} when is_list(list) -> list
+          _ -> []
+        end
+
+      email = get_in(t, ["requester", "email"]) || t["email"]
+
+      {:ok,
+       %{
+         ticket_id: to_string(t["id"] || id),
+         subject: t["subject"],
+         transcript: build_thread(t, convos),
+         requester_email: email,
+         requester_domain: email_domain(email),
+         company_id: t["company_id"],
+         company_name: get_in(t, ["company", "name"])
+       }}
+    end
+  end
+
+  defp build_thread(ticket, convos) do
+    opening = "Requestor: " <> body_of(ticket["description_text"], ticket["description"])
+
+    lines =
+      convos
+      |> Enum.sort_by(&(&1["created_at"] || ""))
+      |> Enum.reject(&ours?/1)
+      |> Enum.map(&thread_line/1)
+      |> Enum.reject(&is_nil/1)
+
+    ([opening] ++ Enum.take(lines, -@thread_max)) |> Enum.join("\n\n")
+  end
+
+  # Ours = a private note whose text starts with the bot marker.
+  defp ours?(%{"private" => true} = c),
+    do: c |> convo_text() |> String.trim() |> String.starts_with?(@bot_marker)
+
+  defp ours?(_), do: false
+
+  defp thread_line(c) do
+    case String.trim(convo_text(c)) do
+      "" -> nil
+      body -> "#{role(c)}: #{body}"
+    end
+  end
+
+  defp role(%{"incoming" => true}), do: "Requestor (reply)"
+  defp role(%{"private" => true}), do: "Agent (note)"
+  defp role(_), do: "Agent (reply)"
+
+  defp convo_text(c), do: body_of(c["body_text"], c["body"])
+
+  defp body_of(text, html) do
+    if is_binary(text) and String.trim(text) != "", do: text, else: strip_html(html || "")
+  end
+
   @doc """
   Resolve the FreightWare account for a ticket from its content — a valid account
   code found in the body, the company name, or the requester's email domain —

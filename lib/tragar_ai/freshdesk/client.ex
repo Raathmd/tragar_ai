@@ -48,6 +48,10 @@ defmodule TragarAi.Freshdesk.Client do
   @doc "Fetch a single ticket by id."
   def get_ticket(id, params \\ %{}), do: get("/tickets/#{id}", params: params)
 
+  @doc "Fetch a ticket's conversation (all replies + notes, oldest first)."
+  def conversations(id, params \\ %{}),
+    do: get("/tickets/#{id}/conversations", params: params)
+
   @doc """
   Create a ticket. `attrs` is a map of Freshdesk ticket fields, e.g.
 

@@ -32,8 +32,13 @@ defmodule TragarAi.Assist.TicketResponder do
     accounts = accounts_for(ticket_id, opts, fd)
     account = List.first(accounts)
 
-    # Distil the raw ticket into a clean query first — same step the console runs —
-    # so the loop looks up the shipment references in the ticket instead of just
+    # Pull the WHOLE ticket thread (original request + every reply and human-agent
+    # note, minus our own notes) so the model understands the full context; fall
+    # back to the webhook-supplied body if it can't be fetched.
+    content = thread_content(fd, ticket_id, content)
+
+    # Distil the thread into a clean query first — same step the console runs — so
+    # the loop looks up the shipment references in the ticket instead of just
     # echoing the ticket metadata.
     query = distil(content)
 
@@ -131,10 +136,30 @@ defmodule TragarAi.Assist.TicketResponder do
 
   defp maybe_post(client, ticket_id, answer, opts) do
     if Keyword.get(opts, :post_reply, true) and is_binary(answer) and answer != "" do
-      client.add_note(ticket_id, %{body: answer, private: Keyword.get(opts, :private, true)})
+      # Prefix the bot marker so this note is excluded from the thread next time
+      # (the model must never read its own answers back in as context).
+      body = "#{TragarAi.Freshdesk.bot_marker()}\n\n#{answer}"
+      client.add_note(ticket_id, %{body: body, private: Keyword.get(opts, :private, true)})
     else
       {:ok, :skipped}
     end
+  end
+
+  # The whole ticket thread as the model's context, or the webhook body if the
+  # Freshdesk fetch fails.
+  defp thread_content(fd, ticket_id, fallback) do
+    case safe(fn -> fd.ticket_thread(ticket_id) end) do
+      {:ok, %{transcript: t}} when is_binary(t) and t != "" -> t
+      _ -> fallback
+    end
+  end
+
+  defp safe(fun) do
+    fun.()
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
   end
 
   # Pre-fill the ticket's **custom** fields from the facts we just retrieved, so

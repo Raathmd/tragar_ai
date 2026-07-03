@@ -28,6 +28,12 @@ defmodule TragarAi.Assist.TicketResponderTest do
     end
   end
 
+  # Fake Freshdesk facade — supplies the ticket thread as the model's context
+  # (avoids hitting the real Freshdesk.Client, which isn't stubbed here).
+  defmodule FakeFD do
+    def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: Where is load 4821?"}}
+  end
+
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
@@ -64,6 +70,7 @@ defmodule TragarAi.Assist.TicketResponderTest do
     assert {:ok, result} =
              TicketResponder.respond("55", "Where is load 4821?",
                client: FakeClient,
+               freshdesk: FakeFD,
                account: "ITD02"
              )
 
@@ -81,6 +88,7 @@ defmodule TragarAi.Assist.TicketResponderTest do
     assert {:ok, _} =
              TicketResponder.respond("55", "Where is load 4821?",
                client: FakeClient,
+               freshdesk: FakeFD,
                account: "ITD02",
                flag_field: "cf_custom_flag"
              )
