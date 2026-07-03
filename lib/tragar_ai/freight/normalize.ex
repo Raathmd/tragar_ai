@@ -474,16 +474,22 @@ defmodule TragarAi.Freight.Normalize do
     "#{pod_image_base()}?#{key}"
   end
 
-  # The Dovetail POD viewer base for the current environment (prod vs UAT) — read
-  # from config, NOT hardcoded, so prod links to the prod viewer.
+  # The Dovetail POD viewer base — DERIVED from the configured Dovetail base url
+  # (same host; the FWO viewer path, FWO_UAT on UAT), so it always follows the
+  # environment instead of a hardcoded url. An explicit `:pod_image_base` config
+  # overrides it.
   defp pod_image_base do
-    :tragar_ai
-    |> Application.get_env(TragarAi.Dovetail.Client, [])
-    |> Keyword.get(
-      :pod_image_base,
-      "https://tragar-db.dovetail.co.za/FWO/views/viewImage.html"
-    )
+    cfg = Application.get_env(:tragar_ai, TragarAi.Dovetail.Client, [])
+    Keyword.get(cfg, :pod_image_base) || derive_pod_base(Keyword.get(cfg, :base_url))
   end
+
+  defp derive_pod_base(base_url) when is_binary(base_url) do
+    uri = URI.parse(base_url)
+    segment = if String.contains?(base_url, "UAT"), do: "FWO_UAT", else: "FWO"
+    "#{uri.scheme}://#{uri.host}/#{segment}/views/viewImage.html"
+  end
+
+  defp derive_pod_base(_), do: "https://tragar-db.dovetail.co.za/FWO/views/viewImage.html"
 
   defp put_nonempty(map, _key, nil), do: map
   defp put_nonempty(map, _key, ""), do: map

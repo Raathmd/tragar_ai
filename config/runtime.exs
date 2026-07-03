@@ -84,12 +84,9 @@ if config_env() != :test do
     username: dt.("USERNAME"),
     password: dt.("PASSWORD"),
     station: dt.("STATION"),
-    pod_image_base:
-      dt.("POD_IMAGE_BASE") ||
-        if(dovetail_env == "prod",
-          do: "https://tragar-db.dovetail.co.za/FWO/views/viewImage.html",
-          else: "https://tragar-db.dovetail.co.za/FWO_UAT/views/viewImage.html"
-        )
+    # Derived from base_url by default (see Normalize.pod_image_base); set only to
+    # override.
+    pod_image_base: dt.("POD_IMAGE_BASE")
 
   # Freshdesk (source 6) — read-only ticket context + the customer a question is
   # about. Auth is HTTP Basic with the API key as the username.

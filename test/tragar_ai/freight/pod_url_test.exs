@@ -1,19 +1,18 @@
 defmodule TragarAi.Freight.PodUrlTest do
-  # async: false — swaps the Dovetail config to prove the POD url follows it.
+  # async: false — swaps the Dovetail config to prove the POD url derives from it.
   use ExUnit.Case, async: false
 
   alias TragarAi.Freight.Normalize
 
-  test "waybill POD url follows the configured pod_image_base (prod), not a hardcoded env" do
+  test "POD url derives from the configured base url (prod base → FWO viewer)" do
     original = Application.get_env(:tragar_ai, TragarAi.Dovetail.Client, [])
-    prod_base = "https://tragar-db.dovetail.co.za/FWO/views/viewImage.html"
 
-    Application.put_env(
-      :tragar_ai,
-      TragarAi.Dovetail.Client,
-      Keyword.put(original, :pod_image_base, prod_base)
-    )
+    prod =
+      original
+      |> Keyword.put(:base_url, "https://tragar-db.dovetail.co.za/WebServices/web")
+      |> Keyword.delete(:pod_image_base)
 
+    Application.put_env(:tragar_ai, TragarAi.Dovetail.Client, prod)
     on_exit(fn -> Application.put_env(:tragar_ai, TragarAi.Dovetail.Client, original) end)
 
     wb =
@@ -22,6 +21,7 @@ defmodule TragarAi.Freight.PodUrlTest do
         "PODImageUrl" => "https://x/system/pod/ABC123"
       })
 
-    assert wb["pod_image_url"] == prod_base <> "?ABC123"
+    assert wb["pod_image_url"] ==
+             "https://tragar-db.dovetail.co.za/FWO/views/viewImage.html?ABC123"
   end
 end
