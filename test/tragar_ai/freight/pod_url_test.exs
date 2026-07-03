@@ -16,7 +16,11 @@ defmodule TragarAi.Freight.PodUrlTest do
 
     on_exit(fn -> Application.put_env(:tragar_ai, TragarAi.Dovetail.Client, original) end)
 
-    wb = Normalize.waybill(%{"waybillNumber" => "WB1", "PODImageUrl" => "https://x/system/pod/ABC123"})
+    wb =
+      Normalize.waybill(%{
+        "waybillNumber" => "WB1",
+        "PODImageUrl" => "https://x/system/pod/ABC123"
+      })
 
     assert wb["pod_image_url"] == prod_base <> "?ABC123"
   end
