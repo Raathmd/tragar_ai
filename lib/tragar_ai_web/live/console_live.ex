@@ -18,7 +18,11 @@ defmodule TragarAiWeb.ConsoleLive do
 
   alias TragarAi.Assist
   alias TragarAi.Assist.Engine
+  alias TragarAi.Freight.Accounts
   alias TragarAi.Freight.Statuses
+
+  # The console waybill search is bounded to at most the last month.
+  @wb_window_days 30
 
   @impl true
   def mount(_params, _session, socket) do
@@ -30,6 +34,7 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(model: TragarAi.CoreAI.info())
      |> assign(right_tab: "log", detail: nil, detail_title: nil)
      |> assign(search_results: [], search_meta: nil)
+     |> assign(wb_account: "", account_matches: [])
      |> assign(quote_results: [], quote_meta: nil)
      |> assign(selected_ticket: nil, distilling: false, account_choices: [])
      |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
@@ -74,15 +79,31 @@ defmodule TragarAiWeb.ConsoleLive do
         {:noreply, put_flash(socket, :error, "Enter an account to search.")}
 
       acc ->
+        {from, to} =
+          clamp_wb_dates(blank_to_nil(params["date_from"]), blank_to_nil(params["date_to"]))
+
         {:noreply,
-         run_waybill_search(
-           socket,
+         socket
+         |> assign(account_matches: [])
+         |> run_waybill_search(
            acc,
            params["status"] || "all",
-           blank_to_nil(params["date_from"]),
-           blank_to_nil(params["date_to"])
+           from,
+           to,
+           blank_to_nil(params["waybill_number"]),
+           blank_to_nil(params["shipper_reference"])
          )}
     end
+  end
+
+  # Type-ahead over the accounts already ingested (the cached FreightWare
+  # directory) as the user types into the waybill account field.
+  def handle_event("wb_account_search", %{"value" => value}, socket) do
+    {:noreply, assign(socket, wb_account: value, account_matches: Accounts.search(value))}
+  end
+
+  def handle_event("pick_wb_account", %{"ref" => ref}, socket) do
+    {:noreply, assign(socket, wb_account: ref, account_matches: [])}
   end
 
   def handle_event("search_quotes", params, socket) do
@@ -246,6 +267,8 @@ defmodule TragarAiWeb.ConsoleLive do
           detail_title={@detail_title}
           search_results={@search_results}
           search_meta={@search_meta}
+          wb_account={@wb_account}
+          account_matches={@account_matches}
           quote_results={@quote_results}
           quote_meta={@quote_meta}
         />
@@ -649,9 +672,41 @@ defmodule TragarAiWeb.ConsoleLive do
       <div :if={@right_tab == "search"} class="space-y-2">
         <form phx-submit="search_waybills" class="rounded-lg border border-base-300 p-2 space-y-2">
           <div class="text-[11px] text-base-content/50">Account-scoped waybill search</div>
+          <div class="relative">
+            <input
+              name="account"
+              value={@wb_account}
+              autocomplete="off"
+              phx-keyup="wb_account_search"
+              phx-debounce="200"
+              placeholder="Account, e.g. ITD02"
+              class="input input-bordered input-xs w-full"
+            />
+            <ul
+              :if={@account_matches != []}
+              class="absolute z-10 mt-0.5 w-full rounded-lg border border-base-300 bg-base-100 shadow divide-y divide-base-200 max-h-48 overflow-y-auto"
+            >
+              <li :for={a <- @account_matches}>
+                <button
+                  type="button"
+                  phx-click="pick_wb_account"
+                  phx-value-ref={a.ref}
+                  class="w-full text-left px-2 py-1 hover:bg-base-200"
+                >
+                  <span class="text-xs font-medium">{a.ref}</span>
+                  <span :if={a.name != ""} class="text-[11px] text-base-content/50">· {a.name}</span>
+                </button>
+              </li>
+            </ul>
+          </div>
           <input
-            name="account"
-            placeholder="Account, e.g. ITD02"
+            name="waybill_number"
+            placeholder="Waybill number (optional)"
+            class="input input-bordered input-xs w-full"
+          />
+          <input
+            name="shipper_reference"
+            placeholder="Shipper reference (optional)"
             class="input input-bordered input-xs w-full"
           />
           <select name="status" class="select select-bordered select-xs w-full">
@@ -662,9 +717,22 @@ defmodule TragarAiWeb.ConsoleLive do
             <option :for={{code, label} <- Statuses.waybill()} value={code}>{label} ({code})</option>
           </select>
           <div class="flex gap-1">
-            <input type="date" name="date_from" class="input input-bordered input-xs flex-1" />
-            <input type="date" name="date_to" class="input input-bordered input-xs flex-1" />
+            <input
+              type="date"
+              name="date_from"
+              min={wb_date_min()}
+              max={today_iso()}
+              class="input input-bordered input-xs flex-1"
+            />
+            <input
+              type="date"
+              name="date_to"
+              min={wb_date_min()}
+              max={today_iso()}
+              class="input input-bordered input-xs flex-1"
+            />
           </div>
+          <div class="text-[11px] text-base-content/40">Searches the last month by default.</div>
           <button class="btn btn-xs btn-primary w-full">Search</button>
         </form>
 
@@ -1403,24 +1471,32 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  defp run_waybill_search(socket, account, status, date_from \\ nil, date_to \\ nil)
+  defp run_waybill_search(
+         socket,
+         account,
+         status,
+         date_from \\ nil,
+         date_to \\ nil,
+         waybill \\ nil,
+         shipper \\ nil
+       )
 
-  defp run_waybill_search(socket, account, status, date_from, date_to) do
+  defp run_waybill_search(socket, account, status, date_from, date_to, waybill, shipper) do
     cond do
       not TragarAi.Freight.Accounts.valid?(account) ->
         invalid_account_search(socket, account, status, "search")
 
       true ->
-        run_waybill_search!(socket, account, status, date_from, date_to)
+        run_waybill_search!(socket, account, status, date_from, date_to, waybill, shipper)
     end
   end
 
-  defp run_waybill_search!(socket, account, status, date_from, date_to) do
+  defp run_waybill_search!(socket, account, status, date_from, date_to, waybill, shipper) do
     # A real status code filters server-side; a group (undelivered/delivered/all)
     # fetches the window and filters client-side.
     code = if status in Statuses.waybill_codes(), do: status, else: nil
 
-    case fetch_waybills(account, code, date_from, date_to) do
+    case fetch_waybills(account, code, date_from, date_to, waybill, shipper) do
       {:ok, list} ->
         results = list |> apply_group(status) |> Enum.map(&waybill_summary/1)
 
@@ -1439,18 +1515,39 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-  defp fetch_waybills(account, code, from, to) do
+  defp fetch_waybills(account, code, from, to, waybill, shipper) do
     params =
       %{account_reference: account}
       |> put_if(:status_code, code)
       |> put_if(:date_from, from)
       |> put_if(:date_to, to)
+      |> put_if(:waybill_number, waybill)
+      |> put_if(:shipper_reference, shipper)
 
     case TragarAi.Freight.search_waybills(params) do
       {:ok, r} -> {:ok, r["waybills"] || []}
       err -> err
     end
   end
+
+  # Bound the waybill search to at most the last month: default both ends to the
+  # one-month window, and never let date_from reach back past it.
+  defp clamp_wb_dates(from, to) do
+    floor = Date.add(Date.utc_today(), -@wb_window_days)
+    {clamp_from(from, floor), to || today_iso()}
+  end
+
+  defp clamp_from(nil, floor), do: Date.to_iso8601(floor)
+
+  defp clamp_from(from, floor) do
+    case Date.from_iso8601(from) do
+      {:ok, d} -> Date.to_iso8601(Enum.max([d, floor], Date))
+      _ -> Date.to_iso8601(floor)
+    end
+  end
+
+  defp today_iso, do: Date.to_iso8601(Date.utc_today())
+  defp wb_date_min, do: Date.to_iso8601(Date.add(Date.utc_today(), -@wb_window_days))
 
   defp put_if(map, _k, v) when v in [nil, ""], do: map
   defp put_if(map, k, v), do: Map.put(map, k, v)
