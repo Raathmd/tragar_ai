@@ -27,7 +27,7 @@ defmodule TragarAi.Adapters.FreightWare do
       :service_types,
       :customer_lookup,
       :vehicle_assignment,
-      :waybill_by_reference
+      :waybill_search
     ]
 
   @impl true
@@ -53,25 +53,28 @@ defmodule TragarAi.Adapters.FreightWare do
     Cache.quote(quote)
   end
 
-  # Resolve a customer's own reference (shipperReference) to a waybill when the
-  # value isn't a waybill/quote NUMBER. Account-scoped, then fetched in full by
-  # the resolved waybill number (so it carries events + charges like any lookup).
-  def fetch(:waybill_by_reference, %{reference: ref, account: account})
+  # Search FreightWare for a customer's own reference (shipperReference) when the
+  # value isn't a waybill/quote NUMBER, and return EVERY matching waybill number.
+  # Account-scoped (search must be bounded to one account); the caller fetches
+  # each number in full so it carries events + charges like any lookup.
+  def fetch(:waybill_search, %{reference: ref, account: account})
       when is_binary(ref) and is_binary(account) do
     case Freight.search_waybills(%{shipper_reference: ref, account_reference: account}) do
-      {:ok, %{"waybills" => [%{"waybill_number" => number} | _]}}
-      when is_binary(number) and number != "" ->
-        fetch(:load_status, %{waybill: number})
+      {:ok, %{"waybills" => waybills}} ->
+        numbers =
+          waybills
+          |> Enum.map(& &1["waybill_number"])
+          |> Enum.reject(&(&1 in [nil, ""]))
+          |> Enum.uniq()
 
-      {:ok, _} ->
-        {:error, :not_found}
+        {:ok, %{"waybill_numbers" => numbers}}
 
       err ->
         err
     end
   end
 
-  def fetch(:waybill_by_reference, _), do: {:error, :missing_account}
+  def fetch(:waybill_search, _), do: {:error, :missing_account}
 
   def fetch(:customer_lookup, %{account: account}) when is_binary(account) do
     CustomerCache.customer(account)

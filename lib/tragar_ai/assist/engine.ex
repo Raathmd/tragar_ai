@@ -399,104 +399,137 @@ defmodule TragarAi.Assist.Engine do
     interpret_entry = multi_interpret_entry(question, subs)
     valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
     {groups, fetch_entries} = gather(valid, context)
+    log = [interpret_entry | fetch_entries]
 
-    # Fallback: a value that isn't a waybill/quote NUMBER may be the customer's
-    # own shipper reference — search FreightWare for it (account-scoped) before
-    # giving up.
-    {groups, fetch_entries} =
-      if groups == [] do
-        {ref_groups, ref_entries} = gather_shipper_refs(values, context)
-        {ref_groups, fetch_entries ++ ref_entries}
-      else
-        {groups, fetch_entries}
+    # The value matched a waybill/quote NUMBER → surface it. Otherwise fall back to
+    # testing the SAME value as the customer's own shipperReference (account-scoped).
+    if groups != [] do
+      surface_reference(question, groups, context, log)
+    else
+      case resolve_by_shipper_reference(values, context) do
+        {:matches, [_ | _] = ref_groups, ref_entries} ->
+          surface_reference(question, ref_groups, context, log ++ ref_entries)
+
+        {:matches, [], ref_entries} ->
+          unscoped_reference_fail(question, values, context, log ++ ref_entries)
+
+        {:need_account, :ambiguous, accounts} ->
+          confirm_account_fail(question, values, context, accounts, log)
+
+        {:need_account, :none, _} ->
+          unscoped_reference_fail(question, values, context, log)
       end
-
-    case groups do
-      [] ->
-        # The identifier couldn't be scoped to any entity in any source — say what
-        # we tried and ask the user to clarify what it refers to.
-        ref = hd(values)
-
-        fail(question, :load_status, %{waybill: ref}, context,
-          error: "unscoped_reference:#{ref}",
-          draft:
-            "I couldn't match \"#{ref}\" to a waybill or quote in FreightWare or Vantage. " <>
-              "Can you clarify what it refers to (a waybill, a quote, an account, or something else)?",
-          tool_log: [interpret_entry | fetch_entries]
-        )
-
-      _ ->
-        {results, phrase_entries} = harmonize_and_phrase(question, groups, context)
-
-        create_surface(
-          question,
-          results,
-          context,
-          [interpret_entry | fetch_entries] ++ phrase_entries
-        )
     end
   end
 
-  # Search FreightWare for each value as a shipper reference, resolving it to a
-  # waybill. Tries EVERY account the requester is entitled to (the search must be
-  # account-bounded) — so a Freshdesk ticket resolves the reference across all its
-  # accounts without anyone picking one. Skipped when no account is in context.
-  defp gather_shipper_refs(values, context) do
-    case probe_accounts(context) do
-      [] ->
-        {[], []}
+  defp surface_reference(question, groups, context, log) do
+    {results, phrase_entries} = harmonize_and_phrase(question, groups, context)
+    create_surface(question, results, context, log ++ phrase_entries)
+  end
 
-      accounts ->
-        results = for value <- values, do: {value, ref_lookup_any(value, accounts)}
+  # The identifier couldn't be scoped to any entity in any source — say what we
+  # tried and, since a bare value may be the customer's own reference, nudge for
+  # the account that would let the shipperReference search run.
+  defp unscoped_reference_fail(question, values, context, log) do
+    ref = hd(values)
 
-        entries =
-          for {v, r} <- results,
-              do: fetch_entry("FreightWare", :waybill_by_reference, %{reference: v}, r)
+    fail(question, :load_status, %{waybill: ref}, context,
+      error: "unscoped_reference:#{ref}",
+      draft:
+        "I couldn't match \"#{ref}\" to a waybill or quote in FreightWare or Vantage. " <>
+          "If it's the customer's own reference, include the FreightWare account " <>
+          "(e.g. \"for ITD02\") so I can search on it — otherwise let me know what it refers to.",
+      tool_log: log
+    )
+  end
 
-        groups =
-          for {v, {:ok, facts}} <- results, not out_of_scope?(facts, context) do
-            key = facts["waybill_number"] || v
+  # A Freshdesk ticket entitled to several accounts can't run a reference search
+  # without picking one (that would cross accounts) — ask the agent to confirm.
+  defp confirm_account_fail(question, values, context, accounts, log) do
+    ref = hd(values)
 
-            %{
-              intent: :load_status,
-              source: "FreightWare",
-              entities: %{waybill: key},
-              entity: :waybill,
-              entity_key: key,
-              facts: facts
-            }
-          end
+    fail(question, :load_status, %{waybill: ref}, context,
+      error: "account_ambiguous",
+      draft:
+        "To look up \"#{ref}\" I need to confirm the account — this request is linked to " <>
+          "#{Enum.join(accounts, ", ")}. Which account does it belong to?",
+      tool_log: log
+    )
+  end
 
-        {groups, entries}
+  # Cap the shipper-reference fan-out: one reference can map to many waybills, and
+  # each match is fetched in full — bound the concurrent lookups.
+  @ref_match_limit 10
+
+  # Search FreightWare for each value as a shipper reference, resolving it to
+  # EVERY matching waybill. The search is bound to a SINGLE account (never spans
+  # accounts) — a Freshdesk ticket entitled to several must confirm which one, so
+  # a search can't cross accounts. Returns:
+  #   {:matches, groups, tool_entries} — one group per matched waybill, or
+  #   {:need_account, :ambiguous, accounts} / {:need_account, :none} — no search ran.
+  defp resolve_by_shipper_reference(values, context) do
+    case search_account(context) do
+      {:ok, account} ->
+        {numbers, search_entries} = shipper_ref_numbers(values, account)
+        subs = for n <- Enum.take(numbers, @ref_match_limit), do: waybill_sub(n)
+        {groups, fetch_entries} = gather(subs, context)
+        {:matches, groups, search_entries ++ fetch_entries}
+
+      :ambiguous ->
+        {:need_account, :ambiguous, context[:accounts]}
+
+      :none ->
+        {:need_account, :none, []}
     end
   end
 
-  # Try the shipper-reference search across each account until one resolves.
-  defp ref_lookup_any(value, accounts) do
-    Enum.find_value(accounts, {:error, :not_found}, fn account ->
-      case ref_lookup(value, account) do
-        {:ok, facts} -> {:ok, facts}
-        _ -> false
-      end
-    end)
-  end
-
-  defp ref_lookup(value, account) do
-    params = %{reference: value, account: account}
-    safe_fetch(fn -> Adapters.fetch(:waybill_by_reference, params) end, :waybill_by_reference)
-  end
-
-  # Every account the request is scoped to (the entitled list, or a single
-  # supplied account) — the shipper-reference search spans them all.
-  defp probe_accounts(context) do
+  # The one account a reference search may run against: a Freshdesk scope of
+  # exactly one entitled account, or the single account supplied in the prompt.
+  # Several entitled accounts is ambiguous (must be confirmed); none is unscoped.
+  defp search_account(context) do
     case context[:accounts] do
-      accounts when is_list(accounts) and accounts != [] ->
-        Enum.filter(accounts, &(is_binary(&1) and &1 != ""))
-
-      _ ->
-        context |> get_in([:entities, :account]) |> List.wrap()
+      [account] when is_binary(account) and account != "" -> {:ok, account}
+      [_, _ | _] -> :ambiguous
+      _ -> supplied_account(context)
     end
   end
+
+  defp supplied_account(context) do
+    case get_in(context, [:entities, :account]) do
+      account when is_binary(account) and account != "" ->
+        if Accounts.valid?(account), do: {:ok, account}, else: :none
+
+      _ ->
+        :none
+    end
+  end
+
+  # Search each value as a shipperReference in the one account and collect every
+  # matching waybill number (deduped), plus a tool_log entry per value.
+  defp shipper_ref_numbers(values, account) do
+    results =
+      for value <- values do
+        params = %{reference: value, account: account}
+        {value, safe_fetch(fn -> Adapters.fetch(:waybill_search, params) end, :waybill_search)}
+      end
+
+    entries =
+      for {v, r} <- results,
+          do: fetch_entry("FreightWare", :waybill_search, %{reference: v, account: account}, r)
+
+    numbers =
+      for {_v, {:ok, %{"waybill_numbers" => ns}}} <- results, n <- ns, uniq: true, do: n
+
+    {numbers, entries}
+  end
+
+  defp waybill_sub(number),
+    do: %{
+      intent: :load_status,
+      entities: %{waybill: number},
+      entity: :waybill,
+      entity_key: number
+    }
 
   defp process_surface(question, subreqs, context) do
     interpret_entry = multi_interpret_entry(question, subreqs)
