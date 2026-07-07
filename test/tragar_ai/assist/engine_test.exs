@@ -166,12 +166,86 @@ defmodule TragarAi.Assist.EngineTest do
     assert i.facts["waybill_number"] == "4821"
   end
 
-  test "an unscoped identifier is flagged and clarification requested" do
+  test "an unscoped identifier is flagged, nudging for the account to search on" do
     assert {:ok, i} = Engine.answer("where is 0000?")
     assert i.status == :failed
     assert i.error =~ "unscoped_reference"
     assert i.draft_answer =~ "couldn't match"
-    assert i.draft_answer =~ "clarify"
+    # A bare value may be the customer's own reference — prompt for the account
+    # that would let the shipperReference search run.
+    assert i.draft_answer =~ "account"
+  end
+
+  test "a multi-account request won't cross accounts — it asks which account" do
+    # REF123 isn't a waybill/quote number. The requester is entitled to several
+    # accounts, so a shipperReference search could cross accounts — refuse and ask
+    # which one, rather than searching them all.
+    assert {:ok, i} =
+             Engine.answer("where is my shipment", %{
+               accounts: ["ITD02", "ABC01"],
+               entities: %{waybill: "REF123"}
+             })
+
+    assert i.status == :failed
+    assert i.error == "account_ambiguous"
+    assert i.draft_answer =~ "ITD02"
+    assert i.draft_answer =~ "ABC01"
+    assert i.draft_answer =~ "confirm the account"
+  end
+
+  test "a shipper reference matching several waybills surfaces them all" do
+    # The account-scoped search returns two waybills for REF123 — both are fetched
+    # in full and surfaced, not just the first.
+    Req.Test.stub(TragarAi.Dovetail.Client, fn conn ->
+      cond do
+        String.ends_with?(conn.request_path, "/system/auth/login") ->
+          conn
+          |> Plug.Conn.put_resp_header("x-freightware", "tok")
+          |> Req.Test.json(%{"response" => %{}})
+
+        String.contains?(conn.request_path, "/trackAndTrace") ->
+          Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
+
+        String.contains?(conn.request_path, "/waybills/4821/") ->
+          Req.Test.json(conn, waybill_json("4821", "In transit"))
+
+        String.contains?(conn.request_path, "/waybills/4822/") ->
+          Req.Test.json(conn, waybill_json("4822", "Delivered"))
+
+        # The shipperReference SEARCH returns two matches.
+        String.ends_with?(conn.request_path, "/waybills/") ->
+          Req.Test.json(conn, %{
+            "response" => %{
+              "esWaybills" => %{
+                "Waybills" => [
+                  %{"waybillNumber" => "4821", "shipperReference" => "REF123"},
+                  %{"waybillNumber" => "4822", "shipperReference" => "REF123"}
+                ]
+              }
+            }
+          })
+
+        true ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+      end
+    end)
+
+    Req.Test.stub(TragarAi.Vantage.Client, fn conn ->
+      if String.ends_with?(conn.request_path, "/api/auth/login"),
+        do: Req.Test.json(conn, %{"auth_token" => "vt"}),
+        else: Req.Test.json(conn, %{"items" => [], "hasNext" => false})
+    end)
+
+    assert {:ok, i} =
+             Engine.answer("where is my shipment", %{
+               accounts: ["ITD02"],
+               entities: %{account: "ITD02", waybill: "REF123"}
+             })
+
+    assert i.status == :drafted
+    numbers = Enum.map(i.facts["results"], & &1["facts"]["waybill_number"])
+    assert "4821" in numbers
+    assert "4822" in numbers
   end
 
   test "relay marks the interaction relayed (engine returns an in-memory record)" do
@@ -198,5 +272,22 @@ defmodule TragarAi.Assist.EngineTest do
     refute Map.has_key?(stored, :tool_log)
     assert stored.question =~ "4821"
     assert stored.status == :drafted
+  end
+
+  # A single-waybill detail response (as FreightWare's get_waybill returns it).
+  defp waybill_json(number, status) do
+    %{
+      "response" => %{
+        "esWaybills" => %{
+          "Waybills" => [
+            %{
+              "waybillNumber" => number,
+              "statusDescription" => status,
+              "consigneeName" => "Acme"
+            }
+          ]
+        }
+      }
+    }
   end
 end
