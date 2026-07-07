@@ -116,6 +116,46 @@ defmodule TragarAi.Freight.Accounts do
 
   def by_domain(_), do: []
 
+  @doc """
+  Type-ahead over the cached directory: up to `limit` accounts whose reference or
+  name-ish fields contain `query` (normalised). Returns `[%{ref, name}]` sorted by
+  reference. Empty for a blank query or when the directory can't load.
+  """
+  @spec search(term(), pos_integer()) :: [%{ref: String.t(), name: String.t()}]
+  def search(query, limit \\ 8)
+
+  def search(query, limit) when is_binary(query) do
+    q = norm(query)
+
+    with false <- q == "",
+         {:ok, dir} <- directory() do
+      for {ref, a} <- dir, String.contains?(ref, q) or contains_name?(a, q) do
+        %{ref: ref, name: display_name(a)}
+      end
+      |> Enum.sort_by(& &1.ref)
+      |> Enum.take(limit)
+    else
+      _ -> []
+    end
+  end
+
+  def search(_, _), do: []
+
+  # Does any of the account's name-ish fields contain the (already normalised) query?
+  defp contains_name?(account, q) do
+    [
+      account["account_name"],
+      account["short_name"],
+      account["other_name"],
+      account["contact_name"]
+    ]
+    |> Enum.any?(fn v -> is_binary(v) and v != "" and String.contains?(norm(v), q) end)
+  end
+
+  defp display_name(account) do
+    account["account_name"] || account["short_name"] || account["other_name"] || ""
+  end
+
   # First non-empty match list → {:ok, one} | {:ambiguous, many}; else fall through.
   defp match_first(lists) do
     Enum.find_value(lists, fn
