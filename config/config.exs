@@ -41,8 +41,7 @@ config :tragar_ai, Oban,
     # Refresh the FreightWare account directory hourly in the background, so no
     # user request (ticket click / console lookup) ever triggers the load or
     # blocks on a slow FreightWare — see TragarAi.Freight.AccountsRefreshWorker.
-    {Oban.Plugins.Cron,
-     crontab: [{"0 * * * *", TragarAi.Freight.AccountsRefreshWorker}]}
+    {Oban.Plugins.Cron, crontab: [{"0 * * * *", TragarAi.Freight.AccountsRefreshWorker}]}
   ]
 
 # Core AI (the local model reached over local HTTP — the "Swift sidecar").
