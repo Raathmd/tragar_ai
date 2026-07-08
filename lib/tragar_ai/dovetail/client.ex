@@ -132,7 +132,10 @@ defmodule TragarAi.Dovetail.Client do
 
       case Req.request(req) do
         {:ok, %Req.Response{status: status}} when status in [401, 403] and retry? ->
-          TragarAi.Dovetail.TokenStore.invalidate()
+          # Compare-and-invalidate the exact token that was rejected, then retry
+          # once. The TokenStore's login barrier collapses concurrent retries into
+          # a single re-login, so a burst of 401s can't stampede.
+          TragarAi.Dovetail.TokenStore.invalidate(token)
           request(method, path, opts, false)
 
         {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
