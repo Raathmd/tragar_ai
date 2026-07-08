@@ -16,7 +16,10 @@ defmodule TragarAi.Freight.Accounts do
   alias TragarAi.Freight
   require Logger
 
-  @ttl_ms :timer.minutes(30)
+  # Freshness window for the cached directory. Kept comfortably longer than the
+  # hourly background refresh (AccountsRefreshWorker) so, in steady state, the
+  # scheduled job is the ONLY thing that reloads and no user request ever does.
+  @ttl_ms :timer.hours(2)
   @key {__MODULE__, :directory}
 
   @doc "The `%{REF => account_map}` directory, cached. `{:error, reason}` if it can't load."
@@ -189,7 +192,7 @@ defmodule TragarAi.Freight.Accounts do
   # ── internals ────────────────────────────────────────────────────────────────
 
   defp load do
-    case Freight.accounts() do
+    case safe_accounts() do
       {:ok, list} when is_list(list) ->
         dir =
           for a <- list,
@@ -204,6 +207,19 @@ defmodule TragarAi.Freight.Accounts do
       {:error, _} = err ->
         err
     end
+  end
+
+  # FreightWare calls can time out — and a TokenStore `GenServer.call` timeout is
+  # an `exit`, not an `{:error, _}` tuple, so it bypasses every fail-open guard
+  # and crashes the caller (this is what killed the ticket-load async). Trap both
+  # exits and exceptions here so a slow/unavailable FreightWare always surfaces as
+  # `{:error, reason}`, letting callers fail open instead of crashing.
+  defp safe_accounts do
+    Freight.accounts()
+  rescue
+    e -> {:error, e}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
   end
 
   defp cached do
