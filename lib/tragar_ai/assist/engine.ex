@@ -398,29 +398,41 @@ defmodule TragarAi.Assist.Engine do
     subs = expand_probe(values)
     interpret_entry = multi_interpret_entry(question, subs)
     valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
-    {groups, fetch_entries} = gather(valid, context)
+    {groups, fetch_entries, fail_reason} = gather(valid, context)
     log = [interpret_entry | fetch_entries]
 
     # The value matched a waybill/quote NUMBER → surface it. Otherwise fall back to
     # testing the SAME value as the customer's own shipperReference (account-scoped).
-    if groups != [] do
-      surface_reference(question, groups, context, log)
-    else
-      case resolve_by_shipper_reference(values, context) do
-        {:matches, [_ | _] = ref_groups, ref_entries} ->
-          surface_reference(question, ref_groups, context, log ++ ref_entries)
+    cond do
+      groups != [] ->
+        surface_reference(question, groups, context, log)
 
-        {:matches, [], ref_entries} ->
-          unscoped_reference_fail(question, values, context, log ++ ref_entries)
+      # We couldn't even check the reference because the source was unreachable or
+      # the session was reset by a crossed prompt — say so (and to retry) instead
+      # of claiming the reference didn't match.
+      fail_reason in [:unreachable, :session_conflict] ->
+        retrieval_fail(question, ref_request(values), context, fail_reason, log)
 
-        {:need_account, :ambiguous, accounts} ->
-          confirm_account_fail(question, values, context, accounts, log)
+      true ->
+        case resolve_by_shipper_reference(values, context) do
+          {:matches, [_ | _] = ref_groups, ref_entries} ->
+            surface_reference(question, ref_groups, context, log ++ ref_entries)
 
-        {:need_account, :none, _} ->
-          unscoped_reference_fail(question, values, context, log)
-      end
+          {:matches, [], ref_entries} ->
+            unscoped_reference_fail(question, values, context, log ++ ref_entries)
+
+          {:need_account, :ambiguous, accounts} ->
+            confirm_account_fail(question, values, context, accounts, log)
+
+          {:need_account, :none, _} ->
+            unscoped_reference_fail(question, values, context, log)
+        end
     end
   end
+
+  # A minimal request describing the reference we were probing, so a connectivity
+  # failure can be reported with the right source/entity in the message.
+  defp ref_request(values), do: %{intent: :load_status, entities: %{waybill: hd(values)}}
 
   defp surface_reference(question, groups, context, log) do
     {results, phrase_entries} = harmonize_and_phrase(question, groups, context)
@@ -472,7 +484,7 @@ defmodule TragarAi.Assist.Engine do
       {:ok, account} ->
         {numbers, search_entries} = shipper_ref_numbers(values, account)
         subs = for n <- Enum.take(numbers, @ref_match_limit), do: waybill_sub(n)
-        {groups, fetch_entries} = gather(subs, context)
+        {groups, fetch_entries, _fail_reason} = gather(subs, context)
         {:matches, groups, search_entries ++ fetch_entries}
 
       :ambiguous ->
@@ -544,17 +556,13 @@ defmodule TragarAi.Assist.Engine do
         ])
 
       _ ->
-        {groups, fetch_entries} = gather(valid, context)
+        {groups, fetch_entries, fail_reason} = gather(valid, context)
 
         case groups do
           [] ->
-            first = hd(valid)
-
-            fail(question, first.intent, first.entities, context,
-              error: "no_facts",
-              draft: "I couldn't retrieve those details right now — please try again shortly.",
-              tool_log: [interpret_entry | fetch_entries]
-            )
+            retrieval_fail(question, hd(valid), context, fail_reason, [
+              interpret_entry | fetch_entries
+            ])
 
           _ ->
             {results, phrase_entries} = harmonize_and_phrase(question, groups, context)
@@ -695,7 +703,7 @@ defmodule TragarAi.Assist.Engine do
       |> Enum.zip(requests)
       |> Enum.map(fn
         {{:ok, triple}, _r} -> triple
-        {{:exit, _reason}, r} -> {r, source_name(r.intent), {:error, :not_available}}
+        {{:exit, _reason}, r} -> {r, source_name(r.intent), {:error, :unreachable}}
       end)
 
     fetch_entries =
@@ -713,7 +721,20 @@ defmodule TragarAi.Assist.Engine do
         }
       end
 
-    {groups, fetch_entries}
+    {groups, fetch_entries, aggregate_failure(triples)}
+  end
+
+  # The most actionable failure across the gathered results, for the empty-groups
+  # message: a crossed-session conflict outranks a plain unreachable, which
+  # outranks "nothing came back".
+  defp aggregate_failure(triples) do
+    reasons = for {_r, _src, {:error, reason}} <- triples, do: reason
+
+    cond do
+      Enum.any?(reasons, &(failure_kind(&1) == :session_conflict)) -> :session_conflict
+      Enum.any?(reasons, &(failure_kind(&1) == :unreachable)) -> :unreachable
+      true -> :no_facts
+    end
   end
 
   defp multi_interpret_entry(question, requests) do
@@ -867,9 +888,13 @@ defmodule TragarAi.Assist.Engine do
       Logger.error("[assist] source #{inspect(intent)} raised: #{Exception.message(e)}")
       {:error, :not_available}
   catch
+    # A source that exits mid-call is almost always a timeout — a slow/unreachable
+    # FreightWare, or the TokenStore.token GenServer.call timing out (which is an
+    # exit, not an {:error, _}). Surface it as :unreachable so the user is told to
+    # try again, not that the system "isn't connected".
     :exit, reason ->
       Logger.error("[assist] source #{inspect(intent)} exited: #{inspect(reason)}")
-      {:error, :not_available}
+      {:error, :unreachable}
   end
 
   # ── tool_log entries ─────────────────────────────────────────────────────────
@@ -927,17 +952,94 @@ defmodule TragarAi.Assist.Engine do
     )
   end
 
-  defp fetch_failure(:not_available, intent),
-    do: [
-      error: "not_available",
-      draft: "The #{source_name(intent)} system isn't connected yet — please check it directly."
-    ]
+  # Turn a raw fetch error into a user-facing draft. Two connectivity cases get a
+  # clear "try/submit again" message rather than the misleading "not connected".
+  defp fetch_failure(reason, intent) do
+    case failure_kind(reason) do
+      :unreachable ->
+        [error: "unreachable", draft: unreachable_draft(intent)]
 
-  defp fetch_failure(reason, intent),
-    do: [
-      error: inspect(reason),
-      draft: "#{source_name(intent)} is temporarily unavailable — please try again shortly."
-    ]
+      :session_conflict ->
+        [error: "session_conflict", draft: session_conflict_draft()]
+
+      :not_available ->
+        [
+          error: "not_available",
+          draft:
+            "The #{source_name(intent)} system isn't connected yet — please check it directly."
+        ]
+
+      :other ->
+        [
+          error: inspect(reason),
+          draft: "#{source_name(intent)} is temporarily unavailable — please try again shortly."
+        ]
+    end
+  end
+
+  # Classify a fetch error for messaging:
+  #   :unreachable      — a timeout / transport failure (FreightWare slow or down)
+  #   :session_conflict — the FreightWare session was reset by a crossed concurrent
+  #                       login: a 401/403, or the HTTP 400 whose body says the
+  #                       session was "logged out by another login"
+  #   :not_available    — a source that genuinely isn't wired up
+  #   :other            — anything else
+  defp failure_kind(:unreachable), do: :unreachable
+  defp failure_kind(:timeout), do: :unreachable
+  defp failure_kind(%Req.TransportError{}), do: :unreachable
+  defp failure_kind({:http_error, status, _body}) when status in [401, 403], do: :session_conflict
+
+  # FreightWare signals a session invalidated by a crossed concurrent login with
+  # HTTP 400 + errorCode "Authentication" ("Session logged out by another login").
+  # Only that specific 400 is a session cross; other 400s are ordinary failures.
+  defp failure_kind({:http_error, 400, body}),
+    do: if(session_lost?(body), do: :session_conflict, else: :other)
+
+  defp failure_kind(:not_available), do: :not_available
+  defp failure_kind(_), do: :other
+
+  # The raw (undecoded) FreightWare error body carries the session-cross marker.
+  defp session_lost?(body) do
+    text = if is_binary(body), do: body, else: inspect(body)
+    String.contains?(text, "Session logged out by another login")
+  end
+
+  defp unreachable_draft(intent),
+    do:
+      "I couldn't reach #{source_name(intent)} just now — it looks like it was temporarily " <>
+        "unreachable. Please try again in a moment."
+
+  defp session_conflict_draft,
+    do:
+      "It looks like your request crossed with another that was running at the same time, " <>
+        "which reset the FreightWare session before this one could finish. Please submit it again."
+
+  # Empty-groups outcome for the multi-lookup / reference paths: pick the message
+  # from the aggregated fetch failure (connectivity issues get "try/submit again";
+  # otherwise a plain "nothing came back").
+  defp retrieval_fail(question, req, context, :session_conflict, log),
+    do:
+      fail(question, req.intent, req.entities, context,
+        error: "session_conflict",
+        draft: session_conflict_draft(),
+        tool_log: log
+      )
+
+  defp retrieval_fail(question, req, context, :unreachable, log),
+    do:
+      fail(question, req.intent, req.entities, context,
+        error: "unreachable",
+        draft: unreachable_draft(req.intent),
+        tool_log: log
+      )
+
+  defp retrieval_fail(question, req, context, _reason, log),
+    do:
+      fail(question, req.intent, req.entities, context,
+        error: "no_facts",
+        draft: "I couldn't retrieve those details right now — please try again shortly.",
+        tool_log: log
+      )
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
 
