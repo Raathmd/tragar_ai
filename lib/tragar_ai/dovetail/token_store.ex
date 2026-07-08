@@ -64,7 +64,7 @@ defmodule TragarAi.Dovetail.TokenStore do
   def init(_opts), do: {:ok, %State{}}
 
   @impl true
-  def handle_call(:token, from, state) do
+  def handle_call(:token, from, %State{} = state) do
     cond do
       fresh?(state) ->
         {:reply, {:ok, state.token}, state}
@@ -80,13 +80,13 @@ defmodule TragarAi.Dovetail.TokenStore do
   end
 
   @impl true
-  def handle_cast({:invalidate, :any}, state) do
+  def handle_cast({:invalidate, :any}, %State{} = state) do
     # Unconditional clear (manual / test reset). A login already in flight will
     # still cache its result when it returns.
     {:noreply, %State{state | token: nil, fetched_at_ms: nil}}
   end
 
-  def handle_cast({:invalidate, token}, state) do
+  def handle_cast({:invalidate, token}, %State{} = state) do
     if state.token == token and not state.logging_in? do
       {:noreply, %State{state | token: nil, fetched_at_ms: nil}}
     else
@@ -97,7 +97,7 @@ defmodule TragarAi.Dovetail.TokenStore do
   end
 
   @impl true
-  def handle_info({:login_result, result}, state) do
+  def handle_info({:login_result, result}, %State{} = state) do
     # Reply to everyone parked on this login, then cache on success. Replying to a
     # since-timed-out caller is a harmless no-op.
     Enum.each(state.waiters, &GenServer.reply(&1, result))
@@ -119,7 +119,7 @@ defmodule TragarAi.Dovetail.TokenStore do
 
   # Run the single login in a throwaway task that reports back. Marking
   # logging_in? holds the barrier until {:login_result, _} arrives.
-  defp start_login(state) do
+  defp start_login(%State{} = state) do
     parent = self()
     spawn(fn -> send(parent, {:login_result, safe_login()}) end)
     %State{state | logging_in?: true}
