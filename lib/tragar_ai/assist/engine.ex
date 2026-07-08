@@ -979,16 +979,30 @@ defmodule TragarAi.Assist.Engine do
 
   # Classify a fetch error for messaging:
   #   :unreachable      — a timeout / transport failure (FreightWare slow or down)
-  #   :session_conflict — a 401/403 that survived the client's one re-auth retry,
-  #                       i.e. a concurrent prompt reset the FreightWare session
+  #   :session_conflict — the FreightWare session was reset by a crossed concurrent
+  #                       login: a 401/403, or the HTTP 400 whose body says the
+  #                       session was "logged out by another login"
   #   :not_available    — a source that genuinely isn't wired up
   #   :other            — anything else
   defp failure_kind(:unreachable), do: :unreachable
   defp failure_kind(:timeout), do: :unreachable
   defp failure_kind(%Req.TransportError{}), do: :unreachable
   defp failure_kind({:http_error, status, _body}) when status in [401, 403], do: :session_conflict
+
+  # FreightWare signals a session invalidated by a crossed concurrent login with
+  # HTTP 400 + errorCode "Authentication" ("Session logged out by another login").
+  # Only that specific 400 is a session cross; other 400s are ordinary failures.
+  defp failure_kind({:http_error, 400, body}),
+    do: if(session_lost?(body), do: :session_conflict, else: :other)
+
   defp failure_kind(:not_available), do: :not_available
   defp failure_kind(_), do: :other
+
+  # The raw (undecoded) FreightWare error body carries the session-cross marker.
+  defp session_lost?(body) do
+    text = if is_binary(body), do: body, else: inspect(body)
+    String.contains?(text, "Session logged out by another login")
+  end
 
   defp unreachable_draft(intent),
     do:
