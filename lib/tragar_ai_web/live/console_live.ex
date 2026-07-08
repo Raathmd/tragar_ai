@@ -38,7 +38,7 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(quote_results: [], quote_meta: nil)
      |> assign(selected_ticket: nil, distilling: false, account_choices: [])
      |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
-     |> assign(next_msg_id: 0)
+     |> assign(next_msg_id: 0, last_question: nil)
      |> load_history()
      |> load_agents()
      |> load_tickets()}
@@ -194,8 +194,11 @@ defmodule TragarAiWeb.ConsoleLive do
     frame = put_in(socket.assigns.frame.entities[:account], ref)
     socket = assign(socket, frame: frame, account_choices: [])
 
-    case String.trim(socket.assigns.question || "") do
-      "" -> {:noreply, socket}
+    # Re-run the prompt that triggered the ambiguity — the still-unsent input if
+    # present (e.g. a loaded ticket), otherwise the last submitted prompt. The
+    # chosen account now scopes it (frame.entities[:account]).
+    case blank_to_nil(socket.assigns.question) || socket.assigns[:last_question] do
+      nil -> {:noreply, socket}
       q -> {:noreply, converse(socket, q)}
     end
   end
@@ -1174,6 +1177,7 @@ defmodule TragarAiWeb.ConsoleLive do
       agent: blank_to_nil(socket.assigns.agent),
       entities: base,
       intent: frame.intent,
+      history: build_history(socket.assigns.messages),
       on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end,
       on_event: fn event -> send(lv, {:event, id, event}) end
     }
@@ -1193,12 +1197,27 @@ defmodule TragarAiWeb.ConsoleLive do
     |> assign(
       messages: socket.assigns.messages ++ [%{role: :user, text: text}, pending],
       question: "",
+      # Remember the prompt so an account pick (or other re-run) can replay it.
+      last_question: text,
       next_msg_id: id + 1,
       right_tab: "log"
     )
     |> start_async({:converse, id}, fn ->
       {Engine.answer(text, context), base, frame.intent}
     end)
+  end
+
+  # Prior turns as a compact transcript for the model, so follow-ups resolve
+  # against the conversation instead of the user having to repeat context. Only
+  # real user/AI text (skip the in-flight pending bubble); keep the last ~6 turns.
+  defp build_history(messages) do
+    messages
+    |> Enum.flat_map(fn
+      %{role: :user, text: t} when is_binary(t) and t != "" -> [%{role: "user", text: t}]
+      %{role: :ai, text: t} when is_binary(t) and t != "" -> [%{role: "assistant", text: t}]
+      _ -> []
+    end)
+    |> Enum.take(-12)
   end
 
   @impl true
@@ -1390,9 +1409,10 @@ defmodule TragarAiWeb.ConsoleLive do
         [%{label: "Show the quote", q: "Show quote #{e["quote"]}"}]
 
       true ->
+        # No entity in play — offer capability hints that don't fire a lookup on a
+        # made-up identifier (the old fallback used demo waybill/account values).
         [
-          %{label: "Track a waybill", q: "Where is waybill 4821?"},
-          %{label: "Account balance", q: "Balance on account ACC1001"},
+          %{label: "What can you do?", q: "What can you help me with?"},
           %{label: "Service types", q: "What service types do you offer?"}
         ]
     end
