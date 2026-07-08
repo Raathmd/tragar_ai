@@ -717,9 +717,30 @@ defmodule TragarAi.CoreAI do
   end
 
   defp interpret_user_prompt(question, context) do
-    case safe_context_json(context) do
-      nil -> question
-      json -> "Context: #{json}\nQuestion: #{question}"
+    history = history_text(context)
+
+    ctx =
+      case safe_context_json(context) do
+        nil -> ""
+        json -> "Context: #{json}\n"
+      end
+
+    "#{history}#{ctx}Question: #{question}"
+  end
+
+  # Prior turns of THIS console conversation as a compact transcript, so the model
+  # can resolve follow-ups ("its ETA", "that one", "and the POD?") against what was
+  # already asked and answered instead of the user having to repeat context.
+  defp history_text(context) do
+    case context[:history] do
+      [_ | _] = turns ->
+        lines =
+          Enum.map_join(turns, "\n", fn %{role: role, text: text} -> "#{role}: #{text}" end)
+
+        "Conversation so far:\n#{lines}\n\n"
+
+      _ ->
+        ""
     end
   end
 
@@ -729,7 +750,16 @@ defmodule TragarAi.CoreAI do
   # rule-based stub. Drop internal keys; if anything left is still non-encodable,
   # omit the context entirely rather than fail the model call.
   defp safe_context_json(context) do
-    ctx = Map.drop(context, [:on_chunk, :started_at, :free_reasoning, :demo, :agent])
+    ctx =
+      Map.drop(context, [
+        :on_chunk,
+        :on_event,
+        :history,
+        :started_at,
+        :free_reasoning,
+        :demo,
+        :agent
+      ])
 
     case map_size(ctx) do
       0 ->
