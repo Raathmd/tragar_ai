@@ -27,7 +27,25 @@ defmodule TragarAi.Application do
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: TragarAi.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, _pid} = ok <- Supervisor.start_link(children, opts) do
+      warm_accounts_cache()
+      ok
+    end
+  end
+
+  # Enqueue an immediate background refresh of the FreightWare account directory
+  # so a cold cache (right after a deploy) is warmed before the first hourly cron
+  # tick — and before the first ticket click would otherwise have to pay for it.
+  defp warm_accounts_cache do
+    TragarAi.Freight.AccountsRefreshWorker.new(%{}) |> Oban.insert()
+    :ok
+  rescue
+    # Never let a warm-up enqueue failure stop the app from booting.
+    error ->
+      require Logger
+      Logger.warning("[accounts] boot warm-up enqueue failed: #{inspect(error)}")
+      :ok
   end
 
   # Tell Phoenix to update the endpoint configuration
