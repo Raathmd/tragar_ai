@@ -33,7 +33,10 @@ defmodule TragarAiWeb.TicketChatControllerTest do
     Req.Test.stub(TragarAi.Freshdesk.Client, fn conn ->
       cond do
         String.contains?(conn.request_path, "/companies/") ->
-          Req.Test.json(conn, %{"id" => 10, "custom_fields" => %{"freightware_accounts" => "ITD02"}})
+          Req.Test.json(conn, %{
+            "id" => 10,
+            "custom_fields" => %{"freightware_accounts" => "ITD02"}
+          })
 
         String.contains?(conn.request_path, "/tickets/") ->
           Req.Test.json(conn, %{"id" => 55, "company_id" => 10})
