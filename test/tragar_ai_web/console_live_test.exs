@@ -93,4 +93,47 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     # the agent to edit and submit — no distillation.
     assert html =~ "Where is parcel 4821"
   end
+
+  test "clicking a ticket offers the requester's entitled accounts from the FD API", %{conn: conn} do
+    # The ticket's requester is linked to a Freshdesk company carrying two
+    # FreightWare accounts — clicking the ticket checks the FD API (ticket →
+    # company → freightware_accounts) and offers those as the account chooser
+    # (with "Check all"), rather than a content guess.
+    Req.Test.stub(TragarAi.Freshdesk.Client, fn conn ->
+      cond do
+        String.ends_with?(conn.request_path, "/tickets/55") ->
+          Req.Test.json(conn, %{
+            "id" => 55,
+            "subject" => "Where is parcel 4821",
+            "description_text" => "Customer asks where waybill 4821 is.",
+            "company_id" => 900
+          })
+
+        String.ends_with?(conn.request_path, "/tickets") ->
+          Req.Test.json(conn, [
+            %{"id" => 55, "subject" => "Where is parcel 4821", "status" => 2, "responder_id" => 1}
+          ])
+
+        String.ends_with?(conn.request_path, "/companies/900") ->
+          Req.Test.json(conn, %{
+            "id" => 900,
+            "custom_fields" => %{"freightware_accounts" => "ITD02, ABC01"}
+          })
+
+        String.ends_with?(conn.request_path, "/agents") ->
+          Req.Test.json(conn, [%{"id" => 1, "contact" => %{"name" => "Thandi"}}])
+
+        true ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+      end
+    end)
+
+    {:ok, view, _html} = live(conn, ~p"/console")
+    view |> element(~s|button[phx-value-id="55"]|) |> render_click()
+    html = render_async(view, 5000)
+
+    assert html =~ "ITD02"
+    assert html =~ "ABC01"
+    assert html =~ "Check all"
+  end
 end

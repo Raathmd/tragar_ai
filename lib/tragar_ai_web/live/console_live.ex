@@ -203,6 +203,20 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
+  # "Check all" when the user isn't sure which of several accounts owns the
+  # reference. Probe each candidate in turn and STOP at the first that yields a
+  # grounded result — so a waybill/quote is located without the agent guessing.
+  def handle_event("check_all_accounts", _params, socket) do
+    refs = socket.assigns.account_choices
+    q = blank_to_nil(socket.assigns.question) || socket.assigns[:last_question]
+
+    case {refs, q} do
+      {[], _} -> {:noreply, socket}
+      {_, nil} -> {:noreply, socket}
+      {refs, q} -> {:noreply, converse_all(socket, q, refs)}
+    end
+  end
+
   # ── Right panel ─────────────────────────────────────────────────────────────
 
   def handle_event("switch_right", %{"tab" => tab}, socket),
@@ -400,7 +414,7 @@ defmodule TragarAiWeb.ConsoleLive do
         class="rounded-lg border border-warning/40 bg-warning/10 p-2 text-sm space-y-1"
       >
         <div class="text-xs text-base-content/70">
-          Several accounts match — pick one to scope this:
+          Several accounts match — pick one to scope this, or check them all:
         </div>
         <div class="flex flex-wrap gap-1">
           <button
@@ -411,6 +425,14 @@ defmodule TragarAiWeb.ConsoleLive do
             class="btn btn-xs btn-outline"
           >
             {ref}
+          </button>
+          <button
+            :if={length(@account_choices) > 1}
+            type="button"
+            phx-click="check_all_accounts"
+            class="btn btn-xs btn-primary"
+          >
+            Check all
           </button>
         </div>
       </div>
@@ -1056,9 +1078,24 @@ defmodule TragarAiWeb.ConsoleLive do
       # Pre-fill the prompt with the ACTUAL ticket contents (subject + body), not a
       # distilled summary — the agent edits/submits it as-is.
       with {:ok, info} <- TragarAi.Freshdesk.ticket_text(id) do
-        {info.ticket_id, info.text, TragarAi.Freshdesk.resolve_account(info)}
+        {info.ticket_id, info.text, resolve_ticket_accounts(id, info)}
       end
     end)
+  end
+
+  # Which account(s) to scope the ticket to. Prefer the requester's ENTITLED
+  # accounts from the Freshdesk API (the Company `freightware_accounts` field, via
+  # ticket → company) — the authoritative allowed set — so a single entitled
+  # account auto-scopes and several offer a chooser (+ "Check all"). Fall back to
+  # resolving one account from the ticket content when the requester has no linked
+  # company/accounts. Returned in the {:ok, ref} | {:ambiguous, refs} | :none shape
+  # that handle_async(:load_ticket) already understands.
+  defp resolve_ticket_accounts(id, info) do
+    case TragarAi.Freshdesk.accounts_for_requester(id) do
+      {:ok, [ref]} -> {:ok, ref}
+      {:ok, [_ | _] = refs} -> {:ambiguous, refs}
+      _ -> TragarAi.Freshdesk.resolve_account(info)
+    end
   end
 
   # Live tickets from Freshdesk, filtered by status (default open) + agent.
@@ -1207,6 +1244,81 @@ defmodule TragarAiWeb.ConsoleLive do
     end)
   end
 
+  # Like `converse/2`, but fans the pending prompt across every candidate account
+  # SEQUENTIALLY (a FreightWare login invalidates the previous session, so probes
+  # must not run concurrently), stopping at the first grounded hit. Per-account
+  # progress streams into the log via {:event, ...}; the outcome is applied in
+  # handle_async({:check_all, id}, ...).
+  defp converse_all(socket, text, refs) do
+    frame = socket.assigns.frame
+    base = frame.entities
+    intent = frame.intent
+    agent = blank_to_nil(socket.assigns.agent)
+
+    id = socket.assigns.next_msg_id
+    lv = self()
+
+    pending = %{
+      role: :ai,
+      id: id,
+      pending: true,
+      stream: "",
+      text: nil,
+      resolved: true,
+      suggestions: [],
+      steps: []
+    }
+
+    user_text = "Check all matching accounts (#{Enum.join(refs, ", ")}) for this."
+
+    socket
+    |> assign(
+      messages: socket.assigns.messages ++ [%{role: :user, text: user_text}, pending],
+      question: "",
+      # Remember the prompt so a later re-run (e.g. an account pick) can replay it.
+      last_question: text,
+      account_choices: [],
+      next_msg_id: id + 1,
+      right_tab: "log"
+    )
+    |> start_async({:check_all, id}, fn ->
+      check_accounts(text, refs, base, intent, agent, id, lv)
+    end)
+  end
+
+  # Probe each account in order; halt on the first grounded (`:drafted`) answer.
+  # Returns {:found, ref, interaction, entities} or {:none, base}. Each attempt
+  # emits its own source step (keyed by the account) so the log shows progress.
+  defp check_accounts(text, refs, base, intent, agent, id, lv) do
+    step_intent = intent || :lookup
+
+    Enum.reduce_while(refs, {:none, base}, fn ref, _acc ->
+      entities = Map.put(base, :account, ref)
+      label = %{account: ref}
+      send(lv, {:event, id, {:source_started, step_intent, "FreightWare", label}})
+
+      context = %{
+        agent: agent,
+        entities: entities,
+        intent: intent,
+        history: [],
+        # No streaming while probing — the matched answer is applied in one shot.
+        on_chunk: nil,
+        on_event: fn _ -> :ok end
+      }
+
+      case Engine.answer(text, context) do
+        {:ok, %{status: :drafted} = interaction} ->
+          send(lv, {:event, id, {:source_done, step_intent, "FreightWare", label, true}})
+          {:halt, {:found, ref, interaction, entities}}
+
+        _ ->
+          send(lv, {:event, id, {:source_done, step_intent, "FreightWare", label, false}})
+          {:cont, {:none, base}}
+      end
+    end)
+  end
+
   # Prior turns as a compact transcript for the model, so follow-ups resolve
   # against the conversation instead of the user having to repeat context. Only
   # real user/AI text (skip the in-flight pending bubble); keep the last ~6 turns.
@@ -1307,6 +1419,69 @@ defmodule TragarAiWeb.ConsoleLive do
       pending: false,
       stream: "",
       text: "Something went wrong — please try again.",
+      resolved: false,
+      suggestions: []
+    }
+
+    {:noreply, assign(socket, messages: replace_msg(socket.assigns.messages, id, ai))}
+  end
+
+  # "Check all" found a grounded answer — show it and scope the frame to the
+  # matching account so follow-ups continue there (as if it had been picked).
+  def handle_async({:check_all, id}, {:ok, {:found, _ref, interaction, entities}}, socket) do
+    ai = %{
+      role: :ai,
+      id: id,
+      pending: false,
+      stream: "",
+      text: interaction.draft_answer,
+      resolved: true,
+      suggestions: []
+    }
+
+    new_frame = %{
+      intent: carry_intent(interaction, socket.assigns.frame.intent),
+      entities: Map.merge(entities, atomize_entities(interaction.entities))
+    }
+
+    socket =
+      socket
+      |> assign(
+        messages: replace_msg(socket.assigns.messages, id, ai),
+        frame: new_frame,
+        interaction: interaction,
+        right_tab: "log"
+      )
+      |> load_history()
+
+    {:noreply, socket}
+  end
+
+  def handle_async({:check_all, id}, {:ok, {:none, _base}}, socket) do
+    ai = %{
+      role: :ai,
+      id: id,
+      pending: false,
+      stream: "",
+      text:
+        "Checked all matching accounts — no waybill or quote turned up under any of them. " <>
+          "Please double-check the reference.",
+      resolved: false,
+      suggestions: []
+    }
+
+    {:noreply, assign(socket, messages: replace_msg(socket.assigns.messages, id, ai))}
+  end
+
+  def handle_async({:check_all, id}, {:exit, reason}, socket) do
+    Logger.error("[console] check_all crashed: #{inspect(reason)}")
+
+    ai = %{
+      role: :ai,
+      id: id,
+      pending: false,
+      stream: "",
+      text: "Something went wrong while checking the accounts — please try again.",
       resolved: false,
       suggestions: []
     }

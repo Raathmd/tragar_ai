@@ -140,6 +140,25 @@ defmodule TragarAi.Freshdesk do
     ([opening] ++ Enum.take(lines, -@thread_max)) |> Enum.join("\n\n")
   end
 
+  @doc """
+  Whether the MOST RECENT conversation on the ticket is one of Tragar AI's own
+  private notes. Re-entrancy guard for a note-triggered automation: if the bot
+  just posted, there's nothing new to answer, so the responder skips instead of
+  replying to its own note. (The Freshdesk automation should ALSO exclude our
+  integration user as the performer — this is the belt-and-suspenders in code.)
+  """
+  def last_note_ours?(ticket_id, opts \\ []) do
+    client = Keyword.get(opts, :client, Client)
+
+    case client.conversations(ticket_id) do
+      {:ok, [_ | _] = list} ->
+        list |> Enum.sort_by(&(&1["created_at"] || "")) |> List.last() |> ours?()
+
+      _ ->
+        false
+    end
+  end
+
   # Ours = a private note whose text starts with the bot marker.
   defp ours?(%{"private" => true} = c),
     do: c |> convo_text() |> String.trim() |> String.starts_with?(@bot_marker)
