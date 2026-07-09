@@ -414,20 +414,45 @@ defmodule TragarAi.Assist.Engine do
         retrieval_fail(question, ref_request(values), context, fail_reason, log)
 
       true ->
-        case resolve_by_shipper_reference(values, context) do
+        case resolve_by_shipper_reference(question, values, context) do
           {:matches, [_ | _] = ref_groups, ref_entries} ->
             surface_reference(question, ref_groups, context, log ++ ref_entries)
 
           {:matches, [], ref_entries} ->
-            unscoped_reference_fail(question, values, context, log ++ ref_entries)
-
-          {:need_account, :ambiguous, accounts} ->
-            confirm_account_fail(question, values, context, accounts, log)
+            reference_miss(question, values, context, log ++ ref_entries)
 
           {:need_account, :none, _} ->
             unscoped_reference_fail(question, values, context, log)
         end
     end
+  end
+
+  # Cycled every entitled account and none owned the reference (as a waybill
+  # number or a shipper reference). If the requester HAS linked accounts, tell the
+  # agent which we searched and invite specifying another — so the agent can
+  # re-scope. Otherwise it's a bare unscoped value: nudge for an account.
+  defp reference_miss(question, values, context, log) do
+    case context[:accounts] do
+      accounts when is_list(accounts) and accounts != [] ->
+        searched_all_accounts_fail(question, values, context, accounts, log)
+
+      _ ->
+        unscoped_reference_fail(question, values, context, log)
+    end
+  end
+
+  defp searched_all_accounts_fail(question, values, context, accounts, log) do
+    ref = hd(values)
+
+    fail(question, :load_status, %{waybill: ref}, context,
+      error: "reference_not_found",
+      draft:
+        "I searched \"#{ref}\" as a waybill and as a shipper reference across the linked " <>
+          "account(s) — #{Enum.join(accounts, ", ")} — but found no match. If it belongs to a " <>
+          "different account, reply with that account code and I'll check it; otherwise let me " <>
+          "know what it refers to.",
+      tool_log: log
+    )
   end
 
   # A minimal request describing the reference we were probing, so a connectivity
@@ -455,56 +480,110 @@ defmodule TragarAi.Assist.Engine do
     )
   end
 
-  # A Freshdesk ticket entitled to several accounts can't run a reference search
-  # without picking one (that would cross accounts) — ask the agent to confirm.
-  defp confirm_account_fail(question, values, context, accounts, log) do
-    ref = hd(values)
-
-    fail(question, :load_status, %{waybill: ref}, context,
-      error: "account_ambiguous",
-      draft:
-        "To look up \"#{ref}\" I need to confirm the account — this request is linked to " <>
-          "#{Enum.join(accounts, ", ")}. Which account does it belong to?",
-      tool_log: log
-    )
-  end
-
   # Cap the shipper-reference fan-out: one reference can map to many waybills, and
   # each match is fetched in full — bound the concurrent lookups.
   @ref_match_limit 10
 
   # Search FreightWare for each value as a shipper reference, resolving it to
-  # EVERY matching waybill. The search is bound to a SINGLE account (never spans
-  # accounts) — a Freshdesk ticket entitled to several must confirm which one, so
-  # a search can't cross accounts. Returns:
-  #   {:matches, groups, tool_entries} — one group per matched waybill, or
-  #   {:need_account, :ambiguous, accounts} / {:need_account, :none} — no search ran.
-  defp resolve_by_shipper_reference(values, context) do
-    case search_account(context) do
-      {:ok, account} ->
-        {numbers, search_entries} = shipper_ref_numbers(values, account)
-        subs = for n <- Enum.take(numbers, @ref_match_limit), do: waybill_sub(n)
-        {groups, fetch_entries, _fail_reason} = gather(subs, context)
-        {:matches, groups, search_entries ++ fetch_entries}
-
-      :ambiguous ->
-        {:need_account, :ambiguous, context[:accounts]}
-
-      :none ->
-        {:need_account, :none, []}
+  # EVERY matching waybill. The search is bound to the requester's ENTITLED
+  # accounts (from Freshdesk) — never a stranger's — and CYCLES through them,
+  # stopping at the first that owns the reference. Returns:
+  #   {:matches, groups, tool_entries} — one group per matched waybill (empty
+  #     groups when no entitled account owned the reference), or
+  #   {:need_account, :none, []} — no assigned account, so no search ran at all.
+  defp resolve_by_shipper_reference(question, values, context) do
+    case search_accounts(question, values, context) do
+      [] -> {:need_account, :none, []}
+      accounts -> cycle_shipper_reference(values, accounts, context)
     end
   end
 
-  # The one account a reference search may run against: a Freshdesk scope of
-  # exactly one entitled account, or the single account supplied in the prompt.
-  # Several entitled accounts is ambiguous (must be confirmed); none is unscoped.
-  defp search_account(context) do
+  # The ordered accounts a reference search may cycle through: the Freshdesk-
+  # supplied entitled accounts (ordered most-likely-owner first), or the single
+  # account typed into a console prompt. Empty when there is no assigned account —
+  # a reference is NEVER searched unscoped.
+  defp search_accounts(question, values, context) do
     case context[:accounts] do
-      [account] when is_binary(account) and account != "" -> {:ok, account}
-      [_, _ | _] -> :ambiguous
-      _ -> supplied_account(context)
+      accounts when is_list(accounts) and accounts != [] ->
+        order_accounts(accounts, question, values)
+
+      _ ->
+        case supplied_account(context) do
+          {:ok, account} -> [account]
+          :none -> []
+        end
     end
   end
+
+  # Cycle SEQUENTIALLY (a FreightWare login invalidates the previous session, so
+  # probes must not overlap) through the ordered accounts, searching each value as
+  # a shipperReference, and STOP at the first account that owns any matching
+  # waybill. Tool-log entries accumulate across every account tried.
+  defp cycle_shipper_reference(values, accounts, context) do
+    Enum.reduce_while(accounts, {:matches, [], []}, fn account, {_, _, entries} ->
+      {numbers, search_entries} = shipper_ref_numbers(values, account)
+      entries = entries ++ search_entries
+
+      case numbers do
+        [] ->
+          {:cont, {:matches, [], entries}}
+
+        _ ->
+          subs = for n <- Enum.take(numbers, @ref_match_limit), do: waybill_sub(n)
+          {groups, fetch_entries, _fail_reason} = gather(subs, context)
+          {:halt, {:matches, groups, entries ++ fetch_entries}}
+      end
+    end)
+  end
+
+  # Order the entitled accounts so the most likely owner is tried first: one named
+  # verbatim in the ticket, then one whose code the reference starts with (waybills
+  # often embed the account, e.g. "ITD020048113"), then one sharing the reference's
+  # letter prefix ("ITD0048113" ↔ "ITD02"), then the rest. Stable — the supplied
+  # order breaks ties.
+  defp order_accounts(accounts, question, values) do
+    named = named_account(question, accounts)
+    Enum.sort_by(accounts, &(-account_priority(&1, values, named)))
+  end
+
+  defp account_priority(account, values, named) do
+    cond do
+      named && up(account) == up(named) -> 3
+      Enum.any?(values, &prefixes?(&1, account)) -> 2
+      Enum.any?(values, &alpha_prefix_match?(&1, account)) -> 1
+      true -> 0
+    end
+  end
+
+  # An entitled account code that appears as a whole token in the ticket text.
+  defp named_account(question, accounts) when is_binary(question) do
+    Enum.find(accounts, fn a -> Regex.match?(~r/\b#{Regex.escape(a)}\b/i, question) end)
+  end
+
+  defp named_account(_question, _accounts), do: nil
+
+  # The reference literally starts with the account code.
+  defp prefixes?(value, account) when is_binary(value),
+    do: String.starts_with?(up(value), up(account))
+
+  defp prefixes?(_value, _account), do: false
+
+  # The reference and account share the same leading letters.
+  defp alpha_prefix_match?(value, account) do
+    p = alpha_prefix(value)
+    p != "" and p == alpha_prefix(account)
+  end
+
+  defp alpha_prefix(s) when is_binary(s) do
+    case Regex.run(~r/^[A-Za-z]+/, s) do
+      [p] -> up(p)
+      _ -> ""
+    end
+  end
+
+  defp alpha_prefix(_), do: ""
+
+  defp up(s), do: s |> to_string() |> String.trim() |> String.upcase()
 
   defp supplied_account(context) do
     case get_in(context, [:entities, :account]) do
@@ -768,11 +847,15 @@ defmodule TragarAi.Assist.Engine do
     end
   end
 
-  # Refuse facts outside the validated account scope (only when one is supplied;
-  # the trusted console passes no `:accounts` and is unrestricted).
+  # Refuse facts outside the validated account scope. The distinction is by KEY,
+  # not emptiness: the trusted console passes NO `:accounts` key and is
+  # unrestricted, whereas a Freshdesk request always carries `:accounts` — and an
+  # EMPTY list there means "requester has no assigned account", which must deny
+  # every account-bearing fact (never surface a waybill to someone with no
+  # account). `Scope.within?/2` enforces the empty-list denial.
   defp out_of_scope?(facts, context) do
-    case context[:accounts] do
-      accounts when is_list(accounts) and accounts != [] -> not Scope.within?(facts, accounts)
+    case Map.fetch(context, :accounts) do
+      {:ok, accounts} when is_list(accounts) -> not Scope.within?(facts, accounts)
       _ -> false
     end
   end

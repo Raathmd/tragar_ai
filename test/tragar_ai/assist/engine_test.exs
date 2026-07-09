@@ -176,21 +176,32 @@ defmodule TragarAi.Assist.EngineTest do
     assert i.draft_answer =~ "account"
   end
 
-  test "a multi-account request won't cross accounts — it asks which account" do
+  test "a multi-account request cycles the entitled accounts until the reference resolves" do
     # REF123 isn't a waybill/quote number. The requester is entitled to several
-    # accounts, so a shipperReference search could cross accounts — refuse and ask
-    # which one, rather than searching them all.
+    # accounts — search each in turn (bounded to the entitled set) and surface the
+    # first that owns the shipper reference, rather than refusing and asking.
     assert {:ok, i} =
              Engine.answer("where is my shipment", %{
                accounts: ["ITD02", "ABC01"],
                entities: %{waybill: "REF123"}
              })
 
+    assert i.status == :drafted
+    assert i.facts["waybill_number"] == "4821"
+  end
+
+  test "a requester with no assigned account is never allowed a reference search" do
+    # `accounts: []` means the Freshdesk requester has no linked account. A bare
+    # reference must NOT be searched — by waybill number OR shipper reference — so
+    # we can never surface another account's data to an unentitled requester.
+    assert {:ok, i} =
+             Engine.answer("where is my shipment", %{
+               accounts: [],
+               entities: %{waybill: "REF123"}
+             })
+
     assert i.status == :failed
-    assert i.error == "account_ambiguous"
-    assert i.draft_answer =~ "ITD02"
-    assert i.draft_answer =~ "ABC01"
-    assert i.draft_answer =~ "confirm the account"
+    assert i.error =~ "unscoped_reference"
   end
 
   test "a shipper reference matching several waybills surfaces them all" do
