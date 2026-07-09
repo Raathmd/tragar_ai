@@ -71,6 +71,12 @@ Source credentials are read at runtime from env (see `.env.example`):
 FreightWare (`DOVETAIL_*`), Freshdesk (`FRESHDESK_*`), Core AI (`CORE_AI_MODE`,
 `CORE_AI_URL`).
 
+## Freshdesk ticket-sidebar app
+
+An in-Freshdesk agent chat (a Freshworks app) talks to Tragar AI via
+`POST /api/tickets/chat`. Source and setup: [`freshdesk_sidebar_app/`](freshdesk_sidebar_app/)
+— [overview](freshdesk_sidebar_app/README.md) · [install guide](freshdesk_sidebar_app/SETUP.md).
+
 ## Roadmap (Implementation Plan)
 
 - **Phase 1 — Support assist** ✅ (this build): live facts, interpret & phrase.
