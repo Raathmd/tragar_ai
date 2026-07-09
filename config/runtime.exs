@@ -151,6 +151,15 @@ if config_env() != :test do
   if field = System.get_env("FRESHDESK_ACCOUNT_FIELD") do
     config :tragar_ai, :freshdesk_account_field, field
   end
+
+  # PDF attachment extraction shells out to `pdftotext` (poppler). Normally it's
+  # found on PATH or at the usual Homebrew/usr locations; set this only if a
+  # launchd/systemd service can't see it. Install with `brew install poppler`
+  # (macOS) or `apt-get install poppler-utils` (Linux). No PDFs are extracted if
+  # it's absent — CSV/XLSX still work (pure Elixir).
+  if path = System.get_env("PDFTOTEXT_PATH") do
+    config :tragar_ai, :pdftotext_path, path
+  end
 end
 
 if config_env() == :prod do

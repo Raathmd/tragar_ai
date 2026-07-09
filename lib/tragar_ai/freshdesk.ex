@@ -84,6 +84,40 @@ defmodule TragarAi.Freshdesk do
     end
   end
 
+  @doc """
+  Every attachment on a ticket — from the original request and from each reply/
+  note — as normalized maps `%{id, name, content_type, size, url}`. `url` is the
+  short-lived signed download link (fetch it with `Client.download/1`). Client is
+  injectable for tests.
+  """
+  def ticket_attachments(id, opts \\ []) do
+    client = Keyword.get(opts, :client, Client)
+
+    with {:ok, t} <- client.get_ticket(id, %{include: "conversations"}) do
+      ticket_atts = normalize_attachments(t["attachments"])
+
+      convo_atts =
+        (t["conversations"] || [])
+        |> Enum.flat_map(fn c -> normalize_attachments(c["attachments"]) end)
+
+      {:ok, Enum.uniq_by(ticket_atts ++ convo_atts, & &1.id)}
+    end
+  end
+
+  defp normalize_attachments(list) when is_list(list) do
+    for a <- list, url = a["attachment_url"] || a["url"], is_binary(url) and url != "" do
+      %{
+        id: a["id"],
+        name: a["name"] || "attachment",
+        content_type: a["content_type"] || "",
+        size: a["size"] || 0,
+        url: url
+      }
+    end
+  end
+
+  defp normalize_attachments(_), do: []
+
   # Tragar AI's own notes are prefixed with this marker so the thread can exclude
   # them — the model must never read (and echo) its own prior answers.
   @bot_marker "Tragar AI"
