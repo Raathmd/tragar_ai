@@ -29,23 +29,6 @@ defmodule TragarAi.Assist.TicketResponder do
     # — so by the time we post the note / fill fields the trigger no longer matches.
     clear_flag(client, ticket_id, opts)
 
-    # Re-entrancy guard for a note-triggered automation: if the latest activity is
-    # the bot's OWN note, there's nothing new — skip rather than answer ourselves.
-    if own_note_last?(fd, ticket_id) do
-      Logger.info("[ticket_responder] latest note is our own — nothing new to answer.")
-      {:ok, %{ticket_id: ticket_id, skipped: :own_note}}
-    else
-      run(ticket_id, content, fd, client, opts)
-    end
-  end
-
-  # Whether the ticket's most recent note is one of ours. Guarded by
-  # `function_exported?` so an injected test facade without the function simply
-  # opts out (the guard is inert), while production `TragarAi.Freshdesk` enforces it.
-  defp own_note_last?(fd, ticket_id),
-    do: function_exported?(fd, :last_note_ours?, 1) and fd.last_note_ours?(ticket_id) == true
-
-  defp run(ticket_id, content, fd, client, opts) do
     accounts = accounts_for(ticket_id, opts, fd)
     account = List.first(accounts)
 

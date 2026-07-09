@@ -49,6 +49,10 @@ defmodule TragarAiWeb.Router do
     # Freshdesk automation → answer a ticket: interpret → tools fetch facts →
     # compose an answer → post it back (private note) for the agent.
     post "/tickets/answer", TicketAnswerController, :answer
+
+    # Freshdesk ticket-sidebar app → interactive assist: one turn, scoped to the
+    # requester's entitled accounts, answered synchronously (nothing posted back).
+    post "/tickets/chat", TicketChatController, :chat
   end
 
   # MCP server (JSON-RPC) at the conventional `/mcp` path — same `:api` gates

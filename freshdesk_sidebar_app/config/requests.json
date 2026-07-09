@@ -1,0 +1,13 @@
+{
+  "tragarChat": {
+    "schema": {
+      "method": "POST",
+      "host": "<%= iparam.tragar_domain %>",
+      "path": "/api/tickets/chat",
+      "headers": {
+        "Authorization": "Bearer <%= iparam.tragar_api_key %>",
+        "Content-Type": "application/json"
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "tragar_domain": {
+    "display_name": "Tragar AI domain",
+    "description": "Host only, no scheme or path — e.g. assist.tragar.ai",
+    "type": "text",
+    "required": true
+  },
+  "tragar_api_key": {
+    "display_name": "Tragar API key",
+    "description": "The bearer token minted for /api (TRAGAR_API_KEY). Stored encrypted; never exposed to the browser.",
+    "type": "text",
+    "secure": true,
+    "required": true
+  }
+}

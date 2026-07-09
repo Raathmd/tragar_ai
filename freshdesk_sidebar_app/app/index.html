@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="styles/style.css" />
+    <title>Tragar AI Assist</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="log" aria-live="polite"></div>
+      <div id="opts"></div>
+      <form id="chat-form" autocomplete="off">
+        <input id="msg" type="text" placeholder="Ask Tragar AI about this ticket…" />
+        <button id="send" type="submit">Send</button>
+      </form>
+    </div>
+
+    <!-- Freshworks app client. Must load before app.js. -->
+    <script src="{{{appclient}}}"></script>
+    <script src="scripts/app.js"></script>
+  </body>
+</html>

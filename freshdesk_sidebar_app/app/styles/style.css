@@ -1,0 +1,100 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  color: #12344d;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 8px;
+  gap: 8px;
+}
+
+#log {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bubble {
+  padding: 8px 10px;
+  border-radius: 10px;
+  max-width: 90%;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  line-height: 1.35;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: #2c5cc5;
+  color: #fff;
+}
+
+.bubble.assistant {
+  align-self: flex-start;
+  background: #eef2f7;
+}
+
+.bubble.error {
+  align-self: flex-start;
+  background: #fdecea;
+  color: #a11;
+}
+
+#opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  border: 1px solid #2c5cc5;
+  background: #fff;
+  color: #2c5cc5;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: #2c5cc5;
+  color: #fff;
+}
+
+#chat-form {
+  display: flex;
+  gap: 6px;
+}
+
+#msg {
+  flex: 1;
+  padding: 7px 9px;
+  border: 1px solid #cbd6e2;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+#send {
+  padding: 7px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #2c5cc5;
+  color: #fff;
+  cursor: pointer;
+}
+
+#send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

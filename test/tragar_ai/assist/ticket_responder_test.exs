@@ -39,12 +39,6 @@ defmodule TragarAi.Assist.TicketResponderTest do
     def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: Where is load 0000?"}}
   end
 
-  # The ticket's latest note is the bot's own — the re-entrancy guard should skip.
-  defmodule OwnNoteFD do
-    def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: Where is load 4821?"}}
-    def last_note_ours?(_id), do: true
-  end
-
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
@@ -109,20 +103,6 @@ defmodule TragarAi.Assist.TicketResponderTest do
 
     assert_received {:add_note, "55", %{body: body, private: true}}
     assert body =~ "Agent note"
-  end
-
-  test "skips answering when the latest note is our own (re-entrancy guard)" do
-    assert {:ok, %{skipped: :own_note}} =
-             TicketResponder.respond("55", "Where is load 4821?",
-               client: FakeClient,
-               freshdesk: OwnNoteFD,
-               account: "ITD02"
-             )
-
-    # The bot never replies to itself.
-    refute_received {:add_note, "55", _}
-    # But the loop-breaker still ran first — the trigger flag is cleared.
-    assert_received {:update_ticket, "55", %{custom_fields: %{"cf_tragar_ai" => false}}}
   end
 
   test "the flag field name is overridable" do
