@@ -1,0 +1,51 @@
+# TEMPLATE — copy this file to .github/workflows/freshdesk-app.yml to enable it.
+#
+# It can't live here pre-installed because updating .github/workflows/ needs a
+# credential with GitHub's `workflow` scope. Add it via the GitHub web UI
+# (Actions → New workflow → paste) or push it with a PAT that has `workflow` scope.
+# The paths below assume it runs from the repo root (i.e. once it's in
+# .github/workflows/), so copy it verbatim — no edits needed.
+#
+# What it does: validate + pack the ticket-sidebar app and publish the packed zip
+# as a build artifact. Freshworks has NO API/CLI to publish a custom app (GUI-only),
+# so this automates everything up to the upload — you download the artifact and do
+# the one manual drag-and-drop in Freshdesk (see SETUP.md step 3).
+
+name: Freshdesk App
+
+on:
+  push:
+    paths: ["freshdesk_sidebar_app/**", ".github/workflows/freshdesk-app.yml"]
+  pull_request:
+    paths: ["freshdesk_sidebar_app/**", ".github/workflows/freshdesk-app.yml"]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: freshdesk_sidebar_app
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install FDK
+        run: npm install -g https://cdn.freshdev.freshworks.com/fdk/latest.tgz
+
+      - name: Validate
+        run: fdk validate --skip-update-check
+
+      - name: Pack
+        run: fdk pack --skip-update-check
+
+      - name: Upload packed app
+        uses: actions/upload-artifact@v4
+        with:
+          name: tragar-ai-sidebar-app
+          path: freshdesk_sidebar_app/dist/*.zip
+          if-no-files-found: error

@@ -70,10 +70,28 @@ https://<your-subdomain>.freshdesk.com/a/tickets/<ticket-id>?dev=true
 
 ## 2. Pack the app
 
+You can either pack locally, or download a packed build from CI.
+
+**Locally:**
 ```bash
+./pack.sh        # runs fdk validate + fdk pack → dist/<app-name>.zip
+# or manually:
 fdk validate     # fix anything it reports (e.g. bump platform-version / fdk engine)
 fdk pack         # produces dist/<app-name>.zip
 ```
+
+**From CI (no local Node/FDK needed):** a ready-to-use GitHub Actions workflow
+lives at [`ci/freshdesk-app.yml`](./ci/freshdesk-app.yml). **Copy it to
+`.github/workflows/freshdesk-app.yml`** once (adding a workflow requires a
+credential with GitHub's `workflow` scope — easiest via the GitHub web UI:
+**Actions → New workflow → paste**). After that, every change under
+`freshdesk_sidebar_app/**` (or **Actions → Freshdesk App → Run workflow**)
+validates and packs the app; download the **`tragar-ai-sidebar-app`** artifact —
+it's the packed `dist/*.zip`.
+
+> **Why you still upload by hand:** Freshworks has **no API/CLI to publish a custom
+> app** — it's GUI-only. CI (or `pack.sh`) validates and packs for you, but the
+> upload in step 3 is a manual drag-and-drop.
 
 `dist/<app-name>.zip` is the artifact you upload to Freshdesk.
 
