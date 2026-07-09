@@ -1,5 +1,8 @@
 # Tragar AI — Freshdesk ticket-sidebar app
 
+> **Setup / install instructions:** see [`SETUP.md`](./SETUP.md) for the full
+> build → pack → upload → configure walkthrough. This README is an overview.
+
 An interactive assist chat that renders in the Freshdesk **ticket sidebar**. The
 agent asks Tragar AI about the open ticket (a waybill, a shipper reference, a
 quote); each turn is answered **synchronously** and scoped, server-side, to the
