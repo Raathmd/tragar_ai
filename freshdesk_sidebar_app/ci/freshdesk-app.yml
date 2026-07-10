@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "24"
 
       - name: Install FDK
         run: npm install -g https://cdn.freshdev.freshworks.com/fdk/latest.tgz

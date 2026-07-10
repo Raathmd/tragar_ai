@@ -32,8 +32,7 @@ defmodule TragarAiWeb.TicketAnswerController do
   alias TragarAi.Assist.TicketResponder
 
   def answer(conn, params) do
-    with {:ok, ticket_id} <- require_param(params, "ticket_id"),
-         content when content != "" <- ticket_text(params) do
+    with {:ok, ticket_id} <- require_param(params, "ticket_id") do
       ticket_id = to_string(ticket_id)
 
       opts = [
@@ -48,26 +47,54 @@ defmodule TragarAiWeb.TicketAnswerController do
         fill_fields: truthy(params["fill_fields"], true),
         # Override the automation trigger checkbox unchecked after answering
         # (breaks the on-update answer loop). Defaults to the configured field.
-        flag_field: params["flag_field"]
+        flag_field: params["flag_field"],
+        # Attachments the agent chose to ingest (from the sidebar picker) — their
+        # text is extracted server-side and folded into the answer.
+        attachment_ids: normalize_ids(params["attachment_ids"])
       ]
 
       # Answer the webhook immediately and run the assist loop (interpret → fetch →
       # phrase → post note) off the request path — Freshdesk's webhook timeout is
       # short, and the loop can take much longer. The answer is delivered as a
       # ticket note, not in this response. Runs inline under `ticket_async: false`
-      # (tests) so it stays deterministic.
-      deliver(ticket_id, content, opts)
+      # (tests) so it stays deterministic. Content may be empty — the responder
+      # pulls the full ticket thread itself.
+      deliver(ticket_id, ticket_text(params), opts)
 
       conn |> put_status(:accepted) |> json(%{status: "accepted", ticket_id: ticket_id})
     else
       {:missing, field} ->
         conn |> put_status(:bad_request) |> json(%{error: "#{field} is required"})
-
-      "" ->
-        conn
-        |> put_status(:bad_request)
-        |> json(%{error: "ticket content (subject/description) is required"})
     end
+  end
+
+  defp normalize_ids(ids) when is_list(ids), do: ids
+  defp normalize_ids(_), do: []
+
+  @doc """
+  The ticket's **readable** attachments for the sidebar picker — `id`, `name`,
+  `content_type`, `size`. Only types Tragar AI can extract (CSV/Excel/PDF) are
+  returned; images and anything else are omitted so the picker never offers a file
+  that can't be ingested. The agent ticks the ones to ingest; their ids come back
+  in the `/answer` call's `attachment_ids`.
+  """
+  def attachments(conn, %{"id" => id}) do
+    case TragarAi.Freshdesk.ticket_attachments(to_string(id)) do
+      {:ok, list} ->
+        views =
+          list
+          |> Enum.filter(&TragarAi.Assist.Extract.supported?(&1.content_type, &1.name))
+          |> Enum.map(&attachment_view/1)
+
+        json(conn, %{ticket_id: to_string(id), attachments: views})
+
+      {:error, reason} ->
+        conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(reason)})
+    end
+  end
+
+  defp attachment_view(a) do
+    %{id: a.id, name: a.name, content_type: a.content_type, size: a.size}
   end
 
   # Run the assist loop and post the answer as a ticket note. Off the request path

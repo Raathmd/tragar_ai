@@ -1,5 +1,5 @@
 {
-  "platform-version": "2.3",
+  "platform-version": "3.0",
   "product": {
     "freshdesk": {
       "location": {
@@ -9,12 +9,13 @@
         }
       },
       "requests": {
-        "tragarChat": {}
+        "listAttachments": {},
+        "answer": {}
       }
     }
   },
   "engines": {
-    "node": "18.13.0",
-    "fdk": "9.0.0"
+    "node": "24",
+    "fdk": "10.0.0"
   }
 }

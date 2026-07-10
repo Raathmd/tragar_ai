@@ -9,92 +9,86 @@ body {
   color: #12344d;
 }
 
-#app {
+#root {
+  padding: 10px;
+}
+
+.lead {
+  margin: 0 0 10px;
+  line-height: 1.4;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: #2c5cc5;
+  color: #fff;
+}
+
+button.ghost {
+  background: transparent;
+  color: #2c5cc5;
+  border: 1px solid #cbd6e2;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.atts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  padding: 8px;
+  gap: 6px;
+}
+
+.atts li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
-#log {
-  flex: 1;
-  overflow-y: auto;
+.atts label {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
-.bubble {
-  padding: 8px 10px;
-  border-radius: 10px;
-  max-width: 90%;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  line-height: 1.35;
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.bubble.user {
-  align-self: flex-end;
-  background: #2c5cc5;
-  color: #fff;
+.muted {
+  color: #8aa0b3;
+  font-size: 11px;
+  flex-shrink: 0;
 }
 
-.bubble.assistant {
-  align-self: flex-start;
-  background: #eef2f7;
+.status {
+  margin-top: 10px;
+  color: #12344d;
+  line-height: 1.4;
 }
 
-.bubble.error {
-  align-self: flex-start;
-  background: #fdecea;
+.err {
   color: #a11;
-}
-
-#opts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.chip {
-  border: 1px solid #2c5cc5;
-  background: #fff;
-  color: #2c5cc5;
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.chip:hover {
-  background: #2c5cc5;
-  color: #fff;
-}
-
-#chat-form {
-  display: flex;
-  gap: 6px;
-}
-
-#msg {
-  flex: 1;
-  padding: 7px 9px;
-  border: 1px solid #cbd6e2;
-  border-radius: 8px;
-  font-size: 13px;
-}
-
-#send {
-  padding: 7px 12px;
-  border: none;
-  border-radius: 8px;
-  background: #2c5cc5;
-  color: #fff;
-  cursor: pointer;
-}
-
-#send:disabled {
-  opacity: 0.5;
-  cursor: default;
 }

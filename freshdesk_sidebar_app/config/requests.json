@@ -1,9 +1,19 @@
 {
-  "tragarChat": {
+  "listAttachments": {
+    "schema": {
+      "method": "GET",
+      "host": "<%= iparam.tragar_domain %>",
+      "path": "/api/tickets/<%= context.ticket_id %>/attachments",
+      "headers": {
+        "Authorization": "Bearer <%= iparam.tragar_api_key %>"
+      }
+    }
+  },
+  "answer": {
     "schema": {
       "method": "POST",
       "host": "<%= iparam.tragar_domain %>",
-      "path": "/api/tickets/chat",
+      "path": "/api/tickets/answer",
       "headers": {
         "Authorization": "Bearer <%= iparam.tragar_api_key %>",
         "Content-Type": "application/json"
