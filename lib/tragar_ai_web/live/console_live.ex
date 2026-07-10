@@ -2111,7 +2111,8 @@ defmodule TragarAiWeb.ConsoleLive do
 
   defp attach_badge(_), do: "badge-ghost"
 
-  defp human_size(b) when is_integer(b) and b >= 1_048_576, do: "#{Float.round(b / 1_048_576, 1)} MB"
+  defp human_size(b) when is_integer(b) and b >= 1_048_576,
+    do: "#{Float.round(b / 1_048_576, 1)} MB"
   defp human_size(b) when is_integer(b) and b >= 1024, do: "#{div(b, 1024)} KB"
   defp human_size(b) when is_integer(b), do: "#{b} B"
   defp human_size(_), do: ""
