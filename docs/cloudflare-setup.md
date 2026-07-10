@@ -1,29 +1,33 @@
-# Public access via Cloudflare Tunnel (one domain)
+# Public access via Cloudflare Tunnel (two hostnames)
 
-One public hostname — e.g. **`app.tragar.co.za`** — serves **both** the management
-UI and the Freshdesk API. The Studio makes an **outbound** connection to
-Cloudflare (no inbound ports), and **Cloudflare Access + WAF split the host by
-path at the edge**:
+**Two public hostnames**, both pointing at the same Studio app through one tunnel,
+kept apart at the edge by their **own** policies:
+
+- **`csd.tragarai.net`** — the **Freshdesk API** (machine traffic).
+- **`tragarai.net`** — the **management UI** (humans).
+
+The Studio makes an **outbound** connection to Cloudflare (no inbound ports):
 
 ```
-                         ┌─ /api/*  → Access: Bypass + WAF (Freshworks IPs only) + app bearer   ← Freshdesk
-app.tragar.co.za ──tunnel┤
-                         └─ /*      → Access: Allow @tragar.co.za (Microsoft Entra SSO)          ← management
+csd.tragarai.net ─┐            ┌─ csd → WAF (Freshworks IPs only) + app bearer, no SSO   ← Freshdesk
+                  ├──tunnel────┤
+tragarai.net ─────┘            └─ apex → Access: Allow @tragar.co.za (Entra SSO)          ← management
                                         ↓
                                    Studio :4000
 ```
 
-The tunnel just forwards the whole host to the app; the **edge policies** decide
-who reaches what. The internal Tailscale/LAN access keeps working unchanged.
+Each hostname is a **separate tunnel public hostname** and gets its **own edge
+policy** — Access is per-hostname, so the API host must *not* inherit the UI's SSO
+(and vice-versa). The internal Tailscale/LAN access keeps working unchanged.
 
-## Controls per path
-| Path | Who | Edge control | App control |
+## Controls per hostname
+| Hostname | Who | Edge control | App control |
 |---|---|---|---|
-| `/api/*` | Freshdesk (machine) | Access **Bypass** + **WAF**: only Freshworks IPs | bearer token + requester→account gate |
-| everything else | management (humans) | Access **Allow** `@tragar.co.za` via Entra SSO | — (Access is the auth) |
+| `csd.tragarai.net` | Freshdesk (machine) | **WAF**: only Freshworks IPs (no Access SSO) | bearer token + requester→account gate |
+| `tragarai.net` | management (humans) | Access **Allow** `@tragar.co.za` via Entra SSO | — (Access is the auth) |
 
-`/api` is IP-locked by the WAF *and* the app's own allowlist, so a signed-in
-manager can't reach it from a home IP either.
+`csd.tragarai.net` is IP-locked by the WAF *and* the app's own allowlist, so a
+signed-in manager can't reach it from a home IP either.
 
 ---
 
@@ -75,22 +79,34 @@ Graph `User.Read` / `email`, `openid`, `profile` permissions. Test the connectio
   2–5 specific addresses). Identity provider: the Entra method from (a).
 - Session duration to taste (e.g. 24h).
 
-**c. Access app for `/api` (so Freshdesk isn't challenged)** — add a **second**
-Self-hosted app, more specific so it's matched first:
-- **Domain:** `tragarai.net`, **Path:** `/api`
-- **Policy:** *Bypass* → Include → **Everyone**. (No SSO on `/api`; it's gated by
-  the WAF IP rule + the app bearer instead.)
+**c. The API host `csd.tragarai.net` (so Freshdesk isn't challenged)** — the
+cleanest option is to **create no Access app for `csd`** at all, so it has no SSO;
+it's gated by the WAF IP rule + the app bearer instead. Only add an Access app for
+`csd.tragarai.net` if you want an explicit **Bypass → Everyone** policy on record.
+> Because Access is per-hostname, a policy on `tragarai.net` does **not** cover
+> `csd.tragarai.net` — the API host is independent by default.
 
-Cloudflare evaluates the path app first, so `/api/*` bypasses SSO and everything
-else requires an `@tragar.co.za` Entra login.
+So `csd.tragarai.net` carries no SSO (WAF + bearer only), while `tragarai.net`
+requires an `@tragar.co.za` Entra login.
 
 ## 7. WAF rule — `/api` only from Freshworks IPs
-Security → WAF → Custom rules → Create:
-- **Expression:** `(http.host eq "tragarai.net") and starts_with(http.request.uri.path, "/api") and not (ip.src in $freshworks)`
-- **Action:** **Block**
+This is **two steps in two different places** — the IP List lives at the **account**
+level, the rule that uses it lives at the **zone (domain)** level.
 
-Create a Cloudflare **IP List** named `freshworks` with your region's CIDRs + the
-two globals.
+**7a. Create the IP List (account level).**
+`dash.cloudflare.com` → pick the account → **Manage Account → Configurations → Lists**
+→ **Create new list** → type **IP List** → name it `freshworks` → add your region's
+CIDRs + the two globals (below) → **Save**.
+> Lists are under *Manage Account*, **not** under the domain — that's the easy thing to miss.
+
+**7b. Create the WAF rule (zone level).**
+Select the domain **tragarai.net** → **Security → WAF → Custom rules → Create rule**.
+Since the whole `csd` subdomain is the API, match by host alone (no path check):
+- **Expression:** `(http.host eq "csd.tragarai.net" and not ip.src in $freshworks)`
+- **Action:** **Block** → **Deploy**.
+> The `$freshworks` reference autocompletes once the List from 7a exists. If you don't
+> see **Custom rules**, avoid **WAF → Tools → IP Access Rules** — those are zone-wide and
+> would also hit the UI hostname; the custom rule above is path-scoped on purpose.
 
 > ⚠️ Freshworks updates these periodically — reconcile against the live article and
 > keep the list (and `TRAGAR_API_ALLOWED_IPS`) in sync:
@@ -121,7 +137,7 @@ Restart: `launchctl kickstart -k gui/$(id -u)/com.tragar.tragar_ai`
 HTTP and allowed as socket origins.)
 
 ## 9. Freshdesk automation
-Trigger Webhook → `https://tragarai.net/api/tickets/answer`, header
+Trigger Webhook → `https://csd.tragarai.net/api/tickets/answer`, header
 `Authorization: Bearer <TRAGAR_API_KEY>`.
 
 ## Verify
@@ -129,8 +145,8 @@ Trigger Webhook → `https://tragarai.net/api/tickets/answer`, header
 # Management UI: opening it in a browser redirects to Microsoft sign-in, then loads.
 open https://tragarai.net/
 
-# /api from a non-Freshworks IP → blocked at the WAF (403)
-curl -i https://tragarai.net/api/tickets/answer
+# API host from a non-Freshworks IP → blocked at the WAF (403)
+curl -i https://csd.tragarai.net/api/tickets/answer
 ```
 
 ## Testing variant (throwaway, no DNS/WAF/Access)
