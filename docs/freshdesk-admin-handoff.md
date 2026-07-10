@@ -57,7 +57,7 @@ The assistant scopes every lookup to the customer's account, read from the Compa
   Product / Type, so we don't auto-answer every ticket.)
 - **Action → Trigger Webhook:**
   - **Request type:** `POST`
-  - **URL:** `https://api.tragarai.net/api/tickets/answer`
+  - **URL:** `https://csd.tragarai.net/api/tickets/answer`
   - **Encoding:** `JSON`
   - **Custom header:** `Authorization` = `Bearer <TOKEN from ops>` ← **Value B**
   - **Content (raw JSON):**
@@ -106,6 +106,6 @@ should appear on the ticket, posted by **Tragar AI**.
   Tell ops the exact field names if you'd like us to confirm the mapping.
 
 ## Questions for ops
-- Confirm the public URL (`https://api.tragarai.net/api/tickets/answer`) and the Bearer
+- Confirm the public URL (`https://csd.tragarai.net/api/tickets/answer`) and the Bearer
   token (Value B).
 - Confirm the account field key (`freightware_accounts`) matches what they expect.
