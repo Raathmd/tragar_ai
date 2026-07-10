@@ -50,6 +50,10 @@ defmodule TragarAiWeb.Router do
     # compose an answer → post it back (private note) for the agent.
     post "/tickets/answer", TicketAnswerController, :answer
 
+    # The sidebar app lists a ticket's attachments (for the picker) before firing
+    # /answer with the chosen ones.
+    get "/tickets/:id/attachments", TicketAnswerController, :attachments
+
     # Freshdesk ticket-sidebar app → interactive assist: one turn, scoped to the
     # requester's entitled accounts, answered synchronously (nothing posted back).
     post "/tickets/chat", TicketChatController, :chat

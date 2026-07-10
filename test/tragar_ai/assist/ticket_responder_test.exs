@@ -9,6 +9,10 @@ defmodule TragarAi.Assist.TicketResponderTest do
     def update_ticket(id, attrs), do: record({:update_ticket, id, attrs})
     def add_note(id, attrs), do: record({:add_note, id, attrs})
 
+    # A chosen attachment's bytes — a CSV whose only reference is waybill 4821.
+    def download("https://files/loads.csv"), do: {:ok, "waybill,status\n4821,in transit\n"}
+    def download(_), do: {:error, :not_found}
+
     def list_ticket_fields do
       {:ok,
        [
@@ -37,6 +41,24 @@ defmodule TragarAi.Assist.TicketResponderTest do
   # A thread whose reference can't be resolved (waybill 0000 → not found).
   defmodule UnresolvedFD do
     def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: Where is load 0000?"}}
+  end
+
+  # A ticket whose reference lives only in an attachment (not the thread text).
+  defmodule AttachmentFD do
+    def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: where is my shipment?"}}
+
+    def ticket_attachments(_id) do
+      {:ok,
+       [
+         %{
+           id: 1,
+           name: "loads.csv",
+           content_type: "text/csv",
+           size: 30,
+           url: "https://files/loads.csv"
+         }
+       ]}
+    end
   end
 
   setup do
@@ -103,6 +125,22 @@ defmodule TragarAi.Assist.TicketResponderTest do
 
     assert_received {:add_note, "55", %{body: body, private: true}}
     assert body =~ "Agent note"
+  end
+
+  test "folds a chosen attachment's text into the answer" do
+    # The waybill (4821) appears ONLY in the attachment CSV, not the thread — so a
+    # resolved answer proves the extracted text reached the engine.
+    assert {:ok, result} =
+             TicketResponder.respond("55", "",
+               client: FakeClient,
+               freshdesk: AttachmentFD,
+               account: "ITD02",
+               attachment_ids: [1]
+             )
+
+    assert result.answer =~ "In transit"
+    assert_received {:add_note, "55", %{body: body, private: true}}
+    assert body =~ "In transit"
   end
 
   test "the flag field name is overridable" do

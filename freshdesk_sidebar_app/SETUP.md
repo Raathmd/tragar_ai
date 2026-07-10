@@ -12,15 +12,15 @@ that lets a Freshdesk agent talk to Tragar AI live about the open ticket.
 
 **On the Tragar AI backend (must be live before the app can answer):**
 
-1. **`POST /api/tickets/chat` is deployed.** Introduced in PR #53 — it goes live
-   after `merge → CI → deploy` via the self-hosted runner. Verify with:
+1. **The answer + attachments endpoints are deployed** (`POST /api/tickets/answer`
+   already exists; `GET /api/tickets/:id/attachments` ships with this app). They go
+   live after `merge → CI → deploy` via the self-hosted runner. Verify the list
+   endpoint with:
    ```bash
-   curl -sS -X POST https://<tragar-domain>/api/tickets/chat \
-     -H "Authorization: Bearer $TRAGAR_API_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"ticket_id":"<a-real-ticket-id>","message":"where is 4821"}'
+   curl -sS https://<tragar-domain>/api/tickets/<a-real-ticket-id>/attachments \
+     -H "Authorization: Bearer $TRAGAR_API_KEY"
    ```
-   A JSON body with a `reply` field = ready.
+   A JSON body with an `attachments` array = ready.
 2. **`TRAGAR_API_KEY` is set in prod** — the bearer the app sends. If the existing
    `POST /api/tickets/answer` webhook already works, this is already set; **reuse
    the same token**.
@@ -126,11 +126,11 @@ matches your Freshdesk UI:
 
 ## 4. Use it
 
-Open any ticket → the **Tragar AI Assist** panel appears in the right sidebar.
-The agent types a waybill / shipper reference / quote / question; Tragar AI answers
-synchronously, scoped to the ticket requester's entitled FreightWare account(s),
-cycling them automatically. **Nothing is posted to the ticket** — it's a live agent
-tool, not the note automation.
+Open a ticket → the **Tragar AI** panel appears in the right sidebar → click
+**Ask Tragar AI**. If the ticket has attachments, tick the relevant ones and
+click **Answer** (or **Answer without them**). Tragar AI extracts the chosen
+attachments server-side, answers, and posts a **private note** on the ticket for
+you to review — the same note flow as the automation, now driven by the app.
 
 ---
 
@@ -138,9 +138,9 @@ tool, not the note automation.
 
 ```
 Agent's browser (sidebar app)
-   └─ client.request.invokeTemplate("tragarChat")   ← token NOT in the browser
+   └─ client.request.invokeTemplate("answer")       ← token NOT in the browser
         └─ Freshworks servers (Request Method proxy)  ← source IP = Freshworks egress
-             └─ POST https://<tragar_domain>/api/tickets/chat
+             └─ POST https://<tragar_domain>/api/tickets/answer
                   Authorization: Bearer <tragar_api_key>
                   └─ Tragar AI  :api pipeline → IpAllowlist (Freshworks egress) → ApiAuth (bearer)
 ```

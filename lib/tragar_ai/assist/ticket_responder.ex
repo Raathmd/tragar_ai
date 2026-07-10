@@ -37,6 +37,11 @@ defmodule TragarAi.Assist.TicketResponder do
     # back to the webhook-supplied body if it can't be fetched.
     content = thread_content(fd, ticket_id, content)
 
+    # Fold in the text of any attachments the agent chose to ingest (extracted
+    # server-side, model-free). Empty ids → no-op, so the non-attachment path is
+    # unchanged.
+    content = content <> attachments_text(ticket_id, opts, fd, client)
+
     # Feed the model the RAW thread — no distil. Distillation was mangling
     # references (e.g. gluing a destination onto a waybill: "ITD0048113" ->
     # "ITD0048113-Lusikisiki"), so it never matched. Same as the console now does.
@@ -169,6 +174,46 @@ defmodule TragarAi.Assist.TicketResponder do
     _ -> :error
   catch
     _, _ -> :error
+  end
+
+  # The extracted text of the attachments the agent picked, as a labelled block
+  # appended to the model input. Downloaded + parsed here (in the async answer
+  # task) so a slow document never blocks the webhook response. Best-effort — a
+  # failed file is simply omitted.
+  defp attachments_text(ticket_id, opts, fd, client) do
+    case opts[:attachment_ids] do
+      ids when is_list(ids) and ids != [] -> selected_attachment_text(ticket_id, ids, fd, client)
+      _ -> ""
+    end
+  end
+
+  defp selected_attachment_text(ticket_id, ids, fd, client) do
+    wanted = MapSet.new(ids, &to_string/1)
+
+    with {:ok, list} when is_list(list) <- safe(fn -> fd.ticket_attachments(ticket_id) end) do
+      blocks =
+        list
+        |> Enum.filter(&MapSet.member?(wanted, to_string(&1.id)))
+        |> Enum.flat_map(fn a ->
+          case download_and_extract(client, a) do
+            {:ok, text} -> ["--- #{a.name} ---\n#{text}"]
+            _ -> []
+          end
+        end)
+
+      case blocks do
+        [] -> ""
+        _ -> "\n\n[Attached documents]\n" <> Enum.join(blocks, "\n\n")
+      end
+    else
+      _ -> ""
+    end
+  end
+
+  defp download_and_extract(client, a) do
+    with {:ok, bin} <- client.download(a.url) do
+      TragarAi.Assist.Extract.extract(bin, a.content_type, a.name)
+    end
   end
 
   # Pre-fill the ticket's **custom** fields from the facts we just retrieved, so

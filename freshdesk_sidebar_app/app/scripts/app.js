@@ -1,14 +1,14 @@
-// Tragar AI ticket-sidebar app.
+// Tragar AI ticket-sidebar app — the TRIGGER for the assist answer.
 //
-// Reads the current ticket, then runs an interactive assist chat: each message
-// is POSTed (via the secure Request Method template `tragarChat`) to Tragar AI's
-// synchronous endpoint `POST /api/tickets/chat`, scoped to the ticket requester's
-// entitled accounts server-side. The transcript is held locally and replayed each
-// turn so follow-ups resolve in context (the endpoint is stateless).
+// The agent clicks "Ask Tragar AI". If the ticket has attachments, a picker
+// appears so they choose which to ingest (some are irrelevant). Then the app
+// fires the existing answer webhook (POST /api/tickets/answer) with the chosen
+// attachment ids. The Elixir app extracts them server-side, folds the text into
+// the answer, and posts the result as a private note — exactly like the current
+// flow, plus the attachments. This app REPLACES the automation trigger.
 
 let client;
 let ticketId;
-const history = []; // [{ role: "user" | "assistant", text }]
 
 document.addEventListener("DOMContentLoaded", init);
 
@@ -17,75 +17,108 @@ async function init() {
     client = await app.initialized();
     const { ticket } = await client.data.get("ticket");
     ticketId = String(ticket.id);
-    render("assistant", "Hi — ask me anything about this ticket (a waybill, a shipper reference, a quote…).");
+    renderIdle();
   } catch (err) {
-    render("error", "Couldn't load the ticket context. Reload the ticket and try again.");
+    setRoot("<p class='err'>Couldn't load the ticket. Reload and try again.</p>");
   }
-
-  document.getElementById("chat-form").addEventListener("submit", onSubmit);
 }
 
-async function onSubmit(event) {
-  event.preventDefault();
-  const input = document.getElementById("msg");
-  const message = input.value.trim();
-  if (!message) return;
-  input.value = "";
-  await send(message);
+// ── Views ────────────────────────────────────────────────────────────────────
+
+function renderIdle() {
+  setRoot(`
+    <p class="lead">Ask Tragar AI to answer this ticket. It posts a private note for you to review.</p>
+    <button id="ask" class="primary">Ask Tragar AI</button>
+    <div id="status" class="status"></div>
+  `);
+  byId("ask").addEventListener("click", onAsk);
 }
 
-async function send(message) {
-  render("user", message);
-  history.push({ role: "user", text: message });
-  clearOptions();
-  setBusy(true);
+function renderPicker(attachments) {
+  // The list endpoint already returns only readable types — every row is
+  // extractable, checked by default; the agent unticks anything irrelevant.
+  const rows = attachments
+    .map(
+      (a) => `
+        <li>
+          <label>
+            <input type="checkbox" class="att" value="${a.id}" checked />
+            <span class="name" title="${esc(a.name)}">${esc(a.name)}</span>
+          </label>
+        </li>`
+    )
+    .join("");
 
+  setRoot(`
+    <p class="lead">Which attachments should Tragar AI read?</p>
+    <ul class="atts">${rows}</ul>
+    <div class="actions">
+      <button id="go" class="primary">Answer</button>
+      <button id="skip" class="ghost">Answer without them</button>
+    </div>
+    <div id="status" class="status"></div>
+  `);
+
+  byId("go").addEventListener("click", () => fireAnswer(checkedIds()));
+  byId("skip").addEventListener("click", () => fireAnswer([]));
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────────
+
+async function onAsk() {
+  setStatus("Checking attachments…");
   try {
-    const res = await client.request.invokeTemplate("tragarChat", {
-      body: JSON.stringify({ ticket_id: ticketId, message, history })
+    const res = await client.request.invokeTemplate("listAttachments", {
+      context: { ticket_id: ticketId }
     });
+    const { attachments } = JSON.parse(res.response);
 
-    const data = JSON.parse(res.response);
-    render("assistant", data.reply || "(no answer)");
-    if (data.reply) history.push({ role: "assistant", text: data.reply });
-    renderOptions(data.options || []);
+    if (attachments && attachments.length) {
+      renderPicker(attachments);
+    } else {
+      fireAnswer([]);
+    }
   } catch (err) {
-    // invokeTemplate rejects with { status, response } on non-2xx.
-    render("error", "Tragar AI couldn't answer that just now. Please try again.");
-  } finally {
-    setBusy(false);
+    // No attachments endpoint reachable → still answer, just without attachments.
+    fireAnswer([]);
   }
 }
 
-function render(role, text) {
-  const log = document.getElementById("log");
-  const bubble = document.createElement("div");
-  bubble.className = "bubble " + role;
-  bubble.textContent = text;
-  log.appendChild(bubble);
-  log.scrollTop = log.scrollHeight;
+async function fireAnswer(attachmentIds) {
+  setStatus("Tragar AI is working — the private note will appear on the ticket shortly.");
+  try {
+    await client.request.invokeTemplate("answer", {
+      body: JSON.stringify({ ticket_id: ticketId, attachment_ids: attachmentIds })
+    });
+    setStatus("Sent. Check the ticket's private notes in a moment.");
+  } catch (err) {
+    setStatus("Couldn't reach Tragar AI. Please try again.");
+  }
 }
 
-// Clickable prompts the endpoint may return (e.g. offering a specific account).
-// Clicking one simply sends its value as the next message.
-function renderOptions(options) {
-  const box = document.getElementById("opts");
-  box.innerHTML = "";
-  options.forEach((opt) => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "chip";
-    chip.textContent = opt.label;
-    chip.addEventListener("click", () => send(opt.value));
-    box.appendChild(chip);
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function checkedIds() {
+  return Array.from(document.querySelectorAll("input.att:checked")).map((el) =>
+    Number(el.value)
+  );
+}
+
+function setRoot(html) {
+  byId("root").innerHTML = html;
+}
+
+function setStatus(text) {
+  const el = byId("status");
+  if (el) el.textContent = text;
+}
+
+function byId(id) {
+  return document.getElementById(id);
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
   });
-}
-
-function clearOptions() {
-  document.getElementById("opts").innerHTML = "";
-}
-
-function setBusy(busy) {
-  document.getElementById("send").disabled = busy;
-  document.getElementById("msg").disabled = busy;
 }

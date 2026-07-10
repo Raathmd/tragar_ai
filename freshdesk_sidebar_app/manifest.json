@@ -9,7 +9,8 @@
         }
       },
       "requests": {
-        "tragarChat": {}
+        "listAttachments": {},
+        "answer": {}
       }
     }
   },

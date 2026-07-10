@@ -79,8 +79,48 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
     assert resp["ticket_id"] == "55"
   end
 
-  test "requires ticket content", %{conn: conn} do
-    resp = conn |> post(~p"/api/tickets/answer", %{"ticket_id" => "55"}) |> json_response(400)
-    assert resp["error"] =~ "content"
+  test "accepts a ticket_id with no content (the responder fetches the thread)", %{conn: conn} do
+    # The sidebar app fires /answer with just the ticket_id (+ chosen attachments);
+    # content is optional now that TicketResponder pulls the full thread itself.
+    resp = conn |> post(~p"/api/tickets/answer", %{"ticket_id" => "55"}) |> json_response(202)
+    assert resp["ticket_id"] == "55"
+  end
+
+  test "requires a ticket_id", %{conn: conn} do
+    resp = conn |> post(~p"/api/tickets/answer", %{}) |> json_response(400)
+    assert resp["error"] =~ "ticket_id"
+  end
+
+  test "lists only the readable attachments (images and other types omitted)", %{conn: conn} do
+    Req.Test.stub(TragarAi.Freshdesk.Client, fn conn ->
+      if String.contains?(conn.request_path, "/tickets/") do
+        Req.Test.json(conn, %{
+          "id" => 55,
+          "attachments" => [
+            %{
+              "id" => 7,
+              "name" => "loads.csv",
+              "content_type" => "text/csv",
+              "size" => 12,
+              "attachment_url" => "https://f/loads.csv"
+            },
+            %{
+              "id" => 8,
+              "name" => "photo.png",
+              "content_type" => "image/png",
+              "size" => 99,
+              "attachment_url" => "https://f/photo.png"
+            }
+          ]
+        })
+      else
+        conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+      end
+    end)
+
+    resp = conn |> get(~p"/api/tickets/55/attachments") |> json_response(200)
+    names = Enum.map(resp["attachments"], & &1["name"])
+    assert "loads.csv" in names
+    refute "photo.png" in names
   end
 end
