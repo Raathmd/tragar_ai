@@ -98,6 +98,28 @@ defmodule TragarAi.Freshdesk.Client do
     end
   end
 
+  @doc """
+  Download raw bytes from an ABSOLUTE url — e.g. an attachment's short-lived
+  signed URL from a ticket/conversation `attachments` entry. Not the Freshdesk
+  API base/auth (the signed URL carries its own auth), and the body is returned
+  undecoded (binary) so xlsx/pdf bytes survive intact. Held in memory only.
+  """
+  @spec download(String.t()) :: {:ok, binary()} | {:error, term()}
+  def download(url) when is_binary(url) do
+    opts = [receive_timeout: 60_000, retry: :transient, max_retries: 2, decode_body: false]
+
+    case Req.get(url, opts) do
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
+        {:ok, body}
+
+      {:ok, %Req.Response{status: status}} ->
+        {:error, {:http_error, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # ── HTTP plumbing ───────────────────────────────────────────────────────────
 
   @doc false

@@ -37,6 +37,7 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(wb_account: "", account_matches: [])
      |> assign(quote_results: [], quote_meta: nil)
      |> assign(selected_ticket: nil, distilling: false, account_choices: [])
+     |> assign(attachments: [], queued_question: nil)
      |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
      |> assign(next_msg_id: 0, last_question: nil)
      |> load_history()
@@ -67,6 +68,14 @@ defmodule TragarAiWeb.ConsoleLive do
 
       spec = parse_waybill_search(text) ->
         {:noreply, search_or_converse(socket, text, :waybills, spec)}
+
+      # Attachments are still being read — hold the prompt and run it automatically
+      # once extraction finishes, so the answer sees their contents.
+      extracting?(socket.assigns.attachments) ->
+        {:noreply,
+         socket
+         |> assign(queued_question: text, question: "")
+         |> put_flash(:info, "Reading attachments — I'll answer as soon as they're done.")}
 
       true ->
         {:noreply, converse(socket, text)}
@@ -217,6 +226,29 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
+  # ── Attachments ─────────────────────────────────────────────────────────────
+
+  # Toggle whether an attachment is selected for extraction (only while it's still
+  # selectable — a supported file that hasn't been read/queued yet).
+  def handle_event("toggle_attachment", %{"id" => id}, socket) do
+    attachments =
+      Enum.map(socket.assigns.attachments, fn a ->
+        if to_string(a.id) == id and selectable?(a), do: %{a | selected: not a.selected}, else: a
+      end)
+
+    {:noreply, assign(socket, attachments: attachments)}
+  end
+
+  # Kick off async extraction for every selected, not-yet-read attachment.
+  def handle_event("extract_attachments", _params, socket) do
+    socket =
+      Enum.reduce(socket.assigns.attachments, socket, fn a, sock ->
+        if a.selected and selectable?(a), do: start_extract(sock, a), else: sock
+      end)
+
+    {:noreply, socket}
+  end
+
   # ── Right panel ─────────────────────────────────────────────────────────────
 
   def handle_event("switch_right", %{"tab" => tab}, socket),
@@ -269,6 +301,8 @@ defmodule TragarAiWeb.ConsoleLive do
           agent={@agent}
           distilling={@distilling}
           account_choices={@account_choices}
+          attachments={@attachments}
+          queued_question={@queued_question}
           frame={@frame}
           messages={@messages}
           interaction={@interaction}
@@ -439,6 +473,43 @@ defmodule TragarAiWeb.ConsoleLive do
 
       <div :if={@frame.entities[:account]} class="text-xs text-base-content/60">
         Scoped to account <span class="badge badge-xs badge-ghost">{@frame.entities[:account]}</span>
+      </div>
+
+      <div
+        :if={@attachments != []}
+        class="rounded-lg border border-base-300 p-2 text-sm space-y-2"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs text-base-content/70">
+            Ticket attachments — tick the relevant ones to read into the prompt:
+          </span>
+          <button
+            type="button"
+            phx-click="extract_attachments"
+            class="btn btn-xs btn-primary"
+            disabled={not any_selectable?(@attachments)}
+          >
+            Extract selected
+          </button>
+        </div>
+        <ul class="space-y-1">
+          <li :for={a <- @attachments} class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              class="checkbox checkbox-xs"
+              checked={a.selected}
+              disabled={not selectable?(a)}
+              phx-click="toggle_attachment"
+              phx-value-id={a.id}
+            />
+            <span class="truncate flex-1" title={a.name}>{a.name}</span>
+            <span class="text-[11px] text-base-content/50 shrink-0">{human_size(a.size)}</span>
+            <span class={"badge badge-xs shrink-0 " <> attach_badge(a)}>{attach_status(a)}</span>
+          </li>
+        </ul>
+        <div :if={@queued_question} class="text-[11px] text-base-content/60">
+          Prompt queued — it'll run once the selected attachments are read.
+        </div>
       </div>
 
       <form phx-submit="ask" class="space-y-2">
@@ -1073,14 +1144,35 @@ defmodule TragarAiWeb.ConsoleLive do
   # Async (the model call takes ~1s); result handled in handle_async(:load_ticket).
   defp start_ticket_load(socket, id) do
     socket
-    |> assign(distilling: true, selected_ticket: nil, account_choices: [])
+    |> assign(distilling: true, selected_ticket: nil, account_choices: [], attachments: [])
     |> start_async(:load_ticket, fn ->
       # Pre-fill the prompt with the ACTUAL ticket contents (subject + body), not a
       # distilled summary — the agent edits/submits it as-is.
       with {:ok, info} <- TragarAi.Freshdesk.ticket_text(id) do
-        {info.ticket_id, info.text, resolve_ticket_accounts(id, info)}
+        accounts = resolve_ticket_accounts(id, info)
+        {info.ticket_id, info.text, accounts, load_attachments(id)}
       end
     end)
+  end
+
+  defp load_attachments(id) do
+    case TragarAi.Freshdesk.ticket_attachments(id) do
+      {:ok, list} -> Enum.map(list, &init_attachment/1)
+      _ -> []
+    end
+  end
+
+  # A fetched attachment as UI state: unselected, not yet read, and flagged with
+  # whether we can extract its type at all.
+  defp init_attachment(a) do
+    Map.merge(a, %{
+      status: :pending,
+      selected: false,
+      text: nil,
+      chars: 0,
+      error: nil,
+      supported: TragarAi.Assist.Extract.supported?(a.content_type, a.name)
+    })
   end
 
   # Which account(s) to scope the ticket to. Prefer the requester's ENTITLED
@@ -1210,6 +1302,10 @@ defmodule TragarAiWeb.ConsoleLive do
     id = socket.assigns.next_msg_id
     lv = self()
 
+    # The model sees the prompt PLUS any extracted attachment text; the chat shows
+    # only the typed prompt (history stays clean, references get picked up).
+    engine_text = text <> attachments_block(socket.assigns.attachments)
+
     context = %{
       agent: blank_to_nil(socket.assigns.agent),
       entities: base,
@@ -1240,7 +1336,7 @@ defmodule TragarAiWeb.ConsoleLive do
       right_tab: "log"
     )
     |> start_async({:converse, id}, fn ->
-      {Engine.answer(text, context), base, frame.intent}
+      {Engine.answer(engine_text, context), base, frame.intent}
     end)
   end
 
@@ -1372,7 +1468,7 @@ defmodule TragarAiWeb.ConsoleLive do
   # Ticket loaded into a prompt → pre-fill the input for editing, carrying the
   # ticket_id (so a relayed answer posts back) and the resolved account. If the
   # resolver returned several candidates, offer a chooser instead of guessing.
-  def handle_async(:load_ticket, {:ok, {ticket_id, query, resolution}}, socket)
+  def handle_async(:load_ticket, {:ok, {ticket_id, query, resolution, attachments}}, socket)
       when is_binary(query) do
     {account, choices} =
       case resolution do
@@ -1390,7 +1486,8 @@ defmodule TragarAiWeb.ConsoleLive do
        question: query,
        frame: %{intent: nil, entities: entities},
        distilling: false,
-       account_choices: choices
+       account_choices: choices,
+       attachments: attachments
      )}
   end
 
@@ -1489,6 +1586,21 @@ defmodule TragarAiWeb.ConsoleLive do
     {:noreply, assign(socket, messages: replace_msg(socket.assigns.messages, id, ai))}
   end
 
+  # Attachment extraction finished (or died) — record the outcome, then run any
+  # prompt that was queued waiting on it.
+  def handle_async({:extract, id}, {:ok, {_id, result}}, socket) do
+    {:noreply, socket |> apply_extract_result(id, result) |> maybe_run_queued()}
+  end
+
+  def handle_async({:extract, id}, {:exit, reason}, socket) do
+    Logger.error("[console] attachment extract crashed: #{inspect(reason)}")
+
+    {:noreply,
+     socket
+     |> update_attachment(id, %{status: :error, error: "crashed"})
+     |> maybe_run_queued()}
+  end
+
   @impl true
   def handle_info({:chunk, id, chunk}, socket) do
     messages =
@@ -1498,6 +1610,11 @@ defmodule TragarAiWeb.ConsoleLive do
 
     {:noreply, assign(socket, messages: messages)}
   end
+
+  # Per-attachment extraction progress (downloading → extracting), streamed from
+  # the async task so the console shows live status.
+  def handle_info({:attach_stage, id, stage}, socket),
+    do: {:noreply, update_attachment(socket, id, %{status: stage})}
 
   # Live per-source progress for a multi-lookup turn (concurrent gather).
   def handle_info({:event, id, {:source_started, intent, source, entities}}, socket) do
@@ -1882,9 +1999,122 @@ defmodule TragarAiWeb.ConsoleLive do
       messages: [],
       frame: %{intent: nil, entities: %{}},
       interaction: nil,
-      question: ""
+      question: "",
+      attachments: [],
+      queued_question: nil
     )
   end
+
+  # ── Attachment extraction helpers ────────────────────────────────────────────
+
+  # Selectable = a type we can read that hasn't already been read or queued.
+  defp selectable?(%{supported: true, status: s}) when s in [:pending, :error, :skipped],
+    do: true
+
+  defp selectable?(_), do: false
+
+  defp extracting?(attachments),
+    do: Enum.any?(attachments, &(&1.status in [:queued, :downloading, :extracting]))
+
+  defp start_extract(socket, a) do
+    lv = self()
+    id = a.id
+    %{url: url, content_type: ct, name: name} = a
+
+    socket
+    |> update_attachment(id, %{status: :queued, error: nil})
+    |> start_async({:extract, id}, fn ->
+      send(lv, {:attach_stage, id, :downloading})
+
+      case TragarAi.Freshdesk.Client.download(url) do
+        {:ok, bin} ->
+          send(lv, {:attach_stage, id, :extracting})
+          {id, TragarAi.Assist.Extract.extract(bin, ct, name)}
+
+        {:error, reason} ->
+          {id, {:error, {:download, reason}}}
+      end
+    end)
+  end
+
+  defp apply_extract_result(socket, id, {:ok, text}),
+    do: update_attachment(socket, id, %{status: :done, text: text, chars: String.length(text)})
+
+  defp apply_extract_result(socket, id, {:skip, reason}),
+    do: update_attachment(socket, id, %{status: :skipped, error: skip_label(reason), text: nil})
+
+  defp apply_extract_result(socket, id, {:error, reason}),
+    do: update_attachment(socket, id, %{status: :error, error: error_label(reason), text: nil})
+
+  defp update_attachment(socket, id, changes) do
+    attachments =
+      Enum.map(socket.assigns.attachments, fn a ->
+        if to_string(a.id) == to_string(id), do: Map.merge(a, changes), else: a
+      end)
+
+    assign(socket, attachments: attachments)
+  end
+
+  # Once nothing is in flight, run a prompt that was queued waiting on extraction.
+  defp maybe_run_queued(socket) do
+    cond do
+      extracting?(socket.assigns.attachments) -> socket
+      q = socket.assigns[:queued_question] -> converse(assign(socket, queued_question: nil), q)
+      true -> socket
+    end
+  end
+
+  # The extracted attachment text appended to the model's input (not shown in the
+  # chat). Only files that were read contribute; each is labelled by filename.
+  defp attachments_block(attachments) do
+    read = for a <- attachments, a.status == :done, is_binary(a.text) and a.text != "", do: a
+
+    case read do
+      [] ->
+        ""
+
+      list ->
+        body = Enum.map_join(list, "\n\n", fn a -> "--- #{a.name} ---\n#{a.text}" end)
+        "\n\n[Attached documents]\n#{body}"
+    end
+  end
+
+  defp any_selectable?(attachments),
+    do: Enum.any?(attachments, &(&1.selected and selectable?(&1)))
+
+  defp skip_label(:unsupported), do: "not readable"
+  defp skip_label(:too_large), do: "too large"
+  defp skip_label(:empty), do: "no text"
+  defp skip_label(other), do: to_string(other)
+
+  defp error_label(:pdftotext_unavailable), do: "PDF reader unavailable"
+  defp error_label({:download, _}), do: "download failed"
+  defp error_label(_), do: "couldn't read"
+
+  defp attach_status(%{supported: false}), do: "not readable"
+  defp attach_status(%{status: :pending}), do: "ready"
+  defp attach_status(%{status: :queued}), do: "queued"
+  defp attach_status(%{status: :downloading}), do: "downloading…"
+  defp attach_status(%{status: :extracting}), do: "extracting…"
+  defp attach_status(%{status: :done, chars: n}), do: "read · #{n} chars"
+  defp attach_status(%{status: :skipped, error: e}), do: e || "skipped"
+  defp attach_status(%{status: :error, error: e}), do: e || "failed"
+  defp attach_status(_), do: ""
+
+  defp attach_badge(%{supported: false}), do: "badge-ghost"
+  defp attach_badge(%{status: :done}), do: "badge-success"
+  defp attach_badge(%{status: :error}), do: "badge-error"
+  defp attach_badge(%{status: :skipped}), do: "badge-warning"
+
+  defp attach_badge(%{status: s}) when s in [:queued, :downloading, :extracting],
+    do: "badge-info"
+
+  defp attach_badge(_), do: "badge-ghost"
+
+  defp human_size(b) when not is_integer(b), do: ""
+  defp human_size(b) when b >= 1_048_576, do: "#{Float.round(b / 1_048_576, 1)} MB"
+  defp human_size(b) when b >= 1024, do: "#{div(b, 1024)} KB"
+  defp human_size(b), do: "#{b} B"
 
   defp carry_intent(%{intent: intent}, _prev) when is_binary(intent) do
     String.to_existing_atom(intent)
