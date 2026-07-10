@@ -39,7 +39,7 @@ pack.sh                 local validate + pack
 
 ## Develop & test
 
-Requires Node 18.13+ and the [FDK CLI](https://developers.freshworks.com/docs/app-sdk/v2.3/freshdesk/app-development-process/).
+Requires **Node.js 24** and **FDK 10** (platform v3.0) — see the [FDK CLI docs](https://developers.freshworks.com/docs/app-sdk/v3.0/freshdesk/app-development-process/).
 
 ```bash
 fdk run

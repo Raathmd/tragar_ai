@@ -30,11 +30,11 @@ that lets a Freshdesk agent talk to Tragar AI live about the open ticket.
 
 **On your dev machine (to build/upload the app):**
 
-- **Node.js 18.13.0+**
-- **FDK CLI** (Freshworks Developer Kit):
+- **Node.js 24** (required by platform v3.0 / FDK 10; Node 18 is deprecated)
+- **FDK 10** CLI (Freshworks Developer Kit):
   ```bash
   npm install https://cdn.freshdev.freshworks.com/fdk/latest.tgz -g
-  fdk version
+  fdk version   # expect 10.x
   ```
   If that URL 404s, get the current install command from the
   [FDK setup guide](https://developers.freshworks.com/docs/app-sdk/v2.3/freshdesk/app-setup/).
