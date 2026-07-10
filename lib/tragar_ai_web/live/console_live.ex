@@ -2111,11 +2111,10 @@ defmodule TragarAiWeb.ConsoleLive do
 
   defp attach_badge(_), do: "badge-ghost"
 
-  defp human_size(b) when is_integer(b) and b >= 1_048_576,
-    do: "#{Float.round(b / 1_048_576, 1)} MB"
-  defp human_size(b) when is_integer(b) and b >= 1024, do: "#{div(b, 1024)} KB"
-  defp human_size(b) when is_integer(b), do: "#{b} B"
-  defp human_size(_), do: ""
+  defp human_size(b) when not is_integer(b), do: ""
+  defp human_size(b) when b >= 1_048_576, do: "#{Float.round(b / 1_048_576, 1)} MB"
+  defp human_size(b) when b >= 1024, do: "#{div(b, 1024)} KB"
+  defp human_size(b), do: "#{b} B"
 
   defp carry_intent(%{intent: intent}, _prev) when is_binary(intent) do
     String.to_existing_atom(intent)
