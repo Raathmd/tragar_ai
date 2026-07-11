@@ -334,30 +334,34 @@ defmodule TragarAiWeb.ConsoleLive do
       <script :type={Phoenix.LiveView.ColocatedHook} name=".DragDrop">
         export default {
           mounted() { this.bind() },
-          updated() { this.bind() },
           bind() {
+            // Guard on the hook instance, NOT a DOM data-attribute: morphdom strips
+            // attributes the server didn't render, so a data-* guard would reset on
+            // every update (each streamed token re-renders) and stack duplicate
+            // listeners — one chip click would then insert the snippet many times.
+            // All handlers are delegated on the root, so they cover chips/textareas
+            // added by later renders without re-binding.
+            if (this.bound) return
+            this.bound = true
             const el = this.el
-            if (!el.dataset.ddBound) {
-              el.dataset.ddBound = "1"
-              el.addEventListener("dragstart", (e) => {
-                const chip = e.target.closest("[data-snippet]")
-                if (chip) e.dataTransfer.setData("text/plain", chip.getAttribute("data-snippet"))
-              })
-              el.addEventListener("click", (e) => {
-                const chip = e.target.closest("[data-snippet][data-insert]")
-                if (!chip) return
-                const ta = el.querySelector("textarea[name=question]")
-                if (ta) this.insert(ta, chip.getAttribute("data-snippet"))
-              })
-            }
-            el.querySelectorAll("textarea[data-drop]").forEach((ta) => {
-              if (ta.dataset.dropBound) return
-              ta.dataset.dropBound = "1"
-              ta.addEventListener("dragover", (e) => e.preventDefault())
-              ta.addEventListener("drop", (e) => {
-                e.preventDefault()
-                this.insert(ta, e.dataTransfer.getData("text/plain"))
-              })
+            el.addEventListener("dragstart", (e) => {
+              const chip = e.target.closest("[data-snippet]")
+              if (chip) e.dataTransfer.setData("text/plain", chip.getAttribute("data-snippet"))
+            })
+            el.addEventListener("click", (e) => {
+              const chip = e.target.closest("[data-snippet][data-insert]")
+              if (!chip) return
+              const ta = el.querySelector("textarea[name=question]")
+              if (ta) this.insert(ta, chip.getAttribute("data-snippet"))
+            })
+            el.addEventListener("dragover", (e) => {
+              if (e.target.closest("textarea[data-drop]")) e.preventDefault()
+            })
+            el.addEventListener("drop", (e) => {
+              const ta = e.target.closest("textarea[data-drop]")
+              if (!ta) return
+              e.preventDefault()
+              this.insert(ta, e.dataTransfer.getData("text/plain"))
             })
           },
           insert(ta, text) {
