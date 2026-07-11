@@ -30,7 +30,7 @@ defmodule TragarAiWeb.ConsoleLive do
      socket
      |> assign(question: "", agent: "")
      |> assign(messages: [], frame: %{intent: nil, entities: %{}})
-     |> assign(interaction: nil)
+     |> assign(interaction: nil, last_runtime: nil)
      |> assign(model: TragarAi.CoreAI.info())
      |> assign(right_tab: "log", detail: nil, detail_title: nil)
      |> assign(search_results: [], search_meta: nil)
@@ -309,6 +309,7 @@ defmodule TragarAiWeb.ConsoleLive do
           frame={@frame}
           messages={@messages}
           interaction={@interaction}
+          last_runtime={@last_runtime}
           model={@model}
         />
         <.right_panel
@@ -623,6 +624,13 @@ defmodule TragarAiWeb.ConsoleLive do
           </span>
           <span :if={@interaction.source} class="text-base-content/60">
             via {@interaction.source}
+          </span>
+          <span
+            :if={@last_runtime}
+            class="badge badge-ghost badge-sm gap-1"
+            title="Wall-clock time for this request"
+          >
+            ⏱ {@last_runtime.ms} ms · {TragarAi.Assist.SearchStrategy.label(@last_runtime.strategy)}
           </span>
           <% pe = primary_entity(@interaction) %>
           <button
@@ -1338,10 +1346,14 @@ defmodule TragarAiWeb.ConsoleLive do
       # Remember the prompt so an account pick (or other re-run) can replay it.
       last_question: text,
       next_msg_id: id + 1,
-      right_tab: "log"
+      right_tab: "log",
+      # Cleared now; set from the timed run below so it reflects THIS request only.
+      last_runtime: nil
     )
     |> start_async({:converse, id}, fn ->
-      {Engine.answer(engine_text, context), base, frame.intent}
+      strategy = TragarAi.Assist.SearchStrategy.get()
+      {micros, result} = :timer.tc(fn -> Engine.answer(engine_text, context) end)
+      {result, base, frame.intent, %{ms: div(micros, 1000), strategy: strategy}}
     end)
   end
 
@@ -1439,7 +1451,7 @@ defmodule TragarAiWeb.ConsoleLive do
   @impl true
   def handle_async(
         {:converse, id},
-        {:ok, {{:ok, interaction}, base, prior_intent}},
+        {:ok, {{:ok, interaction}, base, prior_intent, timing}},
         socket
       ) do
     resolved? = interaction.status == :drafted
@@ -1466,6 +1478,7 @@ defmodule TragarAiWeb.ConsoleLive do
         frame: new_frame,
         # Keep the interaction so its source details/fields stay available.
         interaction: interaction,
+        last_runtime: timing,
         right_tab: "log"
       )
       |> load_history()
