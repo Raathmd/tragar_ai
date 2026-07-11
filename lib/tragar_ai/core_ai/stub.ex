@@ -6,8 +6,11 @@ defmodule TragarAi.CoreAI.Stub do
   same contract as the real sidecar (`TragarAi.CoreAI`).
   """
 
-  # Waybill numbers are digits with an optional letter suffix, e.g. 4821 or 0006794936FC.
-  @waybill_re ~r/\b(?:load|waybill|wb|consignment)?\s*#?\s*(\d{4,}[A-Z]{0,4})\b/i
+  # Waybill identifiers are alphanumeric — a letter-prefixed form (DIS0124440), a
+  # digit form with an optional letter suffix (4821, 0006794936FC), or a hyphenated
+  # branch form. Captured WHOLE; the 4+ digit run keeps it distinct from a short
+  # account code (DIS003, ITD02).
+  @waybill_re ~r/\b(?:load|waybill|wb|consignment)?\s*#?\s*([A-Z]{2,4}[-]?\d{4,}[A-Z0-9-]*|\d{4,}[A-Z]{0,4})\b/i
   @account_re ~r/\b(?:account|acc|customer)\s*#?\s*([A-Z0-9]{3,})\b/i
   @acc_code_re ~r/\b(ACC\d{3,})\b/i
   @quote_re ~r/\bquote\s*#?\s*(\d{3,})\b/i
@@ -207,7 +210,7 @@ defmodule TragarAi.CoreAI.Stub do
     "I can look that up — I just need #{needs}. Could you add it?"
   end
 
-  def clarify(:missing_waybill), do: "Which waybill should I check? For example, waybill 4821."
+  def clarify(:missing_waybill), do: "Which waybill should I check? For example, waybill DIS0124440."
 
   def clarify(:not_found),
     do:
@@ -228,8 +231,8 @@ defmodule TragarAi.CoreAI.Stub do
   defp capabilities_prompt do
     "I couldn't match that to anything in Tragar. I can surface: a waybill (status, ETA, " <>
       "proof of delivery), a quote, an invoice or account balance, a customer, a vehicle, or our " <>
-      "service types. What would you like, and for which reference (e.g. “waybill 4821” or " <>
-      "“account ACC1001”)?"
+      "service types. What would you like, and for which reference (e.g. “waybill DIS0124440” or " <>
+      "“account DIS003”)?"
   end
 
   defp amend_label_entity(f) do
@@ -324,8 +327,8 @@ defmodule TragarAi.CoreAI.Stub do
     end
   end
 
-  defp entity_hint(:account), do: "an account number (e.g. ACC1001)"
-  defp entity_hint(:waybill), do: "a waybill number (e.g. 4821)"
+  defp entity_hint(:account), do: "an account number (e.g. DIS003)"
+  defp entity_hint(:waybill), do: "a waybill number (e.g. DIS0124440)"
   defp entity_hint(:quote), do: "a quote number (e.g. 7012)"
   defp entity_hint(:ticket_id), do: "a ticket number (e.g. 55)"
   defp entity_hint(other), do: to_string(other)

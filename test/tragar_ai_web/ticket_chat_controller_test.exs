@@ -1,6 +1,8 @@
 defmodule TragarAiWeb.TicketChatControllerTest do
   use TragarAiWeb.ConnCase, async: false
 
+  import TragarAi.FreightWareStub
+
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
@@ -15,11 +17,11 @@ defmodule TragarAiWeb.TicketChatControllerTest do
         String.contains?(conn.request_path, "/trackAndTrace") ->
           Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
 
-        String.contains?(conn.request_path, "/waybills/4821") ->
+        waybill_number?(conn, "DIS0124440") ->
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
-                "Waybills" => [%{"waybillNumber" => "4821", "statusDescription" => "In transit"}]
+                "Waybills" => [%{"waybillNumber" => "DIS0124440", "statusDescription" => "In transit"}]
               }
             }
           })
@@ -51,7 +53,7 @@ defmodule TragarAiWeb.TicketChatControllerTest do
   end
 
   test "answers a ticket question synchronously, scoped to the entitled account", %{conn: conn} do
-    body = %{"ticket_id" => "55", "message" => "Where is load 4821?"}
+    body = %{"ticket_id" => "55", "message" => "Where is load DIS0124440?"}
     resp = conn |> post(~p"/api/tickets/chat", body) |> json_response(200)
 
     assert resp["ticket_id"] == "55"

@@ -2,12 +2,13 @@ defmodule TragarAiWeb.ConsoleLiveTest do
   use TragarAiWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
+  import TragarAi.FreightWareStub
 
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
 
-    # FreightWare (Dovetail) — waybill 4821 lookups for the ask/relay flow.
+    # FreightWare (Dovetail) — waybill DIS0124440 lookups for the ask/relay flow.
     Req.Test.stub(TragarAi.Dovetail.Client, fn conn ->
       cond do
         String.ends_with?(conn.request_path, "/system/auth/login") ->
@@ -18,11 +19,11 @@ defmodule TragarAiWeb.ConsoleLiveTest do
         String.contains?(conn.request_path, "/trackAndTrace") ->
           Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
 
-        String.contains?(conn.request_path, "/waybills/4821") ->
+        waybill_number?(conn, "DIS0124440") ->
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
-                "Waybills" => [%{"waybillNumber" => "4821", "statusDescription" => "In transit"}]
+                "Waybills" => [%{"waybillNumber" => "DIS0124440", "statusDescription" => "In transit"}]
               }
             }
           })
@@ -41,13 +42,13 @@ defmodule TragarAiWeb.ConsoleLiveTest do
         String.ends_with?(conn.request_path, "/tickets/55") ->
           Req.Test.json(conn, %{
             "id" => 55,
-            "subject" => "Where is parcel 4821",
-            "description_text" => "Customer asks where waybill 4821 is."
+            "subject" => "Where is parcel DIS0124440",
+            "description_text" => "Customer asks where waybill DIS0124440 is."
           })
 
         String.ends_with?(conn.request_path, "/tickets") ->
           Req.Test.json(conn, [
-            %{"id" => 55, "subject" => "Where is parcel 4821", "status" => 2, "responder_id" => 1}
+            %{"id" => 55, "subject" => "Where is parcel DIS0124440", "status" => 2, "responder_id" => 1}
           ])
 
         true ->
@@ -64,7 +65,7 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "Support Assist"
     assert html =~ "Freshdesk tickets"
     # The open ticket from the stub is listed.
-    assert html =~ "Where is parcel 4821"
+    assert html =~ "Where is parcel DIS0124440"
   end
 
   test "the console nav links to the dashboard and chat", %{conn: conn} do
@@ -76,7 +77,7 @@ defmodule TragarAiWeb.ConsoleLiveTest do
   test "asking surfaces the fetched facts as a drafted answer", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
-    view |> form("form[phx-submit=ask]", %{question: "Where is load 4821?"}) |> render_submit()
+    view |> form("form[phx-submit=ask]", %{question: "Where is load DIS0124440?"}) |> render_submit()
     html = render_async(view, 5000)
 
     assert html =~ "In transit"
@@ -91,7 +92,7 @@ defmodule TragarAiWeb.ConsoleLiveTest do
 
     # The ticket's actual contents (subject + body) land in the prompt textarea for
     # the agent to edit and submit — no distillation.
-    assert html =~ "Where is parcel 4821"
+    assert html =~ "Where is parcel DIS0124440"
   end
 
   test "clicking a ticket offers the requester's entitled accounts from the FD API", %{conn: conn} do
@@ -104,14 +105,14 @@ defmodule TragarAiWeb.ConsoleLiveTest do
         String.ends_with?(conn.request_path, "/tickets/55") ->
           Req.Test.json(conn, %{
             "id" => 55,
-            "subject" => "Where is parcel 4821",
-            "description_text" => "Customer asks where waybill 4821 is.",
+            "subject" => "Where is parcel DIS0124440",
+            "description_text" => "Customer asks where waybill DIS0124440 is.",
             "company_id" => 900
           })
 
         String.ends_with?(conn.request_path, "/tickets") ->
           Req.Test.json(conn, [
-            %{"id" => 55, "subject" => "Where is parcel 4821", "status" => 2, "responder_id" => 1}
+            %{"id" => 55, "subject" => "Where is parcel DIS0124440", "status" => 2, "responder_id" => 1}
           ])
 
         String.ends_with?(conn.request_path, "/companies/900") ->
