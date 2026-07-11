@@ -406,7 +406,7 @@ defmodule TragarAi.Assist.Engine do
   #   :sequential — for each number, cascade waybill → shipperReference → quote →
   #                 Vantage and STOP at the first source with a valid document.
   # Flip with `config :tragar_ai, :search_strategy, :fanout | :sequential`.
-  defp search_strategy, do: Application.get_env(:tragar_ai, :search_strategy, :sequential)
+  defp search_strategy, do: TragarAi.Assist.SearchStrategy.get()
 
   defp run_reference_pipeline(:fanout, question, values, context),
     do: process_reference(question, values, context)
