@@ -18,7 +18,7 @@ async function init() {
     const { ticket } = await client.data.get("ticket");
     ticketId = String(ticket.id);
     renderIdle();
-  } catch (err) {
+  } catch {
     setRoot("<p class='err'>Couldn't load the ticket. Reload and try again.</p>");
   }
 }
@@ -78,7 +78,7 @@ async function onAsk() {
     } else {
       fireAnswer([]);
     }
-  } catch (err) {
+  } catch {
     // No attachments endpoint reachable → still answer, just without attachments.
     fireAnswer([]);
   }
@@ -91,7 +91,7 @@ async function fireAnswer(attachmentIds) {
       body: JSON.stringify({ ticket_id: ticketId, attachment_ids: attachmentIds })
     });
     setStatus("Sent. Check the ticket's private notes in a moment.");
-  } catch (err) {
+  } catch {
     setStatus("Couldn't reach Tragar AI. Please try again.");
   }
 }
