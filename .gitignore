@@ -61,3 +61,7 @@ npm-debug.log
 /vantage-sample.json
 /set-vantage-creds.sh
 /set-vantage-creds.sh.sha256
+
+# FDK (Freshdesk app) runtime artifacts when run from repo root
+/.fdk/
+/log/
