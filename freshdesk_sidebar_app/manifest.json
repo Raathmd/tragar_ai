@@ -1,21 +1,26 @@
 {
-  "platform-version": "3.0",
-  "product": {
-    "freshdesk": {
+  "platform-version": "3.1",
+  "modules": {
+    "common": {
+      "requests": {
+        "listAttachments": {},
+        "answer": {}
+      }
+    },
+    "support_ticket": {
       "location": {
         "ticket_sidebar": {
           "url": "index.html",
           "icon": "icon.svg"
         }
-      },
-      "requests": {
-        "listAttachments": {},
-        "answer": {}
       }
     }
   },
   "engines": {
-    "node": "24",
-    "fdk": "10.0.0"
+    "node": "24.11.1",
+    "fdk": "10.1.7"
+  },
+  "scripts": {
+    "fdk-unit-test": "vitest run --coverage"
   }
 }
