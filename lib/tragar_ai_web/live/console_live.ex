@@ -37,6 +37,9 @@ defmodule TragarAiWeb.ConsoleLive do
      |> assign(wb_account: "", account_matches: [])
      |> assign(quote_results: [], quote_meta: nil)
      |> assign(selected_ticket: nil, distilling: false, account_choices: [])
+     # nil = free console session → unscoped (trusted internal lookup). A loaded
+     # ticket sets this to the requester's entitled accounts, scoping like FD.
+     |> assign(ticket_accounts: nil)
      |> assign(attachments: [], queued_question: nil)
      |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
      |> assign(next_msg_id: 0, last_question: nil)
@@ -960,7 +963,7 @@ defmodule TragarAiWeb.ConsoleLive do
             <option value="customer">Account</option>
           </select>
           <div class="flex gap-1">
-            <input name="dkey" placeholder="e.g. 4821" class="input input-bordered input-xs flex-1" />
+            <input name="dkey" placeholder="e.g. DIS0124440" class="input input-bordered input-xs flex-1" />
             <button class="btn btn-xs btn-primary">Fetch</button>
           </div>
         </form>
@@ -1306,14 +1309,16 @@ defmodule TragarAiWeb.ConsoleLive do
     # only the typed prompt (history stays clean, references get picked up).
     engine_text = text <> attachments_block(socket.assigns.attachments)
 
-    context = %{
-      agent: blank_to_nil(socket.assigns.agent),
-      entities: base,
-      intent: frame.intent,
-      history: build_history(socket.assigns.messages),
-      on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end,
-      on_event: fn event -> send(lv, {:event, id, event}) end
-    }
+    context =
+      %{
+        agent: blank_to_nil(socket.assigns.agent),
+        entities: base,
+        intent: frame.intent,
+        history: build_history(socket.assigns.messages),
+        on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end,
+        on_event: fn event -> send(lv, {:event, id, event}) end
+      }
+      |> maybe_scope(socket.assigns.ticket_accounts)
 
     pending = %{
       role: :ai,
@@ -1398,6 +1403,9 @@ defmodule TragarAiWeb.ConsoleLive do
         entities: entities,
         intent: intent,
         history: [],
+        # This iteration probes ONE candidate account: scope the gate to it (and
+        # keep the engine's own search to this single account, no re-cycling).
+        accounts: [ref],
         # No streaming while probing — the matched answer is applied in one shot.
         on_chunk: nil,
         on_event: fn _ -> :ok end
@@ -1477,6 +1485,17 @@ defmodule TragarAiWeb.ConsoleLive do
         _ -> {nil, []}
       end
 
+    # The requester's entitled accounts, threaded into context as `:accounts` so a
+    # console ticket is scoped exactly like the FD webhook: a number is only
+    # surfaced if its waybill belongs to one of these. Empty = deny (as FD does)
+    # when we couldn't resolve the ticket's account.
+    accounts =
+      case resolution do
+        {:ok, ref} -> [ref]
+        {:ambiguous, refs} -> refs
+        _ -> []
+      end
+
     entities = %{ticket_id: ticket_id} |> put_if(:account, account)
 
     {:noreply,
@@ -1487,6 +1506,7 @@ defmodule TragarAiWeb.ConsoleLive do
        frame: %{intent: nil, entities: entities},
        distilling: false,
        account_choices: choices,
+       ticket_accounts: accounts,
        attachments: attachments
      )}
   end
@@ -1718,7 +1738,7 @@ defmodule TragarAiWeb.ConsoleLive do
   defp parse_waybill_search(text) do
     t = String.downcase(text)
     account = Regex.run(~r/\b(?:for|on|account|customer)\s+([A-Za-z0-9]{3,})\b/, text)
-    number? = Regex.match?(~r/\bwaybill\s*#?\s*\d{4,}/i, text)
+    number? = Regex.match?(~r/\bwaybill\s*#?\s*[A-Z0-9][A-Z0-9-]{3,}/i, text)
 
     cond do
       not String.contains?(t, "waybill") -> nil
@@ -2001,9 +2021,16 @@ defmodule TragarAiWeb.ConsoleLive do
       interaction: nil,
       question: "",
       attachments: [],
-      queued_question: nil
+      queued_question: nil,
+      # A cleared session is a free console again → unscoped until a ticket loads.
+      ticket_accounts: nil
     )
   end
+
+  # Scope a console turn to a loaded ticket's entitled accounts (like the FD
+  # webhook). nil = free-typed session → leave `:accounts` unset (unscoped).
+  defp maybe_scope(context, nil), do: context
+  defp maybe_scope(context, accounts), do: Map.put(context, :accounts, accounts)
 
   # ── Attachment extraction helpers ────────────────────────────────────────────
 
