@@ -32,17 +32,29 @@ defmodule TragarAi.Freight do
     end
   end
 
-  @doc "Fetch one quote (with items + sundries) by FreightWare object id."
-  def get_quote(quote_obj) do
-    with {:ok, resp} <- Client.get("/quotes/#{quote_obj}/") do
+  @doc """
+  Fetch one quote (with items + sundries) by quote number.
+
+  Standardised on the collection endpoint with a `quoteNumber` esfilter, the same
+  shape as `get_waybill/1`. (FreightWare also accepts `/quotes/{quoteNumber}/` and
+  `/quotes/{quoteObj}/` path forms; we just don't use them.)
+  """
+  def get_quote(quote_number) do
+    filters = [{"quoteNumber", quote_number}]
+    paging = %{paged: true, results_per_page: 1, page_number: 1}
+
+    with {:ok, resp} <- Client.get("/quotes/", filters: filters, paging: paging) do
       {:ok, resp |> Normalize.quotes() |> first("quotes")}
     end
   end
 
   @doc """
   Search quotes. `params` keys: `quote_number`, `account_reference`,
-  `status_code`, `date_from`, `date_to`, `shipper_reference`, `page`, `limit`.
+  `status_code`, `date_from`, `date_to`, `page`, `limit`.
   Returns %{quotes: [...], paging: %{}}.
+
+  Note: FreightWare quotes have NO `shipperReference` filter (waybills do) — a
+  customer's own reference can only be resolved to waybills, never quotes.
   """
   def search_quotes(params \\ %{}) do
     with :ok <- require_account(params) do
@@ -52,8 +64,7 @@ defmodule TragarAi.Freight do
           {"accountReference", :account_reference},
           {"statusCode", :status_code},
           {"dateFrom", :date_from},
-          {"dateTo", :date_to},
-          {"shipperReference", :shipper_reference}
+          {"dateTo", :date_to}
         ])
 
       with {:ok, resp} <- Client.get("/quotes/", filters: filters, paging: paging(params, 10)) do
@@ -99,7 +110,7 @@ defmodule TragarAi.Freight do
     paging = %{paged: true, results_per_page: 1, page_number: 1}
 
     with {:ok, resp} <-
-           Client.get("/waybills/#{waybill_number}/", filters: filters, paging: paging) do
+           Client.get("/waybills/", filters: filters, paging: paging) do
       {:ok, resp |> Normalize.waybills() |> first("waybills")}
     end
   end

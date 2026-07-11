@@ -1,6 +1,8 @@
 defmodule TragarAi.FreightTest do
   use TragarAi.DataCase, async: false
 
+  import TragarAi.FreightWareStub
+
   alias TragarAi.Freight
   alias TragarAi.Logistics
   alias TragarAi.Logistics.Cache
@@ -28,7 +30,7 @@ defmodule TragarAi.FreightTest do
             }
           })
 
-        String.contains?(conn.request_path, "/waybills/WB7") ->
+        waybill_number?(conn, "WB7") ->
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
@@ -53,7 +55,7 @@ defmodule TragarAi.FreightTest do
             }
           })
 
-        String.contains?(conn.request_path, "/quotes/Q1") ->
+        quote_number?(conn, "Q1") ->
           Req.Test.json(conn, %{
             "response" => %{
               "esQuotes" => %{
