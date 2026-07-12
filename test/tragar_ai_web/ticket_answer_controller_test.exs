@@ -19,7 +19,9 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
-                "Waybills" => [%{"waybillNumber" => "DIS0124440", "statusDescription" => "In transit"}]
+                "Waybills" => [
+                  %{"waybillNumber" => "DIS0124440", "statusDescription" => "In transit"}
+                ]
               }
             }
           })

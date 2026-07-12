@@ -66,7 +66,9 @@ defmodule TragarAi.CoreAI.StubTest do
 
   describe "phrase/2" do
     test "load_status mentions waybill and status" do
-      text = Stub.phrase(:load_status, %{"waybill_number" => "DIS0124440", "status" => "In transit"})
+      text =
+        Stub.phrase(:load_status, %{"waybill_number" => "DIS0124440", "status" => "In transit"})
+
       assert text =~ "DIS0124440"
       assert text =~ "In transit"
     end

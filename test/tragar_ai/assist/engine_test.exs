@@ -116,7 +116,9 @@ defmodule TragarAi.Assist.EngineTest do
   end
 
   test "agent-supplied waybill is used when the question omits it" do
-    assert {:ok, i} = Engine.answer("where is my delivery?", %{entities: %{waybill: "DIS0124440"}})
+    assert {:ok, i} =
+             Engine.answer("where is my delivery?", %{entities: %{waybill: "DIS0124440"}})
+
     assert i.status == :drafted
     assert i.facts["waybill_number"] == "DIS0124440"
   end

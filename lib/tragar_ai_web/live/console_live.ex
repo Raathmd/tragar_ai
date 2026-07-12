@@ -975,7 +975,11 @@ defmodule TragarAiWeb.ConsoleLive do
             <option value="customer">Account</option>
           </select>
           <div class="flex gap-1">
-            <input name="dkey" placeholder="e.g. DIS0124440" class="input input-bordered input-xs flex-1" />
+            <input
+              name="dkey"
+              placeholder="e.g. DIS0124440"
+              class="input input-bordered input-xs flex-1"
+            />
             <button class="btn btn-xs btn-primary">Fetch</button>
           </div>
         </form>

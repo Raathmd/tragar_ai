@@ -210,7 +210,8 @@ defmodule TragarAi.CoreAI.Stub do
     "I can look that up — I just need #{needs}. Could you add it?"
   end
 
-  def clarify(:missing_waybill), do: "Which waybill should I check? For example, waybill DIS0124440."
+  def clarify(:missing_waybill),
+    do: "Which waybill should I check? For example, waybill DIS0124440."
 
   def clarify(:not_found),
     do:
