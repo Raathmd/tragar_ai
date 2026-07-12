@@ -23,7 +23,9 @@ defmodule TragarAiWeb.ConsoleLiveTest do
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
-                "Waybills" => [%{"waybillNumber" => "DIS0124440", "statusDescription" => "In transit"}]
+                "Waybills" => [
+                  %{"waybillNumber" => "DIS0124440", "statusDescription" => "In transit"}
+                ]
               }
             }
           })
@@ -48,7 +50,12 @@ defmodule TragarAiWeb.ConsoleLiveTest do
 
         String.ends_with?(conn.request_path, "/tickets") ->
           Req.Test.json(conn, [
-            %{"id" => 55, "subject" => "Where is parcel DIS0124440", "status" => 2, "responder_id" => 1}
+            %{
+              "id" => 55,
+              "subject" => "Where is parcel DIS0124440",
+              "status" => 2,
+              "responder_id" => 1
+            }
           ])
 
         true ->
@@ -77,7 +84,10 @@ defmodule TragarAiWeb.ConsoleLiveTest do
   test "asking surfaces the fetched facts as a drafted answer", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
 
-    view |> form("form[phx-submit=ask]", %{question: "Where is load DIS0124440?"}) |> render_submit()
+    view
+    |> form("form[phx-submit=ask]", %{question: "Where is load DIS0124440?"})
+    |> render_submit()
+
     html = render_async(view, 5000)
 
     assert html =~ "In transit"
@@ -112,7 +122,12 @@ defmodule TragarAiWeb.ConsoleLiveTest do
 
         String.ends_with?(conn.request_path, "/tickets") ->
           Req.Test.json(conn, [
-            %{"id" => 55, "subject" => "Where is parcel DIS0124440", "status" => 2, "responder_id" => 1}
+            %{
+              "id" => 55,
+              "subject" => "Where is parcel DIS0124440",
+              "status" => 2,
+              "responder_id" => 1
+            }
           ])
 
         String.ends_with?(conn.request_path, "/companies/900") ->

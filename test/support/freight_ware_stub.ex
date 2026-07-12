@@ -21,13 +21,19 @@ defmodule TragarAi.FreightWareStub do
 
   @doc "True when this request is a by-number waybill fetch for `number`."
   def waybill_number?(conn, number),
-    do: String.ends_with?(conn.request_path, "/waybills/") and esfilters(conn)["waybillNumber"] == number
+    do:
+      String.ends_with?(conn.request_path, "/waybills/") and
+        esfilters(conn)["waybillNumber"] == number
 
   @doc "True when this request is a by-number quote fetch for `number`."
   def quote_number?(conn, number),
-    do: String.ends_with?(conn.request_path, "/quotes/") and esfilters(conn)["quoteNumber"] == number
+    do:
+      String.ends_with?(conn.request_path, "/quotes/") and
+        esfilters(conn)["quoteNumber"] == number
 
   @doc "True when this request is an account-scoped shipper-reference waybill search."
   def shipper_search?(conn),
-    do: String.ends_with?(conn.request_path, "/waybills/") and Map.has_key?(esfilters(conn), "shipperReference")
+    do:
+      String.ends_with?(conn.request_path, "/waybills/") and
+        Map.has_key?(esfilters(conn), "shipperReference")
 end

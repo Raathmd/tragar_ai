@@ -87,7 +87,10 @@ defmodule TragarAiWeb.DashboardLive do
         turns: turns,
         count: length(turns),
         last: hd(turns),
-        avg_ms: avg(durations)
+        avg_ms: avg(durations),
+        # The search pipeline that resolved the ticket — most recent turn that ran
+        # a reference lookup (nil if none did).
+        method: Enum.find_value(turns, & &1.search_strategy)
       }
     end)
     |> Enum.sort_by(& &1.last.inserted_at, {:desc, DateTime})
@@ -216,6 +219,13 @@ defmodule TragarAiWeb.DashboardLive do
                 <span class="font-mono font-semibold">#{t.ticket_id}</span>
                 <span :if={t.account} class="badge badge-sm badge-ghost">{t.account}</span>
                 <span class="badge badge-sm badge-outline">{t.count} turn{t.count > 1 && "s"}</span>
+                <span
+                  :if={t.method}
+                  class={"badge badge-sm " <> method_class(t.method)}
+                  title="Search pipeline that resolved this ticket"
+                >
+                  {method_label(t.method)}
+                </span>
               </div>
               <div class="text-xs text-base-content/60">
                 last {ago(t.last.inserted_at)} · avg {ms(t.avg_ms)}
@@ -229,6 +239,7 @@ defmodule TragarAiWeb.DashboardLive do
                   <th>Question</th>
                   <th>Intent</th>
                   <th>Source</th>
+                  <th>Method</th>
                   <th>Status</th>
                   <th class="text-right">Response time</th>
                 </tr>
@@ -239,6 +250,15 @@ defmodule TragarAiWeb.DashboardLive do
                   <td class="max-w-xs truncate" title={i.question}>{i.question}</td>
                   <td>{i.intent || "—"}</td>
                   <td>{i.source || "—"}</td>
+                  <td>
+                    <span
+                      :if={i.search_strategy}
+                      class={"badge badge-xs " <> method_class(i.search_strategy)}
+                    >
+                      {method_label(i.search_strategy)}
+                    </span>
+                    <span :if={is_nil(i.search_strategy)} class="text-base-content/40">—</span>
+                  </td>
                   <td><span class={"badge badge-xs " <> status_class(i.status)}>{i.status}</span></td>
                   <td class="text-right font-mono">{ms(i.duration_ms)}</td>
                 </tr>
@@ -285,6 +305,14 @@ defmodule TragarAiWeb.DashboardLive do
 
   defp reason_btn(%{active: active}, model) when active == model, do: "btn-primary"
   defp reason_btn(_reasoning, _model), do: "btn-ghost"
+
+  defp method_label(:sequential), do: "sequential"
+  defp method_label(:fanout), do: "fan-out"
+  defp method_label(other), do: to_string(other)
+
+  defp method_class(:sequential), do: "badge-info"
+  defp method_class(:fanout), do: "badge-accent"
+  defp method_class(_), do: "badge-ghost"
 
   defp status_class(:drafted), do: "badge-success"
   defp status_class(:relayed), do: "badge-success"

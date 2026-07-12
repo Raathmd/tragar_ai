@@ -16,7 +16,9 @@ defmodule TragarAi.Freshdesk.FieldMapperTest do
     fields = [text("cf_waybill_number", "Waybill number")]
     facts = %{"waybill_number" => "DIS0124440", "status" => "In transit"}
 
-    assert FieldMapper.custom_field_updates(fields, facts) == %{"cf_waybill_number" => "DIS0124440"}
+    assert FieldMapper.custom_field_updates(fields, facts) == %{
+             "cf_waybill_number" => "DIS0124440"
+           }
   end
 
   test "matches via the alias table (status_description fact → 'Waybill status' field)" do
