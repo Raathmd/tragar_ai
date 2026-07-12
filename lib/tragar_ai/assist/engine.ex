@@ -72,6 +72,9 @@ defmodule TragarAi.Assist.Engine do
           # (broad), then frame the answer from all discovered facts.
           refs != [] ->
             strategy = search_strategy()
+            # Record which pipeline resolved this turn so it persists on the
+            # interaction (dashboard badge); nil for non-reference lookups.
+            context = Map.put(context, :search_strategy, strategy)
 
             {micros, result} =
               :timer.tc(fn -> run_reference_pipeline(strategy, question, refs, context) end)
@@ -1306,6 +1309,7 @@ defmodule TragarAi.Assist.Engine do
       attrs
       |> Map.put(:ticket_id, context[:ticket_id])
       |> Map.put(:duration_ms, elapsed_ms(context))
+      |> Map.put(:search_strategy, context[:search_strategy])
 
     {transient, slim} = Map.split(attrs, @transient_keys)
 
@@ -1334,6 +1338,7 @@ defmodule TragarAi.Assist.Engine do
       agent: rec.agent,
       ticket_id: rec.ticket_id,
       duration_ms: rec.duration_ms,
+      search_strategy: rec.search_strategy,
       inserted_at: rec.inserted_at,
       facts: %{},
       tool_log: [],

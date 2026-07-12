@@ -43,6 +43,11 @@ defmodule TragarAi.Assist.Interaction do
     attribute :duration_ms, :integer,
       description: "Wall-clock ms for the assist loop (interpret → fetch → phrase)."
 
+    attribute :search_strategy, :atom,
+      constraints: [one_of: [:sequential, :fanout]],
+      description:
+        "Which reference-resolution pipeline resolved this turn (nil for non-reference lookups)."
+
     timestamps()
   end
 
@@ -59,7 +64,8 @@ defmodule TragarAi.Assist.Interaction do
         :error,
         :agent,
         :ticket_id,
-        :duration_ms
+        :duration_ms,
+        :search_strategy
       ]
     end
 
