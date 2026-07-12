@@ -71,8 +71,17 @@ defmodule TragarAi.Assist.Engine do
           # guess. Test it against EVERY reference endpoint across all sources
           # (broad), then frame the answer from all discovered facts.
           refs != [] ->
-            Logger.info("[assist] reference surface #{inspect(refs)} <- #{inspect(question)}")
-            process_reference(question, refs, context)
+            strategy = search_strategy()
+
+            {micros, result} =
+              :timer.tc(fn -> run_reference_pipeline(strategy, question, refs, context) end)
+
+            Logger.info(
+              "[assist] reference #{strategy} #{div(micros, 1000)}ms " <>
+                "#{inspect(refs)} <- #{inspect(question)}"
+            )
+
+            result
 
           # Non-reference single request (account/ticket/vehicle/service): keep the
           # existing narrow-or-broad handling (account soft-gate, source-specific
@@ -388,6 +397,165 @@ defmodule TragarAi.Assist.Engine do
       end)
 
     entity_subs ++ Enum.flat_map(ungrouped, &expand_request/1)
+  end
+
+  # Two interchangeable reference-resolution pipelines, toggled by config so their
+  # latency can be compared head-to-head on the same traffic:
+  #   :fanout     — probe EVERY endpoint for EVERY number concurrently, then
+  #                 harmonise (the historical behaviour, `process_reference/3`).
+  #   :sequential — for each number, cascade waybill → shipperReference → quote →
+  #                 Vantage and STOP at the first source with a valid document.
+  # Flip with `config :tragar_ai, :search_strategy, :fanout | :sequential`.
+  defp search_strategy, do: TragarAi.Assist.SearchStrategy.get()
+
+  defp run_reference_pipeline(:fanout, question, values, context),
+    do: process_reference(question, values, context)
+
+  defp run_reference_pipeline(_sequential, question, values, context),
+    do: process_reference_sequential(question, values, context)
+
+  # ── Sequential reference resolution (experimental; measured vs the fanout) ────
+  #
+  # Same inputs and terminal handling as process_reference/3, but instead of
+  # probing every endpoint for every value at once, each value cascades through
+  # the sources in priority order and stops at the first that returns an in-scope
+  # document: waybill number → shipper reference (account-scoped) → quote number
+  # → Vantage. Built to compare short-circuit latency against the parallel fan-out.
+  defp process_reference_sequential(question, values, context) do
+    interpret_entry = multi_interpret_entry(question, expand_probe(values))
+
+    {groups, log, fail, scoped} =
+      Enum.reduce(values, {[], [interpret_entry], :no_facts, nil}, fn value, {gs, ls, fs, sc} ->
+        case cascade_value(question, value, context) do
+          {:match, value_groups, entries} -> {gs ++ value_groups, ls ++ entries, fs, sc}
+          {:scoped_out, entries} -> {gs, ls ++ entries, fs, sc || value}
+          {:miss, entries, value_fail} -> {gs, ls ++ entries, worse_failure(fs, value_fail), sc}
+        end
+      end)
+
+    cond do
+      groups != [] ->
+        surface_reference(question, groups, context, log)
+
+      # A waybill matched BY NUMBER but its account isn't on this ticket. We read
+      # the owner straight off the waybill, so we deny by scope here and never
+      # enter the account-cycling shipper-reference search.
+      scoped != nil ->
+        scope_refused(question, :load_status, %{waybill: scoped}, context, log)
+
+      fail in [:unreachable, :session_conflict] ->
+        retrieval_fail(question, ref_request(values), context, fail, log)
+
+      true ->
+        reference_miss(question, values, context, log)
+    end
+  end
+
+  # Cascade ONE value through the sources in priority order, stopping at the first
+  # that yields a document. The waybill-by-number step is special: a hit is gated
+  # on the ticket's FD accounts read straight off the waybill — if it's a real
+  # waybill for another account we deny by scope and DON'T fall through to the
+  # account-cycling shipper-reference search. A genuine miss (no such waybill)
+  # cascades: shipper reference (account-scoped) → quote number → Vantage.
+  # Returns {:match, groups, log} | {:scoped_out, log} | {:miss, log, fail}.
+  defp cascade_value(question, value, context) do
+    case step_waybill(value, context) do
+      {:match, groups, entries} ->
+        {:match, groups, entries}
+
+      {:scoped_out, entries} ->
+        {:scoped_out, entries}
+
+      {:miss, entries, fail} ->
+        rest = [
+          fn -> step_shipper_reference(question, value, context) end,
+          fn -> step_gather([sub(:quote_lookup, %{quote: value}, :quote, value)], context) end,
+          fn -> step_gather([sub(:route, %{waybill: value}, :waybill, value)], context) end
+        ]
+
+        run_cascade(rest, entries, fail)
+    end
+  end
+
+  # Fetch a waybill BY NUMBER and gate it on the ticket's FD accounts (read off the
+  # returned waybill — no account cycling). Returns:
+  #   {:match, [group], log}  — found and in scope,
+  #   {:scoped_out, log}      — found but belongs to another account, or
+  #   {:miss, log, fail}      — no such waybill (cascade on).
+  defp step_waybill(value, context) do
+    entities = %{waybill: value}
+    source = source_name(:load_status)
+    result = fetch_facts(:load_status, entities, context)
+    entry = fetch_entry(source, :load_status, entities, result)
+
+    case result do
+      {:ok, facts} ->
+        if out_of_scope?(facts, context) do
+          {:scoped_out, [entry]}
+        else
+          group = %{
+            intent: :load_status,
+            source: source,
+            entities: entities,
+            entity: :waybill,
+            entity_key: value,
+            facts: facts
+          }
+
+          {:match, [group], [entry]}
+        end
+
+      {:error, reason} ->
+        {:miss, [entry], miss_failure(reason)}
+    end
+  end
+
+  # Classify a single-fetch error into the aggregated cascade reasons.
+  defp miss_failure(reason) do
+    case failure_kind(reason) do
+      :session_conflict -> :session_conflict
+      :unreachable -> :unreachable
+      _ -> :no_facts
+    end
+  end
+
+  defp run_cascade([], log, fail), do: {:miss, log, fail}
+
+  defp run_cascade([step | rest], log, fail) do
+    {groups, entries, step_fail} = step.()
+    log = log ++ entries
+
+    if groups != [],
+      do: {:match, groups, log},
+      else: run_cascade(rest, log, worse_failure(fail, step_fail))
+  end
+
+  # One cascade step over concrete sub-lookups: validate, gather, and return its
+  # groups + tool-log entries + failure reason (so a total miss can still tell an
+  # outage apart from "not found", exactly as the fan-out does).
+  defp step_gather(subs, context) do
+    valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
+    {groups, entries, fail} = gather(valid, context)
+    {groups, entries, fail}
+  end
+
+  # The shipper-reference cascade step reuses the account-scoped resolver, mapped
+  # to the {groups, entries, fail} shape the cascade expects.
+  defp step_shipper_reference(question, value, context) do
+    case resolve_by_shipper_reference(question, [value], context) do
+      {:matches, groups, entries} -> {groups, entries, :no_facts}
+      {:need_account, :none, entries} -> {[], entries, :no_facts}
+    end
+  end
+
+  # Failure precedence for the cascade: a crossed session outranks an outage,
+  # which outranks "nothing came back". Ranks the already-aggregated reasons that
+  # gather/2 (aggregate_failure/1) and step_shipper_reference/3 return directly.
+  @failure_rank %{session_conflict: 2, unreachable: 1, no_facts: 0}
+  defp worse_failure(current, incoming) do
+    if Map.get(@failure_rank, incoming, 0) > Map.get(@failure_rank, current, 0),
+      do: incoming,
+      else: current
   end
 
   # Validate the sub-lookups, gather them concurrently, harmonise the slices per

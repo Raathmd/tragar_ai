@@ -33,8 +33,8 @@ defmodule TragarAi.Assist.Tools do
   }
 
   @entity_descriptions %{
-    waybill: "Waybill / load number, e.g. 4821",
-    account: "Account / debtor reference, e.g. ACC1001",
+    waybill: "Waybill / load number, e.g. DIS0124440",
+    account: "Account / debtor reference, e.g. DIS003",
     quote: "Quote number, e.g. 7012",
     ticket_id: "Support ticket id, e.g. 55"
   }

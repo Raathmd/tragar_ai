@@ -1,6 +1,8 @@
 defmodule TragarAi.Assist.EngineTest do
   use TragarAi.DataCase, async: false
 
+  import TragarAi.FreightWareStub
+
   alias TragarAi.Assist
   alias TragarAi.Assist.Engine
 
@@ -26,17 +28,26 @@ defmodule TragarAi.Assist.EngineTest do
             }
           })
 
-        # empty waybill list = not found
-        String.contains?(conn.request_path, "/waybills/0000") ->
-          Req.Test.json(conn, %{"response" => %{"esWaybills" => %{"Waybills" => []}}})
+        # Shipper-reference SEARCH (the fallback) → resolves REF123 to DIS0124440.
+        shipper_search?(conn) ->
+          Req.Test.json(conn, %{
+            "response" => %{
+              "esWaybills" => %{
+                "Waybills" => [
+                  %{"waybillNumber" => "DIS0124440", "shipperReference" => "REF123"}
+                ]
+              }
+            }
+          })
 
-        String.contains?(conn.request_path, "/waybills/4821") ->
+        # By-number fetch of the real waybill.
+        waybill_number?(conn, "DIS0124440") ->
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
                 "Waybills" => [
                   %{
-                    "waybillNumber" => "4821",
+                    "waybillNumber" => "DIS0124440",
                     "statusDescription" => "In transit",
                     "consigneeName" => "Acme"
                   }
@@ -45,17 +56,9 @@ defmodule TragarAi.Assist.EngineTest do
             }
           })
 
-        # Waybill SEARCH (the shipper-reference fallback) → resolves to 4821.
+        # Any other by-number lookup (0000, REF123, …) = empty list = not found.
         String.ends_with?(conn.request_path, "/waybills/") ->
-          Req.Test.json(conn, %{
-            "response" => %{
-              "esWaybills" => %{
-                "Waybills" => [
-                  %{"waybillNumber" => "4821", "shipperReference" => "REF123"}
-                ]
-              }
-            }
-          })
+          Req.Test.json(conn, %{"response" => %{"esWaybills" => %{"Waybills" => []}}})
 
         # allocated-accounts directory (for account validation/resolution)
         String.contains?(conn.request_path, "/system/baseData/accounts") ->
@@ -103,28 +106,28 @@ defmodule TragarAi.Assist.EngineTest do
   end
 
   test "answers a live FreightWare status question and drafts an answer" do
-    assert {:ok, i} = Engine.answer("Where is load 4821?")
+    assert {:ok, i} = Engine.answer("Where is load DIS0124440?")
     assert i.status == :drafted
     assert i.intent == "load_status"
     assert i.source == "FreightWare"
     assert i.facts["status"] == "In transit"
-    assert i.draft_answer =~ "4821"
+    assert i.draft_answer =~ "DIS0124440"
     assert i.draft_answer =~ "In transit"
   end
 
   test "agent-supplied waybill is used when the question omits it" do
-    assert {:ok, i} = Engine.answer("where is my delivery?", %{entities: %{waybill: "4821"}})
+    assert {:ok, i} = Engine.answer("where is my delivery?", %{entities: %{waybill: "DIS0124440"}})
     assert i.status == :drafted
-    assert i.facts["waybill_number"] == "4821"
+    assert i.facts["waybill_number"] == "DIS0124440"
   end
 
   test "a new waybill in the prompt overrides the carried one (no stale answer)" do
-    # Prior conversation carried waybill 0000; this turn names 4821 — the fresh
+    # Prior conversation carried waybill 0000; this turn names DIS0124440 — the fresh
     # waybill must win, otherwise the follow-up re-answers the first one.
-    assert {:ok, i} = Engine.answer("where is load 4821?", %{entities: %{waybill: "0000"}})
+    assert {:ok, i} = Engine.answer("where is load DIS0124440?", %{entities: %{waybill: "0000"}})
     assert i.status == :drafted
-    assert i.facts["waybill_number"] == "4821"
-    assert i.draft_answer =~ "4821"
+    assert i.facts["waybill_number"] == "DIS0124440"
+    assert i.draft_answer =~ "DIS0124440"
   end
 
   test "a not-yet-connected source fails safe with a usable message" do
@@ -155,7 +158,7 @@ defmodule TragarAi.Assist.EngineTest do
 
   test "a shipper reference resolves to the waybill via account-scoped search" do
     # REF123 isn't a waybill/quote number, but it is the customer's shipper
-    # reference — the account-scoped search resolves it to waybill 4821.
+    # reference — the account-scoped search resolves it to waybill DIS0124440.
     assert {:ok, i} =
              Engine.answer("where is my shipment", %{
                accounts: ["ITD02"],
@@ -163,7 +166,7 @@ defmodule TragarAi.Assist.EngineTest do
              })
 
     assert i.status == :drafted
-    assert i.facts["waybill_number"] == "4821"
+    assert i.facts["waybill_number"] == "DIS0124440"
   end
 
   test "an unscoped identifier is flagged, nudging for the account to search on" do
@@ -187,7 +190,7 @@ defmodule TragarAi.Assist.EngineTest do
              })
 
     assert i.status == :drafted
-    assert i.facts["waybill_number"] == "4821"
+    assert i.facts["waybill_number"] == "DIS0124440"
   end
 
   test "a requester with no assigned account is never allowed a reference search" do
@@ -217,24 +220,24 @@ defmodule TragarAi.Assist.EngineTest do
         String.contains?(conn.request_path, "/trackAndTrace") ->
           Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
 
-        String.contains?(conn.request_path, "/waybills/4821/") ->
-          Req.Test.json(conn, waybill_json("4821", "In transit"))
-
-        String.contains?(conn.request_path, "/waybills/4822/") ->
-          Req.Test.json(conn, waybill_json("4822", "Delivered"))
-
         # The shipperReference SEARCH returns two matches.
-        String.ends_with?(conn.request_path, "/waybills/") ->
+        shipper_search?(conn) ->
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
                 "Waybills" => [
-                  %{"waybillNumber" => "4821", "shipperReference" => "REF123"},
+                  %{"waybillNumber" => "DIS0124440", "shipperReference" => "REF123"},
                   %{"waybillNumber" => "4822", "shipperReference" => "REF123"}
                 ]
               }
             }
           })
+
+        waybill_number?(conn, "DIS0124440") ->
+          Req.Test.json(conn, waybill_json("DIS0124440", "In transit"))
+
+        waybill_number?(conn, "4822") ->
+          Req.Test.json(conn, waybill_json("4822", "Delivered"))
 
         true ->
           conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
@@ -255,12 +258,12 @@ defmodule TragarAi.Assist.EngineTest do
 
     assert i.status == :drafted
     numbers = Enum.map(i.facts["results"], & &1["facts"]["waybill_number"])
-    assert "4821" in numbers
+    assert "DIS0124440" in numbers
     assert "4822" in numbers
   end
 
   test "relay marks the interaction relayed (engine returns an in-memory record)" do
-    {:ok, i} = Engine.answer("Where is load 4821?")
+    {:ok, i} = Engine.answer("Where is load DIS0124440?")
 
     # The engine's return is the live, in-memory record (a plain map) carrying the
     # turn's transient PII fields; relay reloads the slim row by id and updates it.
@@ -271,7 +274,7 @@ defmodule TragarAi.Assist.EngineTest do
   end
 
   test "facts and tool_log are not persisted (ephemeral) — only the slim row is" do
-    {:ok, i} = Engine.answer("Where is load 4821?")
+    {:ok, i} = Engine.answer("Where is load DIS0124440?")
 
     # The returned record carries the heavy fields for the turn...
     assert i.facts != %{}
@@ -281,7 +284,7 @@ defmodule TragarAi.Assist.EngineTest do
     {:ok, stored} = Assist.get_interaction(i.id)
     refute Map.has_key?(stored, :facts)
     refute Map.has_key?(stored, :tool_log)
-    assert stored.question =~ "4821"
+    assert stored.question =~ "DIS0124440"
     assert stored.status == :drafted
   end
 

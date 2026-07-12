@@ -1,6 +1,8 @@
 defmodule TragarAi.Assist.TicketResponderTest do
   use TragarAi.DataCase, async: false
 
+  import TragarAi.FreightWareStub
+
   alias TragarAi.Assist.TicketResponder
 
   # A fake Freshdesk client that records its calls back to the test process
@@ -9,8 +11,8 @@ defmodule TragarAi.Assist.TicketResponderTest do
     def update_ticket(id, attrs), do: record({:update_ticket, id, attrs})
     def add_note(id, attrs), do: record({:add_note, id, attrs})
 
-    # A chosen attachment's bytes — a CSV whose only reference is waybill 4821.
-    def download("https://files/loads.csv"), do: {:ok, "waybill,status\n4821,in transit\n"}
+    # A chosen attachment's bytes — a CSV whose only reference is waybill DIS0124440.
+    def download("https://files/loads.csv"), do: {:ok, "waybill,status\nDIS0124440,in transit\n"}
     def download(_), do: {:error, :not_found}
 
     def list_ticket_fields do
@@ -35,7 +37,7 @@ defmodule TragarAi.Assist.TicketResponderTest do
   # Fake Freshdesk facade — supplies the ticket thread as the model's context
   # (avoids hitting the real Freshdesk.Client, which isn't stubbed here).
   defmodule FakeFD do
-    def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: Where is load 4821?"}}
+    def ticket_thread(_id), do: {:ok, %{transcript: "Requestor: Where is load DIS0124440?"}}
   end
 
   # A thread whose reference can't be resolved (waybill 0000 → not found).
@@ -75,11 +77,11 @@ defmodule TragarAi.Assist.TicketResponderTest do
         String.contains?(conn.request_path, "/trackAndTrace") ->
           Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
 
-        String.contains?(conn.request_path, "/waybills/4821") ->
+        waybill_number?(conn, "DIS0124440") ->
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
-                "Waybills" => [%{"waybillNumber" => "4821", "statusDescription" => "In transit"}]
+                "Waybills" => [%{"waybillNumber" => "DIS0124440", "statusDescription" => "In transit"}]
               }
             }
           })
@@ -95,7 +97,7 @@ defmodule TragarAi.Assist.TicketResponderTest do
 
   test "unchecks the trigger flag first, answers, and pre-fills fields" do
     assert {:ok, result} =
-             TicketResponder.respond("55", "Where is load 4821?",
+             TicketResponder.respond("55", "Where is load DIS0124440?",
                client: FakeClient,
                freshdesk: FakeFD,
                account: "ITD02"
@@ -103,7 +105,7 @@ defmodule TragarAi.Assist.TicketResponderTest do
 
     assert result.answer =~ "In transit"
     assert result.account == "ITD02"
-    assert result.filled_fields["cf_waybill_number"] == "4821"
+    assert result.filled_fields["cf_waybill_number"] == "DIS0124440"
 
     # The trigger checkbox is cleared (unchecked) — the loop-breaker.
     assert_received {:update_ticket, "55", %{custom_fields: %{"cf_tragar_ai" => false}}}
@@ -128,7 +130,7 @@ defmodule TragarAi.Assist.TicketResponderTest do
   end
 
   test "folds a chosen attachment's text into the answer" do
-    # The waybill (4821) appears ONLY in the attachment CSV, not the thread — so a
+    # The waybill (DIS0124440) appears ONLY in the attachment CSV, not the thread — so a
     # resolved answer proves the extracted text reached the engine.
     assert {:ok, result} =
              TicketResponder.respond("55", "",
@@ -145,7 +147,7 @@ defmodule TragarAi.Assist.TicketResponderTest do
 
   test "the flag field name is overridable" do
     assert {:ok, _} =
-             TicketResponder.respond("55", "Where is load 4821?",
+             TicketResponder.respond("55", "Where is load DIS0124440?",
                client: FakeClient,
                freshdesk: FakeFD,
                account: "ITD02",

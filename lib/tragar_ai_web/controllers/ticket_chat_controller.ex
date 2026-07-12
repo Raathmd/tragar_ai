@@ -4,7 +4,7 @@ defmodule TragarAiWeb.TicketChatController do
 
   `POST /api/tickets/chat` with JSON:
 
-      {"ticket_id": "55", "message": "where is 4821",
+      {"ticket_id": "55", "message": "where is DIS0124440",
        "history": [{"role": "user", "text": "..."}, {"role": "assistant", "text": "..."}]}
 
   Runs one assist turn scoped to the ticket requester's entitled accounts and

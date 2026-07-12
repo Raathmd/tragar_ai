@@ -15,11 +15,11 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
         String.contains?(conn.request_path, "/trackAndTrace") ->
           Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
 
-        String.contains?(conn.request_path, "/waybills/4821") ->
+        String.contains?(conn.request_path, "/waybills/DIS0124440") ->
           Req.Test.json(conn, %{
             "response" => %{
               "esWaybills" => %{
-                "Waybills" => [%{"waybillNumber" => "4821", "statusDescription" => "In transit"}]
+                "Waybills" => [%{"waybillNumber" => "DIS0124440", "statusDescription" => "In transit"}]
               }
             }
           })
@@ -70,7 +70,7 @@ defmodule TragarAiWeb.TicketAnswerControllerTest do
     body = %{
       "ticket_id" => "55",
       "subject" => "Delivery query",
-      "description" => "Where is load 4821?"
+      "description" => "Where is load DIS0124440?"
     }
 
     resp = conn |> post(~p"/api/tickets/answer", body) |> json_response(202)

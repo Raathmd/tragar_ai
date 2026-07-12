@@ -4,7 +4,7 @@ defmodule TragarAi.Assist.EntitiesTest do
   alias TragarAi.Assist.Entities
 
   test "entity_for/1 maps a reference key to its domain entity" do
-    assert Entities.entity_for(%{waybill: "4821"}) == :waybill
+    assert Entities.entity_for(%{waybill: "DIS0124440"}) == :waybill
     assert Entities.entity_for(%{account: "ACC1001"}) == :account
     assert Entities.entity_for(%{quote: "7012"}) == :quote
     assert Entities.entity_for(%{ticket_id: "55"}) == :ticket
@@ -20,7 +20,7 @@ defmodule TragarAi.Assist.EntitiesTest do
   end
 
   test "key/1 extracts the reference value" do
-    assert Entities.key(:waybill, %{waybill: "4821"}) == "4821"
+    assert Entities.key(:waybill, %{waybill: "DIS0124440"}) == "DIS0124440"
     assert Entities.key(:account, %{account: "ACC1001"}) == "ACC1001"
   end
 end

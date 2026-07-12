@@ -29,14 +29,14 @@ defmodule TragarAi.CoreAIHttpTest do
 
       Req.Test.json(conn, %{
         "intent" => "load_status",
-        "entities" => %{"waybill" => "4821", "nonsense" => "drop me", "account" => ""}
+        "entities" => %{"waybill" => "DIS0124440", "nonsense" => "drop me", "account" => ""}
       })
     end)
 
     assert {:ok, %{intent: :load_status, entities: entities}} =
-             CoreAI.interpret("where is 4821?")
+             CoreAI.interpret("where is DIS0124440?")
 
-    assert entities == %{waybill: "4821"}
+    assert entities == %{waybill: "DIS0124440"}
   end
 
   test "interpret accepts a function-calling tool_call response" do
@@ -84,10 +84,10 @@ defmodule TragarAi.CoreAIHttpTest do
   test "phrase returns the answer string" do
     Req.Test.stub(TragarAi.CoreAI, fn conn ->
       assert conn.request_path == "/phrase"
-      Req.Test.json(conn, %{"answer" => "Waybill 4821 is in transit."})
+      Req.Test.json(conn, %{"answer" => "Waybill DIS0124440 is in transit."})
     end)
 
-    assert {:ok, "Waybill 4821 is in transit."} =
-             CoreAI.phrase(:load_status, %{"waybill_number" => "4821"})
+    assert {:ok, "Waybill DIS0124440 is in transit."} =
+             CoreAI.phrase(:load_status, %{"waybill_number" => "DIS0124440"})
   end
 end

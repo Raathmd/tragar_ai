@@ -4,7 +4,7 @@ defmodule TragarAi.Assist.ValidatorTest do
   alias TragarAi.Assist.Validator
 
   test "passes when required entities are present" do
-    assert :ok = Validator.validate(%{intent: :load_status, entities: %{waybill: "4821"}})
+    assert :ok = Validator.validate(%{intent: :load_status, entities: %{waybill: "DIS0124440"}})
   end
 
   test "rejects missing required entities" do

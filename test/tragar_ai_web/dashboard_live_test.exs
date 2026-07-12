@@ -8,7 +8,7 @@ defmodule TragarAiWeb.DashboardLiveTest do
   test "groups AI responses by ticket and shows the response time", %{conn: conn} do
     {:ok, _} =
       Assist.create_interaction(%{
-        question: "Where is waybill 4821?",
+        question: "Where is waybill DIS0124440?",
         intent: "load_status",
         source: "FreightWare",
         status: :drafted,

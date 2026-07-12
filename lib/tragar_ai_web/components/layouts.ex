@@ -62,6 +62,12 @@ defmodule TragarAiWeb.Layouts do
       >
         Chat
       </.link>
+      <.link
+        navigate={~p"/settings"}
+        class={["btn btn-sm", (@active == :settings && "btn-primary") || "btn-ghost"]}
+      >
+        Settings
+      </.link>
 
       <div class="ml-auto flex items-center gap-1">
         <.theme_toggle />
