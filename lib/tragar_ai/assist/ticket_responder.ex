@@ -50,6 +50,7 @@ defmodule TragarAi.Assist.TicketResponder do
     # account, so a ticket can't pull another account's records.
     context = %{
       intent: nil,
+      channel: :freshdesk,
       accounts: accounts,
       entities: entities(account),
       ticket_id: ticket_id
