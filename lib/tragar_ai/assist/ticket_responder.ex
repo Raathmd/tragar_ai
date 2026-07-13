@@ -42,9 +42,11 @@ defmodule TragarAi.Assist.TicketResponder do
     # unchanged.
     content = content <> attachments_text(ticket_id, opts, fd, client)
 
-    # Feed the model the RAW thread — no distil. Distillation was mangling
+    # Strip redundant whitespace only — deterministic, so every reference is
+    # preserved exactly. We do NOT summarise/distil the thread: that mangled
     # references (e.g. gluing a destination onto a waybill: "ITD0048113" ->
-    # "ITD0048113-Lusikisiki"), so it never matched. Same as the console now does.
+    # "ITD0048113-Lusikisiki"), so it never matched.
+    content = TragarAi.Text.tidy(content)
 
     # `:accounts` enforces scope in the Engine — facts must be on the requester's
     # account, so a ticket can't pull another account's records.

@@ -41,7 +41,7 @@ defmodule TragarAiWeb.ConsoleLive do
      # ticket sets this to the requester's entitled accounts, scoping like FD.
      |> assign(ticket_accounts: nil)
      |> assign(attachments: [], queued_question: nil)
-     |> assign(pre_simplify: nil, simplifying: false)
+     |> assign(pre_simplify: nil)
      |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
      |> assign(next_msg_id: 0, last_question: nil)
      |> load_history()
@@ -51,22 +51,18 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # ── Prompt (centre) ─────────────────────────────────────────────────────────
 
-  # "Simplify" — rewrite the prompt into a concise, accurate restatement of what's
-  # being asked (folding in the read attachment contents, keeping every reference),
-  # and drop it back into the textarea for review. Undo via "restore original".
+  # "Tidy" — deterministically strip unnecessary whitespace from the prompt while
+  # keeping it readable. No model call, so references can't be mangled. Undo via
+  # "restore original".
   @impl true
-  def handle_event("ask", %{"op" => "simplify"} = params, socket) do
-    text = String.trim(params["question"] || "")
-    engine_text = text <> attachments_block(socket.assigns.attachments)
+  def handle_event("ask", %{"op" => "tidy"} = params, socket) do
+    text = params["question"] || ""
 
-    if text == "" do
+    if String.trim(text) == "" do
       {:noreply,
-       put_flash(socket, :error, "Nothing to simplify — load a ticket or type a request first.")}
+       put_flash(socket, :error, "Nothing to tidy — load a ticket or type a request first.")}
     else
-      {:noreply,
-       socket
-       |> assign(simplifying: true, pre_simplify: params["question"])
-       |> start_async(:simplify, fn -> TragarAi.CoreAI.summarize(engine_text) end)}
+      {:noreply, assign(socket, question: TragarAi.Text.tidy(text), pre_simplify: text)}
     end
   end
 
@@ -335,7 +331,6 @@ defmodule TragarAiWeb.ConsoleLive do
           question={@question}
           agent={@agent}
           distilling={@distilling}
-          simplifying={@simplifying}
           pre_simplify={@pre_simplify}
           account_choices={@account_choices}
           attachments={@attachments}
@@ -569,19 +564,19 @@ defmodule TragarAiWeb.ConsoleLive do
             name="op"
             value="send"
             class="btn btn-primary"
-            disabled={@distilling or @simplifying}
+            disabled={@distilling}
           >
             Send
           </button>
           <button
             type="submit"
             name="op"
-            value="simplify"
+            value="tidy"
             class="btn btn-outline btn-sm"
-            disabled={@distilling or @simplifying}
-            title="Show the references/intents the model extracts from this prompt"
+            disabled={@distilling}
+            title="Strip unnecessary whitespace from the prompt (references untouched)"
           >
-            Simplify
+            Tidy
           </button>
           <button
             :if={@messages != []}
@@ -600,14 +595,11 @@ defmodule TragarAiWeb.ConsoleLive do
           <span :if={@distilling} class="flex items-center gap-2 text-sm text-base-content/60">
             <span class="loading loading-spinner loading-xs"></span> Loading ticket…
           </span>
-          <span :if={@simplifying} class="flex items-center gap-2 text-sm text-base-content/60">
-            <span class="loading loading-spinner loading-xs"></span> Simplifying…
-          </span>
         </div>
       </form>
 
       <p :if={@pre_simplify} class="text-[11px] text-base-content/60 flex items-center gap-1">
-        <span>Request simplified.</span>
+        <span>Whitespace tidied.</span>
         <button type="button" phx-click="restore_original" class="link link-primary">
           Restore original
         </button>
@@ -1599,7 +1591,7 @@ defmodule TragarAiWeb.ConsoleLive do
      socket
      |> reset_chat_state()
      |> assign(
-       question: query,
+       question: TragarAi.Text.tidy(query),
        frame: %{intent: nil, entities: entities},
        distilling: false,
        account_choices: choices,
@@ -1716,30 +1708,6 @@ defmodule TragarAiWeb.ConsoleLive do
      socket
      |> update_attachment(id, %{status: :error, error: "crashed"})
      |> maybe_run_queued()}
-  end
-
-  # "Simplify" finished — drop the restated request into the prompt for review.
-  def handle_async(:simplify, {:ok, {:ok, summary}}, socket) when is_binary(summary) do
-    {:noreply,
-     socket
-     |> assign(simplifying: false, question: String.trim(summary))
-     |> put_flash(:info, "Simplified — review it, then Send. Use “restore original” to undo.")}
-  end
-
-  def handle_async(:simplify, {:ok, _}, socket) do
-    {:noreply,
-     socket
-     |> assign(simplifying: false, pre_simplify: nil)
-     |> put_flash(:error, "Couldn't simplify that request.")}
-  end
-
-  def handle_async(:simplify, {:exit, reason}, socket) do
-    Logger.error("[console] simplify crashed: #{inspect(reason)}")
-
-    {:noreply,
-     socket
-     |> assign(simplifying: false, pre_simplify: nil)
-     |> put_flash(:error, "Couldn't simplify that request.")}
   end
 
   @impl true
