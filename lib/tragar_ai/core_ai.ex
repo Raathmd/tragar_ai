@@ -811,7 +811,11 @@ defmodule TragarAi.CoreAI do
     - Keep it to a few sentences. No markdown headings, no preamble.
     - If the facts indicate missing information or a not-found result, say so
       plainly and ask for what you need.
-    - Reply in the customer's language if it is evident from the question.
+    - Write the answer in English by default. If the customer's question is
+      clearly in another language, add the SAME answer in that language on a new
+      line below, prefixed with the language name (e.g. "Afrikaans: ..."), so the
+      agent can pick which version to send. If the question is in English, give
+      the English answer only.
 
     /no_think
     """
@@ -830,7 +834,9 @@ defmodule TragarAi.CoreAI do
     - Do NOT fabricate waybill numbers, dates, statuses, prices, or account data.
       If a specific record is needed, say it must be confirmed in the system.
     - It is fine to explain, advise, translate, or reason generally.
-    - Be concise. Reply in the customer's language if it is evident.
+    - Be concise. Answer in English by default; if the question is clearly in
+      another language, add the same answer in that language on a new line below,
+      prefixed with the language name, so the agent can choose which to send.
 
     /think
     """
