@@ -9,6 +9,11 @@ defmodule TragarAi.CoreAI.StubTest do
                Stub.interpret("Where is load DIS0124440?")
     end
 
+    test "extracts an alphanumeric quote number (not just digits)" do
+      assert %{intent: :quote_lookup, entities: %{quote: "JHB-00014504"}} =
+               Stub.interpret("show me quote JHB-00014504")
+    end
+
     test "classifies ETA, POD, invoice, route, stock, vehicle" do
       assert %{intent: :eta} = Stub.interpret("What's the ETA for waybill 5500?")
       assert %{intent: :pod} = Stub.interpret("proof of delivery for DIS0124440")
