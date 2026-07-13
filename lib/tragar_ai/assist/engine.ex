@@ -832,6 +832,7 @@ defmodule TragarAi.Assist.Engine do
   # priority), and phrase one cohesive answer per entity.
   defp harmonize_and_phrase(question, groups, context) do
     on_chunk = context[:on_chunk]
+    emit = event_sink(context)
     keys = groups |> Enum.map(&{&1.entity, &1.entity_key}) |> Enum.uniq()
 
     {results, entries} =
@@ -842,6 +843,10 @@ defmodule TragarAi.Assist.Engine do
         # Phrase the harmonised record via the entity's canonical capability (so a
         # waybill reads as its status, not whichever slice returned first).
         intent = phrasing_intent(entity, slices)
+
+        # Surface the retrieved facts to a live UI NOW — before the (slow) phrasing
+        # runs — so the console can show them while the answer is still streaming.
+        emit.({:facts, entity, key, rep.intent, rep.entities, merged.sources, merged.fields})
 
         if is_function(on_chunk, 1),
           do: on_chunk.("\n\n#{entity_label(entity, key, intent)}\n")
@@ -1049,6 +1054,9 @@ defmodule TragarAi.Assist.Engine do
   # from the facts (e.g. amendability from a status), so the model interprets the
   # facts, not just restates them.
   defp phrase_and_create(question, intent, entities, facts, source, context, log) do
+    # Surface the facts to a live UI before phrasing (see harmonize_and_phrase/3).
+    event_sink(context).({:facts, nil, nil, intent, entities, [source], facts})
+
     # `on_chunk` (set only by the live UIs) streams the answer; ticket/quote
     # callers don't pass it, so they get the full answer in one shot.
     {:ok, draft} = CoreAI.phrase(intent, facts, %{question: question}, context[:on_chunk])

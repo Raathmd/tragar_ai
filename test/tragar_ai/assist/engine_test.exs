@@ -115,6 +115,19 @@ defmodule TragarAi.Assist.EngineTest do
     assert i.draft_answer =~ "In transit"
   end
 
+  test "retrieved facts are emitted before the answer is phrased (early surface)" do
+    test_pid = self()
+    context = %{on_event: fn ev -> send(test_pid, {:ev, ev}) end}
+
+    assert {:ok, _i} = Engine.answer("Where is load DIS0124440?", context)
+
+    # A {:facts, …} event carrying the retrieved record is emitted mid-loop, so a
+    # live UI can render facts while the answer is still being phrased.
+    assert_received {:ev, {:facts, _entity, _key, _intent, _entities, _sources, fields}}
+    assert fields["waybill_number"] == "DIS0124440"
+    assert fields["status"] == "In transit"
+  end
+
   test "agent-supplied waybill is used when the question omits it" do
     assert {:ok, i} =
              Engine.answer("where is my delivery?", %{entities: %{waybill: "DIS0124440"}})
