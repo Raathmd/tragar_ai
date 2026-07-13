@@ -12,7 +12,6 @@ defmodule TragarAiWeb.DashboardLive do
   use TragarAiWeb, :live_view
 
   alias TragarAi.Assist
-  alias TragarAi.CoreAI
   alias TragarAi.Dashboard
   alias TragarAi.QuoteIntake
 
@@ -42,14 +41,6 @@ defmodule TragarAiWeb.DashboardLive do
   @impl true
   def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
 
-  # Switch the model "Reason freely" uses; switching to fast immediately unloads
-  # the deep model from memory. Broadcasts so other monitors update too.
-  def handle_event("set_reasoning", %{"model" => model}, socket) do
-    CoreAI.set_reasoning(model)
-    Dashboard.broadcast()
-    {:noreply, load(socket)}
-  end
-
   # ── Data ──────────────────────────────────────────────────────────────────────
 
   defp load(socket) do
@@ -60,7 +51,6 @@ defmodule TragarAiWeb.DashboardLive do
     assign(socket,
       tickets: tickets,
       quotes: quotes,
-      reasoning: CoreAI.reasoning(),
       metrics: metrics(interactions, tickets, quotes),
       updated_at: DateTime.utc_now()
     )
@@ -153,31 +143,6 @@ defmodule TragarAiWeb.DashboardLive do
           </div>
         </div>
       </header>
-
-      <%!-- Reasoning model control: Fast (default) ↔ Deep (on "reason freely") --%>
-      <div
-        :if={@reasoning.deep}
-        class="flex items-center gap-2 text-xs bg-base-200 rounded-lg px-3 py-2 w-fit"
-      >
-        <span class="text-base-content/60">“Reason freely” model:</span>
-        <div class="join">
-          <button
-            class={"btn btn-xs join-item " <> reason_btn(@reasoning, @reasoning.fast)}
-            phx-click="set_reasoning"
-            phx-value-model={@reasoning.fast}
-          >
-            Fast · {@reasoning.fast}
-          </button>
-          <button
-            class={"btn btn-xs join-item " <> reason_btn(@reasoning, @reasoning.deep)}
-            phx-click="set_reasoning"
-            phx-value-model={@reasoning.deep}
-          >
-            Deep · {@reasoning.deep}
-          </button>
-        </div>
-        <span class="text-base-content/40">switching to Fast unloads Deep from memory</span>
-      </div>
 
       <div class="stats stats-vertical sm:stats-horizontal shadow w-full">
         <div class="stat">
@@ -302,9 +267,6 @@ defmodule TragarAiWeb.DashboardLive do
   end
 
   # ── View helpers ──────────────────────────────────────────────────────────────
-
-  defp reason_btn(%{active: active}, model) when active == model, do: "btn-primary"
-  defp reason_btn(_reasoning, _model), do: "btn-ghost"
 
   defp method_label(:sequential), do: "sequential"
   defp method_label(:fanout), do: "fan-out"
