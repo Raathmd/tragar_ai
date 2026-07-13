@@ -33,17 +33,15 @@ defmodule TragarAi.Freight do
   end
 
   @doc """
-  Fetch one quote (with items + sundries) by quote number.
+  Fetch one quote (with items + sundries) by number/obj.
 
-  Standardised on the collection endpoint with a `quoteNumber` esfilter, the same
-  shape as `get_waybill/1`. (FreightWare also accepts `/quotes/{quoteNumber}/` and
-  `/quotes/{quoteObj}/` path forms; we just don't use them.)
+  Uses the DIRECT path resource (`/quotes/{quote}/`), not the `/quotes/` collection
+  search. The collection form needs an account + date window to return anything
+  (an unbounded search times out); a by-id fetch must work with neither, so it
+  goes straight to the resource. Collection/esfilter form is for `search_quotes/1`.
   """
-  def get_quote(quote_number) do
-    filters = [{"quoteNumber", quote_number}]
-    paging = %{paged: true, results_per_page: 1, page_number: 1}
-
-    with {:ok, resp} <- Client.get("/quotes/", filters: filters, paging: paging) do
+  def get_quote(quote) do
+    with {:ok, resp} <- Client.get("/quotes/#{quote}/") do
       {:ok, resp |> Normalize.quotes() |> first("quotes")}
     end
   end
@@ -104,13 +102,23 @@ defmodule TragarAi.Freight do
 
   # ── Waybills & tracking ───────────────────────────────────────────────────────
 
-  @doc "Fetch one waybill (with items) by number."
+  @doc """
+  Fetch one waybill (with items) by number.
+
+  Uses the DIRECT path resource (`/waybills/{waybillNumber}/`), not the `/waybills/`
+  collection search. The collection form needs an account + date window to return
+  anything (an unbounded search times out / returns nothing on the real API), so a
+  bare by-number lookup there silently misses — e.g. a waybill found on the
+  account-scoped waybill tab wouldn't resolve in the assist chat. A by-id fetch
+  must work with no account and no date, so it hits the resource directly. The
+  collection/esfilter form stays in `search_waybills/1`.
+  """
   def get_waybill(waybill_number) do
     filters = [{"waybillNumber", waybill_number}]
     paging = %{paged: true, results_per_page: 1, page_number: 1}
 
     with {:ok, resp} <-
-           Client.get("/waybills/", filters: filters, paging: paging) do
+           Client.get("/waybills/#{waybill_number}/", filters: filters, paging: paging) do
       {:ok, resp |> Normalize.waybills() |> first("waybills")}
     end
   end

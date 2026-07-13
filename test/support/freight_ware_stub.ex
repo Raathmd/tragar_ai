@@ -2,10 +2,11 @@ defmodule TragarAi.FreightWareStub do
   @moduledoc """
   Helpers for `Req.Test` stubs of the Dovetail/FreightWare client.
 
-  `get_waybill/1` and `get_quote/1` fetch by number through the COLLECTION
-  endpoint (`/waybills/`, `/quotes/`) with the id carried in the `esfilters`
-  header — the same URL a search hits — so stubs distinguish a by-number fetch
-  from a search by the header, not the path.
+  `get_waybill/1` and `get_quote/1` fetch by number through the DIRECT path
+  resource (`/waybills/{number}/`, `/quotes/{number}/`), while `search_waybills/1`
+  hits the `/waybills/` collection with an `esfilters` header — so a by-number
+  fetch is distinguished from a search by the URL path (the number in it), and a
+  shipper-reference search by the header.
   """
   import Plug.Conn, only: [get_req_header: 2]
 
@@ -21,15 +22,11 @@ defmodule TragarAi.FreightWareStub do
 
   @doc "True when this request is a by-number waybill fetch for `number`."
   def waybill_number?(conn, number),
-    do:
-      String.ends_with?(conn.request_path, "/waybills/") and
-        esfilters(conn)["waybillNumber"] == number
+    do: String.contains?(conn.request_path, "/waybills/#{number}/")
 
   @doc "True when this request is a by-number quote fetch for `number`."
   def quote_number?(conn, number),
-    do:
-      String.ends_with?(conn.request_path, "/quotes/") and
-        esfilters(conn)["quoteNumber"] == number
+    do: String.contains?(conn.request_path, "/quotes/#{number}/")
 
   @doc "True when this request is an account-scoped shipper-reference waybill search."
   def shipper_search?(conn),
