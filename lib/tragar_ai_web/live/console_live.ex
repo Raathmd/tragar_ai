@@ -41,6 +41,7 @@ defmodule TragarAiWeb.ConsoleLive do
      # ticket sets this to the requester's entitled accounts, scoping like FD.
      |> assign(ticket_accounts: nil)
      |> assign(attachments: [], queued_question: nil)
+     |> assign(distilled: nil, simplifying: false)
      |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
      |> assign(next_msg_id: 0, last_question: nil)
      |> load_history()
@@ -50,9 +51,31 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # ── Prompt (centre) ─────────────────────────────────────────────────────────
 
+  # "Simplify" — don't answer, just show what the model extracts from the current
+  # prompt (ticket text + read attachments): the intents and references it can see.
+  # Makes it obvious when a waybill/quote is buried in noise and not picked up.
+  @impl true
+  def handle_event("ask", %{"op" => "simplify"} = params, socket) do
+    text = String.trim(params["question"] || "")
+    engine_text = text <> attachments_block(socket.assigns.attachments)
+
+    if text == "" do
+      {:noreply,
+       put_flash(socket, :error, "Nothing to simplify — load a ticket or type a request first.")}
+    else
+      {:noreply,
+       socket
+       |> assign(simplifying: true, distilled: nil)
+       |> start_async(:simplify, fn -> TragarAi.CoreAI.interpret(engine_text) end)}
+    end
+  end
+
+  def handle_event("clear_distilled", _params, socket) do
+    {:noreply, assign(socket, distilled: nil)}
+  end
+
   # A chat turn: the AI keeps clarifying (carrying the frame) until it resolves
   # the intent, or the user ends the chat.
-  @impl true
   def handle_event("ask", params, socket) do
     text = String.trim(params["question"] || "")
 
@@ -535,7 +558,25 @@ defmodule TragarAiWeb.ConsoleLive do
           placeholder="Ask Tragar AI — or click a Freshdesk ticket on the left to load it into a prompt…"
         >{@question}</textarea>
         <div class="flex flex-wrap items-center gap-3">
-          <button type="submit" class="btn btn-primary" disabled={@distilling}>Send</button>
+          <button
+            type="submit"
+            name="op"
+            value="send"
+            class="btn btn-primary"
+            disabled={@distilling or @simplifying}
+          >
+            Send
+          </button>
+          <button
+            type="submit"
+            name="op"
+            value="simplify"
+            class="btn btn-outline btn-sm"
+            disabled={@distilling or @simplifying}
+            title="Show the references/intents the model extracts from this prompt"
+          >
+            Simplify
+          </button>
           <button
             :if={@messages != []}
             type="button"
@@ -553,8 +594,35 @@ defmodule TragarAiWeb.ConsoleLive do
           <span :if={@distilling} class="flex items-center gap-2 text-sm text-base-content/60">
             <span class="loading loading-spinner loading-xs"></span> Loading ticket…
           </span>
+          <span :if={@simplifying} class="flex items-center gap-2 text-sm text-base-content/60">
+            <span class="loading loading-spinner loading-xs"></span> Simplifying…
+          </span>
         </div>
       </form>
+
+      <div :if={@distilled} class="rounded-lg border border-info/40 bg-info/5 p-3 space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-medium text-info">Simplified — extracted components</span>
+          <button type="button" phx-click="clear_distilled" class="btn btn-ghost btn-xs">
+            ✕
+          </button>
+        </div>
+
+        <p :if={not @distilled.ok} class="text-xs text-error">Couldn't read the request.</p>
+
+        <p :if={@distilled.ok and @distilled.items == []} class="text-xs text-base-content/70">
+          No references detected — that's why nothing is fetched.
+        </p>
+
+        <ul :if={@distilled.items != []} class="space-y-1">
+          <li :for={it <- @distilled.items} class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="badge badge-sm badge-primary">{it.intent}</span>
+            <span :if={it.entities != ""} class="font-mono">{it.entities}</span>
+            <span :if={it.entities == ""} class="text-base-content/50">no references</span>
+            <span :if={it.scope != ""} class="text-base-content/40">scope {it.scope}</span>
+          </li>
+        </ul>
+      </div>
 
       <div :if={@messages != []} class="space-y-2 max-h-[40vh] overflow-y-auto">
         <div :for={m <- @messages} class={chat_row(m.role)}>
@@ -1660,6 +1728,20 @@ defmodule TragarAiWeb.ConsoleLive do
      |> maybe_run_queued()}
   end
 
+  # "Simplify" finished — show the extracted components (intents + references).
+  def handle_async(:simplify, {:ok, result}, socket) do
+    {:noreply, assign(socket, simplifying: false, distilled: summarize_intents(result))}
+  end
+
+  def handle_async(:simplify, {:exit, reason}, socket) do
+    Logger.error("[console] simplify crashed: #{inspect(reason)}")
+
+    {:noreply,
+     socket
+     |> assign(simplifying: false)
+     |> put_flash(:error, "Couldn't simplify that request.")}
+  end
+
   @impl true
   def handle_info({:chunk, id, chunk}, socket) do
     messages =
@@ -2191,19 +2273,61 @@ defmodule TragarAiWeb.ConsoleLive do
     assign(socket, attachments: attachments)
   end
 
-  # Once nothing is in flight, run a prompt that was queued waiting on extraction.
+  # Once nothing is in flight, either run a prompt that was queued waiting on
+  # extraction, or (nothing queued) fold the read attachment text into the visible
+  # prompt so the agent sees exactly what the model will read.
   defp maybe_run_queued(socket) do
     cond do
       extracting?(socket.assigns.attachments) -> socket
       q = socket.assigns[:queued_question] -> converse(assign(socket, queued_question: nil), q)
-      true -> socket
+      true -> fold_attachments_into_prompt(socket)
     end
   end
 
-  # The extracted attachment text appended to the model's input (not shown in the
-  # chat). Only files that were read contribute; each is labelled by filename.
+  # Append each newly-read attachment's text to the end of the prompt textarea
+  # (once each — folded attachments are marked and then skipped by
+  # attachments_block/1, so the text is never sent twice). This surfaces the
+  # extracted contents inline so the agent can see why a reference is/isn't picked
+  # up, and edit it before sending.
+  defp fold_attachments_into_prompt(socket) do
+    pending =
+      for a <- socket.assigns.attachments,
+          a.status == :done,
+          is_binary(a.text) and a.text != "",
+          not Map.get(a, :folded, false),
+          do: a
+
+    case pending do
+      [] ->
+        socket
+
+      list ->
+        addition = Enum.map_join(list, "\n\n", fn a -> "--- #{a.name} ---\n#{a.text}" end)
+
+        question =
+          String.trim_trailing(socket.assigns.question) <>
+            "\n\n[Attached documents]\n" <> addition
+
+        folded = MapSet.new(list, & &1.id)
+
+        attachments =
+          Enum.map(socket.assigns.attachments, fn a ->
+            if MapSet.member?(folded, a.id), do: Map.put(a, :folded, true), else: a
+          end)
+
+        assign(socket, question: question, attachments: attachments)
+    end
+  end
+
+  # The extracted attachment text appended to the model's input. Files already
+  # folded into the visible prompt are skipped here so they aren't sent twice.
   defp attachments_block(attachments) do
-    read = for a <- attachments, a.status == :done, is_binary(a.text) and a.text != "", do: a
+    read =
+      for a <- attachments,
+          a.status == :done,
+          not Map.get(a, :folded, false),
+          is_binary(a.text) and a.text != "",
+          do: a
 
     case read do
       [] ->
@@ -2214,6 +2338,29 @@ defmodule TragarAiWeb.ConsoleLive do
         "\n\n[Attached documents]\n#{body}"
     end
   end
+
+  # Turn an interpret/2 result into a compact view of the components the model
+  # extracted — one row per intent with its references. `%{ok:, items:}`.
+  defp summarize_intents({:ok, %{intents: intents}}) when is_list(intents) and intents != [] do
+    items =
+      Enum.map(intents, fn i ->
+        entities =
+          i.entities
+          |> Enum.map(fn {k, v} -> "#{k}: #{v}" end)
+          |> Enum.join(", ")
+
+        %{
+          intent: to_string(i.intent),
+          entities: entities,
+          scope: to_string(Map.get(i, :scope, ""))
+        }
+      end)
+
+    %{ok: true, items: items}
+  end
+
+  defp summarize_intents({:ok, _}), do: %{ok: true, items: []}
+  defp summarize_intents(_), do: %{ok: false, items: []}
 
   defp any_selectable?(attachments),
     do: Enum.any?(attachments, &(&1.selected and selectable?(&1)))
