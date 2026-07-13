@@ -41,7 +41,7 @@ defmodule TragarAiWeb.ConsoleLive do
      # ticket sets this to the requester's entitled accounts, scoping like FD.
      |> assign(ticket_accounts: nil)
      |> assign(attachments: [], queued_question: nil)
-     |> assign(distilled: nil, simplifying: false)
+     |> assign(pre_simplify: nil, simplifying: false)
      |> assign(ticket_status: "open", ticket_agent: nil, agents: [])
      |> assign(next_msg_id: 0, last_question: nil)
      |> load_history()
@@ -51,9 +51,9 @@ defmodule TragarAiWeb.ConsoleLive do
 
   # ── Prompt (centre) ─────────────────────────────────────────────────────────
 
-  # "Simplify" — don't answer, just show what the model extracts from the current
-  # prompt (ticket text + read attachments): the intents and references it can see.
-  # Makes it obvious when a waybill/quote is buried in noise and not picked up.
+  # "Simplify" — rewrite the prompt into a concise, accurate restatement of what's
+  # being asked (folding in the read attachment contents, keeping every reference),
+  # and drop it back into the textarea for review. Undo via "restore original".
   @impl true
   def handle_event("ask", %{"op" => "simplify"} = params, socket) do
     text = String.trim(params["question"] || "")
@@ -65,13 +65,17 @@ defmodule TragarAiWeb.ConsoleLive do
     else
       {:noreply,
        socket
-       |> assign(simplifying: true, distilled: nil)
-       |> start_async(:simplify, fn -> TragarAi.CoreAI.interpret(engine_text) end)}
+       |> assign(simplifying: true, pre_simplify: params["question"])
+       |> start_async(:simplify, fn -> TragarAi.CoreAI.summarize(engine_text) end)}
     end
   end
 
-  def handle_event("clear_distilled", _params, socket) do
-    {:noreply, assign(socket, distilled: nil)}
+  def handle_event("restore_original", _params, socket) do
+    {:noreply,
+     assign(socket,
+       question: socket.assigns.pre_simplify || socket.assigns.question,
+       pre_simplify: nil
+     )}
   end
 
   # A chat turn: the AI keeps clarifying (carrying the frame) until it resolves
@@ -332,7 +336,7 @@ defmodule TragarAiWeb.ConsoleLive do
           agent={@agent}
           distilling={@distilling}
           simplifying={@simplifying}
-          distilled={@distilled}
+          pre_simplify={@pre_simplify}
           account_choices={@account_choices}
           attachments={@attachments}
           queued_question={@queued_question}
@@ -602,29 +606,12 @@ defmodule TragarAiWeb.ConsoleLive do
         </div>
       </form>
 
-      <div :if={@distilled} class="rounded-lg border border-info/40 bg-info/5 p-3 space-y-2">
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-xs font-medium text-info">Simplified — extracted components</span>
-          <button type="button" phx-click="clear_distilled" class="btn btn-ghost btn-xs">
-            ✕
-          </button>
-        </div>
-
-        <p :if={not @distilled.ok} class="text-xs text-error">Couldn't read the request.</p>
-
-        <p :if={@distilled.ok and @distilled.items == []} class="text-xs text-base-content/70">
-          No references detected — that's why nothing is fetched.
-        </p>
-
-        <ul :if={@distilled.items != []} class="space-y-1">
-          <li :for={it <- @distilled.items} class="flex flex-wrap items-center gap-2 text-xs">
-            <span class="badge badge-sm badge-primary">{it.intent}</span>
-            <span :if={it.entities != ""} class="font-mono">{it.entities}</span>
-            <span :if={it.entities == ""} class="text-base-content/50">no references</span>
-            <span :if={it.scope != ""} class="text-base-content/40">scope {it.scope}</span>
-          </li>
-        </ul>
-      </div>
+      <p :if={@pre_simplify} class="text-[11px] text-base-content/60 flex items-center gap-1">
+        <span>Request simplified.</span>
+        <button type="button" phx-click="restore_original" class="link link-primary">
+          Restore original
+        </button>
+      </p>
 
       <div :if={@messages != []} class="space-y-2 max-h-[40vh] overflow-y-auto">
         <div :for={m <- @messages} class={chat_row(m.role)}>
@@ -1432,6 +1419,7 @@ defmodule TragarAiWeb.ConsoleLive do
     |> assign(
       messages: socket.assigns.messages ++ [%{role: :user, text: text}, pending],
       question: "",
+      pre_simplify: nil,
       # Remember the prompt so an account pick (or other re-run) can replay it.
       last_question: text,
       next_msg_id: id + 1,
@@ -1730,9 +1718,19 @@ defmodule TragarAiWeb.ConsoleLive do
      |> maybe_run_queued()}
   end
 
-  # "Simplify" finished — show the extracted components (intents + references).
-  def handle_async(:simplify, {:ok, result}, socket) do
-    {:noreply, assign(socket, simplifying: false, distilled: summarize_intents(result))}
+  # "Simplify" finished — drop the restated request into the prompt for review.
+  def handle_async(:simplify, {:ok, {:ok, summary}}, socket) when is_binary(summary) do
+    {:noreply,
+     socket
+     |> assign(simplifying: false, question: String.trim(summary))
+     |> put_flash(:info, "Simplified — review it, then Send. Use “restore original” to undo.")}
+  end
+
+  def handle_async(:simplify, {:ok, _}, socket) do
+    {:noreply,
+     socket
+     |> assign(simplifying: false, pre_simplify: nil)
+     |> put_flash(:error, "Couldn't simplify that request.")}
   end
 
   def handle_async(:simplify, {:exit, reason}, socket) do
@@ -1740,7 +1738,7 @@ defmodule TragarAiWeb.ConsoleLive do
 
     {:noreply,
      socket
-     |> assign(simplifying: false)
+     |> assign(simplifying: false, pre_simplify: nil)
      |> put_flash(:error, "Couldn't simplify that request.")}
   end
 
@@ -2215,6 +2213,7 @@ defmodule TragarAiWeb.ConsoleLive do
       question: "",
       attachments: [],
       queued_question: nil,
+      pre_simplify: nil,
       # A cleared session is a free console again → unscoped until a ticket loads.
       ticket_accounts: nil
     )
@@ -2340,29 +2339,6 @@ defmodule TragarAiWeb.ConsoleLive do
         "\n\n[Attached documents]\n#{body}"
     end
   end
-
-  # Turn an interpret/2 result into a compact view of the components the model
-  # extracted — one row per intent with its references. `%{ok:, items:}`.
-  defp summarize_intents({:ok, %{intents: intents}}) when is_list(intents) and intents != [] do
-    items =
-      Enum.map(intents, fn i ->
-        entities =
-          i.entities
-          |> Enum.map(fn {k, v} -> "#{k}: #{v}" end)
-          |> Enum.join(", ")
-
-        %{
-          intent: to_string(i.intent),
-          entities: entities,
-          scope: to_string(Map.get(i, :scope, ""))
-        }
-      end)
-
-    %{ok: true, items: items}
-  end
-
-  defp summarize_intents({:ok, _}), do: %{ok: true, items: []}
-  defp summarize_intents(_), do: %{ok: false, items: []}
 
   defp any_selectable?(attachments),
     do: Enum.any?(attachments, &(&1.selected and selectable?(&1)))
