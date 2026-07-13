@@ -2340,7 +2340,6 @@ defmodule TragarAiWeb.ConsoleLive do
     end
   end
 
-
   defp any_selectable?(attachments),
     do: Enum.any?(attachments, &(&1.selected and selectable?(&1)))
 
