@@ -26,6 +26,7 @@ defmodule TragarAi.Assist.TicketChat do
 
     context = %{
       intent: nil,
+      channel: :freshdesk,
       accounts: accounts,
       entities: %{ticket_id: ticket_id},
       history: history(opts[:history]),

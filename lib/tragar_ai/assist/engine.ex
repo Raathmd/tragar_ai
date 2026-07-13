@@ -266,7 +266,7 @@ defmodule TragarAi.Assist.Engine do
 
     case result do
       {:ok, facts} ->
-        if out_of_scope?(facts, context) do
+        if deny_out_of_scope?(facts, context) do
           scope_refused(question, intent, entities, context, log ++ [fetch_entry])
         else
           phrase_and_create(
@@ -493,7 +493,7 @@ defmodule TragarAi.Assist.Engine do
 
     case result do
       {:ok, facts} ->
-        if out_of_scope?(facts, context) do
+        if deny_out_of_scope?(facts, context) do
           {:scoped_out, [entry]}
         else
           group = %{
@@ -885,7 +885,8 @@ defmodule TragarAi.Assist.Engine do
   # Several → a `results` list (rendered grouped by the console).
   defp create_surface(question, results, context, tool_log) do
     draft =
-      results |> Enum.map(fn r -> "#{result_label(r)}\n#{r.answer}" end) |> Enum.join("\n\n")
+      (results |> Enum.map(fn r -> "#{result_label(r)}\n#{r.answer}" end) |> Enum.join("\n\n")) <>
+        (scope_note(Enum.map(results, & &1.fields), context) || "")
 
     {facts, source} =
       case results do
@@ -965,7 +966,7 @@ defmodule TragarAi.Assist.Engine do
       Enum.map(triples, fn {r, src, result} -> fetch_entry(src, r.intent, r.entities, result) end)
 
     groups =
-      for {r, src, {:ok, facts}} <- triples, not out_of_scope?(facts, context) do
+      for {r, src, {:ok, facts}} <- triples, not deny_out_of_scope?(facts, context) do
         %{
           intent: r.intent,
           source: src,
@@ -1006,7 +1007,7 @@ defmodule TragarAi.Assist.Engine do
     )
   end
 
-  defp ok_result?({:ok, facts}, context), do: not out_of_scope?(facts, context)
+  defp ok_result?({:ok, facts}, context), do: not deny_out_of_scope?(facts, context)
   defp ok_result?(_, _), do: false
 
   defp event_sink(context) do
@@ -1036,6 +1037,37 @@ defmodule TragarAi.Assist.Engine do
     end
   end
 
+  # Out of scope AND we must ENFORCE it (deny). Freshdesk (and any non-console
+  # channel) denies out-of-scope records; the console instead surfaces the facts
+  # and annotates them (scope_note/2) — the agent is trusted, but is told the
+  # ticket requestor isn't entitled to that account.
+  defp deny_out_of_scope?(facts, context),
+    do: out_of_scope?(facts, context) and context[:channel] != :console
+
+  # A console-only note appended to the answer when a surfaced record is on an
+  # account the ticket requestor isn't entitled to. nil when nothing is out of
+  # scope, or off the console channel.
+  defp scope_note(facts_list, %{channel: :console} = context) do
+    accounts =
+      facts_list
+      |> Enum.filter(&out_of_scope?(&1, context))
+      |> Enum.map(&(is_map(&1) && &1["account_reference"]))
+      |> Enum.reject(&(&1 in [nil, "", false]))
+      |> Enum.uniq()
+
+    case accounts do
+      [] ->
+        nil
+
+      list ->
+        "\n\n⚠ Note: the ticket requestor does NOT have access to account " <>
+          "#{Enum.join(list, ", ")} — this record is on that account. Confirm entitlement " <>
+          "before sharing it with the requestor."
+    end
+  end
+
+  defp scope_note(_facts_list, _context), do: nil
+
   defp scope_refused(question, intent, entities, context, log) do
     fail(
       question,
@@ -1059,7 +1091,8 @@ defmodule TragarAi.Assist.Engine do
 
     # `on_chunk` (set only by the live UIs) streams the answer; ticket/quote
     # callers don't pass it, so they get the full answer in one shot.
-    {:ok, draft} = CoreAI.phrase(intent, facts, %{question: question}, context[:on_chunk])
+    {:ok, phrased} = CoreAI.phrase(intent, facts, %{question: question}, context[:on_chunk])
+    draft = phrased <> (scope_note([facts], context) || "")
     Logger.info("[assist] phrase #{intent} -> #{inspect(draft)}")
 
     phrase_entry =

@@ -1333,6 +1333,7 @@ defmodule TragarAiWeb.ConsoleLive do
     context =
       %{
         agent: blank_to_nil(socket.assigns.agent),
+        channel: :console,
         entities: base,
         intent: frame.intent,
         history: build_history(socket.assigns.messages),
@@ -1429,6 +1430,7 @@ defmodule TragarAiWeb.ConsoleLive do
 
       context = %{
         agent: agent,
+        channel: :console,
         entities: entities,
         intent: intent,
         history: [],

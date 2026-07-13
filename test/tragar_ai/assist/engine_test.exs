@@ -304,19 +304,66 @@ defmodule TragarAi.Assist.EngineTest do
   end
 
   # A single-waybill detail response (as FreightWare's get_waybill returns it).
-  defp waybill_json(number, status) do
-    %{
-      "response" => %{
-        "esWaybills" => %{
-          "Waybills" => [
-            %{
-              "waybillNumber" => number,
-              "statusDescription" => status,
-              "consigneeName" => "Acme"
-            }
-          ]
-        }
-      }
-    }
+  defp waybill_json(number, status, account \\ nil) do
+    waybill =
+      %{"waybillNumber" => number, "statusDescription" => status, "consigneeName" => "Acme"}
+      |> then(fn w -> if account, do: Map.put(w, "accountReference", account), else: w end)
+
+    %{"response" => %{"esWaybills" => %{"Waybills" => [waybill]}}}
+  end
+
+  describe "out-of-scope account (waybill on an account the requestor lacks)" do
+    setup do
+      Req.Test.stub(TragarAi.Dovetail.Client, fn conn ->
+        cond do
+          String.ends_with?(conn.request_path, "/system/auth/login") ->
+            conn
+            |> Plug.Conn.put_resp_header("x-freightware", "tok")
+            |> Req.Test.json(%{"response" => %{}})
+
+          String.contains?(conn.request_path, "/trackAndTrace") ->
+            Req.Test.json(conn, %{"response" => %{"esTrackAndTrace" => %{"TrackAndTrace" => []}}})
+
+          waybill_number?(conn, "DIS0124440") ->
+            # The waybill is on DIS003.
+            Req.Test.json(conn, waybill_json("DIS0124440", "In transit", "DIS003"))
+
+          true ->
+            conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+        end
+      end)
+
+      Req.Test.stub(TragarAi.Vantage.Client, fn conn ->
+        if String.ends_with?(conn.request_path, "/api/auth/login"),
+          do: Req.Test.json(conn, %{"auth_token" => "vt"}),
+          else: Req.Test.json(conn, %{"items" => [], "hasNext" => false})
+      end)
+
+      {:ok, _} = TragarAi.Dovetail.TokenStore.token()
+      :ok
+    end
+
+    test "console surfaces the facts and notes the requestor lacks access" do
+      assert {:ok, i} =
+               Engine.answer("where is DIS0124440?", %{
+                 channel: :console,
+                 accounts: ["OTHER01"]
+               })
+
+      assert i.status == :drafted
+      assert i.facts["waybill_number"] == "DIS0124440"
+      assert i.draft_answer =~ "does NOT have access to account DIS003"
+    end
+
+    test "freshdesk denies it (out of the requester's accounts)" do
+      assert {:ok, i} =
+               Engine.answer("where is DIS0124440?", %{
+                 channel: :freshdesk,
+                 accounts: ["OTHER01"]
+               })
+
+      assert i.status == :failed
+      assert i.error == "out_of_scope"
+    end
   end
 end
