@@ -320,19 +320,23 @@ defmodule TragarAi.CoreAI do
     cfg = config()
     mode = mode()
     base = Keyword.get(cfg, :base_url)
-    model = Keyword.get(cfg, :model)
 
-    {provider, label} =
+    # For real providers, reflect the *active* runtime model (settings-switchable),
+    # not just the configured default. Stub mode has no model.
+    {provider, label, model} =
       case mode do
         :ollama ->
-          {"Ollama", "#{model || "qwen3:14b"} · Ollama (→ stub fallback)"}
+          m = ollama_model()
+          {"Ollama", "#{m} · Ollama (→ stub fallback)", m}
 
         :http ->
+          m = ollama_model()
           prov = if base && String.contains?(base, "11434"), do: "Ollama", else: "sidecar"
-          {prov, "#{model || "local model"} · #{prov}"}
+          {prov, "#{m} · #{prov}", m}
 
         _ ->
-          {"in-process", model || "Core AI stub (rule-based)"}
+          m = Keyword.get(cfg, :model)
+          {"in-process", m || "Core AI stub (rule-based)", m}
       end
 
     %{mode: mode, label: label, model: model, provider: provider, base_url: base}
