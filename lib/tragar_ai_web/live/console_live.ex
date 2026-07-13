@@ -30,7 +30,7 @@ defmodule TragarAiWeb.ConsoleLive do
      socket
      |> assign(question: "", agent: "")
      |> assign(messages: [], frame: %{intent: nil, entities: %{}})
-     |> assign(interaction: nil, last_runtime: nil)
+     |> assign(interaction: nil, last_runtime: nil, live_facts: [])
      |> assign(model: TragarAi.CoreAI.info())
      |> assign(right_tab: "log", detail: nil, detail_title: nil)
      |> assign(search_results: [], search_meta: nil)
@@ -622,7 +622,12 @@ defmodule TragarAiWeb.ConsoleLive do
         class="rounded-lg border border-base-300 p-4 space-y-4"
       >
         <div class="flex flex-wrap items-center gap-2 text-sm">
-          <span class={"badge " <> outcome_class(@interaction)}>{outcome_label(@interaction)}</span>
+          <span :if={provisional?(@interaction)} class="badge badge-ghost gap-1">
+            <span class="loading loading-spinner loading-xs"></span> Retrieving…
+          </span>
+          <span :if={not provisional?(@interaction)} class={"badge " <> outcome_class(@interaction)}>
+            {outcome_label(@interaction)}
+          </span>
           <span :if={show_intent?(@interaction)} class="badge badge-ghost">
             {@interaction.intent}
           </span>
@@ -1356,7 +1361,11 @@ defmodule TragarAiWeb.ConsoleLive do
       next_msg_id: id + 1,
       right_tab: "log",
       # Cleared now; set from the timed run below so it reflects THIS request only.
-      last_runtime: nil
+      last_runtime: nil,
+      # Clear the prior result; facts stream in via {:facts,…} before the answer
+      # finishes, repopulating the resource panel as they're retrieved.
+      interaction: nil,
+      live_facts: []
     )
     |> start_async({:converse, id}, fn ->
       strategy = TragarAi.Assist.SearchStrategy.get()
@@ -1487,6 +1496,8 @@ defmodule TragarAiWeb.ConsoleLive do
         # Keep the interaction so its source details/fields stay available.
         interaction: interaction,
         last_runtime: timing,
+        # The real interaction supersedes the provisional facts view.
+        live_facts: [],
         right_tab: "log"
       )
       |> load_history()
@@ -1658,6 +1669,23 @@ defmodule TragarAiWeb.ConsoleLive do
     do: {:noreply, update_attachment(socket, id, %{status: stage})}
 
   # Live per-source progress for a multi-lookup turn (concurrent gather).
+  # Facts were retrieved (before the answer finishes phrasing) — surface them in
+  # the resource panel now via a provisional interaction, replaced by the real one
+  # when the turn completes.
+  def handle_info({:event, _id, {:facts, entity, key, intent, entities, sources, fields}}, socket) do
+    view = %{
+      entity: entity,
+      key: key,
+      intent: intent,
+      entities: entities,
+      sources: sources,
+      fields: fields
+    }
+
+    live = socket.assigns.live_facts ++ [view]
+    {:noreply, assign(socket, live_facts: live, interaction: provisional_interaction(live))}
+  end
+
   def handle_info({:event, id, {:source_started, intent, source, entities}}, socket) do
     step = %{
       key: ev_key(intent, entities),
@@ -2019,6 +2047,59 @@ defmodule TragarAiWeb.ConsoleLive do
   # Nil-guard via a function call so the type-checker doesn't constant-fold the
   # `:if` (the assign starts as nil, so the runtime guard is required).
   defp present?(v), do: not is_nil(v)
+
+  defp provisional?(%{provisional: true}), do: true
+  defp provisional?(_), do: false
+
+  # An interaction-shaped map built from facts emitted mid-loop, so the resource
+  # panel renders retrieved facts while the answer is still phrasing. Replaced by
+  # the real interaction on completion.
+  defp provisional_interaction(views) do
+    base = %{
+      id: nil,
+      status: :retrieving,
+      draft_answer: nil,
+      error: nil,
+      agent: nil,
+      tool_log: [],
+      ticket_id: nil,
+      duration_ms: nil,
+      search_strategy: nil,
+      inserted_at: nil,
+      provisional: true
+    }
+
+    case views do
+      [one] ->
+        Map.merge(base, %{
+          facts: one.fields,
+          source: Enum.join(one.sources, ", "),
+          intent: to_string(one.intent),
+          entities: str_keys(one.entities)
+        })
+
+      many ->
+        Map.merge(base, %{
+          facts: %{
+            "results" =>
+              Enum.map(many, fn v ->
+                %{
+                  "facts" => v.fields,
+                  "entities" => str_keys(v.entities),
+                  "intent" => to_string(v.intent),
+                  "answer" => nil
+                }
+              end)
+          },
+          source: many |> Enum.flat_map(& &1.sources) |> Enum.uniq() |> Enum.join(", "),
+          intent: many |> Enum.map(&to_string(&1.intent)) |> Enum.uniq() |> Enum.join(", "),
+          entities: many |> Enum.flat_map(&Map.to_list(&1.entities)) |> Map.new() |> str_keys()
+        })
+    end
+  end
+
+  defp str_keys(m) when is_map(m), do: Map.new(m, fn {k, v} -> {to_string(k), v} end)
+  defp str_keys(other), do: other
 
   defp group_by_source(rows), do: rows |> Enum.group_by(& &1["source"]) |> Enum.to_list()
 
