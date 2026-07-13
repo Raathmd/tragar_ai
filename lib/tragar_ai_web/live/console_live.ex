@@ -331,6 +331,8 @@ defmodule TragarAiWeb.ConsoleLive do
           question={@question}
           agent={@agent}
           distilling={@distilling}
+          simplifying={@simplifying}
+          distilled={@distilled}
           account_choices={@account_choices}
           attachments={@attachments}
           queued_question={@queued_question}
