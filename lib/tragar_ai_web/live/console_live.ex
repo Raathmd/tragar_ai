@@ -56,7 +56,12 @@ defmodule TragarAiWeb.ConsoleLive do
   def handle_event("ask", params, socket) do
     text = String.trim(params["question"] || "")
 
-    socket = assign(socket, agent: params["agent"] || socket.assigns.agent)
+    # Refresh the model badge so a settings switch shows up without a page reload.
+    socket =
+      assign(socket,
+        agent: params["agent"] || socket.assigns.agent,
+        model: TragarAi.CoreAI.info()
+      )
 
     cond do
       text == "" ->
