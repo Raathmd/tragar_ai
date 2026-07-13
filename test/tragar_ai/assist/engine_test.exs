@@ -328,6 +328,22 @@ defmodule TragarAi.Assist.EngineTest do
             # The waybill is on DIS003.
             Req.Test.json(conn, waybill_json("DIS0124440", "In transit", "DIS003"))
 
+          quote_number?(conn, "700012") ->
+            # The quote is on DIS003.
+            Req.Test.json(conn, %{
+              "response" => %{
+                "esQuotes" => %{
+                  "Quotes" => [
+                    %{
+                      "quoteNumber" => "700012",
+                      "statusDescription" => "Open",
+                      "accountReference" => "DIS003"
+                    }
+                  ]
+                }
+              }
+            })
+
           true ->
             conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
         end
@@ -364,6 +380,43 @@ defmodule TragarAi.Assist.EngineTest do
 
       assert i.status == :failed
       assert i.error == "out_of_scope"
+    end
+
+    test "the same scope check applies to a quote: console notes, freshdesk denies" do
+      # Console: surface + note.
+      assert {:ok, console} =
+               Engine.answer("show me quote 700012", %{channel: :console, accounts: ["OTHER01"]})
+
+      assert console.status == :drafted
+      assert console.facts["quote_number"] == "700012"
+      assert console.draft_answer =~ "does NOT have access to account DIS003"
+
+      # Freshdesk: not surfaced.
+      assert {:ok, fd} =
+               Engine.answer("show me quote 700012", %{channel: :freshdesk, accounts: ["OTHER01"]})
+
+      assert fd.status == :failed
+      refute (fd.facts["quote_number"] || "") == "700012"
+    end
+
+    test "fan-out also denies for freshdesk and notes for console" do
+      original = Application.get_env(:tragar_ai, :search_strategy)
+      Application.put_env(:tragar_ai, :search_strategy, :fanout)
+      on_exit(fn -> Application.put_env(:tragar_ai, :search_strategy, original) end)
+
+      assert {:ok, console} =
+               Engine.answer("where is DIS0124440?", %{channel: :console, accounts: ["OTHER01"]})
+
+      assert console.status == :drafted
+      assert console.draft_answer =~ "does NOT have access to account DIS003"
+
+      assert {:ok, fd} =
+               Engine.answer("where is DIS0124440?", %{channel: :freshdesk, accounts: ["OTHER01"]})
+
+      # Denied — the out-of-scope waybill (and any account-less slice keyed by it)
+      # is not surfaced.
+      assert fd.status == :failed
+      refute (fd.facts["waybill_number"] || "") == "DIS0124440"
     end
   end
 end

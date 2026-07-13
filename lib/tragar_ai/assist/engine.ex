@@ -965,8 +965,21 @@ defmodule TragarAi.Assist.Engine do
     fetch_entries =
       Enum.map(triples, fn {r, src, result} -> fetch_entry(src, r.intent, r.entities, result) end)
 
+    # Scope PER REFERENCE, not per slice: a reference (entity+key) is denied when
+    # ANY of its slices is out of the requester's account scope. So account-less
+    # sources looked up by the same reference — e.g. Vantage route, keyed by the
+    # waybill — are denied together with the out-of-scope waybill, never leaked on
+    # their own. (deny_out_of_scope?/2 is already false on the console channel, so
+    # the console keeps everything and annotates instead.)
+    denied_refs =
+      for {r, _src, {:ok, facts}} <- triples,
+          deny_out_of_scope?(facts, context),
+          into: MapSet.new(),
+          do: {Map.get(r, :entity), Map.get(r, :entity_key)}
+
     groups =
-      for {r, src, {:ok, facts}} <- triples, not deny_out_of_scope?(facts, context) do
+      for {r, src, {:ok, facts}} <- triples,
+          {Map.get(r, :entity), Map.get(r, :entity_key)} not in denied_refs do
         %{
           intent: r.intent,
           source: src,
