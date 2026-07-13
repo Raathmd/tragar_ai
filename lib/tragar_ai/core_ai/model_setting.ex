@@ -13,8 +13,9 @@ defmodule TragarAi.CoreAI.ModelSetting do
   The swap runs in the background; the setting itself applies immediately.
   """
 
-  @model_key {__MODULE__, :active_model}
-  @reasoning_key {__MODULE__, :reasoning_enabled}
+  # Atom app-env keys (Elixir 1.19 deprecates non-atom keys).
+  @model_key :core_ai_active_model
+  @reasoning_key :core_ai_reasoning_enabled
 
   # Selectable chat models, in display order (first = default). `reasoning: true`
   # marks models that support Ollama's `think` field (Qwen3). Add the 30B here if
@@ -92,6 +93,16 @@ defmodule TragarAi.CoreAI.ModelSetting do
   def set_reasoning_enabled(on) when is_boolean(on) do
     Application.put_env(:tragar_ai, @reasoning_key, on)
     {:ok, on}
+  end
+
+  @doc """
+  Clear both runtime overrides, reverting to the configured defaults (the
+  `CORE_AI_MODEL` model and reasoning off). Mainly for test isolation.
+  """
+  def reset do
+    Application.delete_env(:tragar_ai, @model_key)
+    Application.delete_env(:tragar_ai, @reasoning_key)
+    :ok
   end
 
   @doc """

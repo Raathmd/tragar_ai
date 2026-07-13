@@ -8,13 +8,12 @@ defmodule TragarAiWeb.SettingsLiveTest do
 
   setup do
     original = SearchStrategy.get()
-    original_model = ModelSetting.get()
-    original_reasoning = ModelSetting.reasoning_enabled?()
 
     on_exit(fn ->
       SearchStrategy.set(original)
-      ModelSetting.set(original_model)
-      ModelSetting.set_reasoning_enabled(original_reasoning)
+      # Clear the runtime overrides so they don't leak into other test files
+      # (e.g. core_ai_ollama_test, which asserts on the config-derived model).
+      ModelSetting.reset()
     end)
 
     :ok
