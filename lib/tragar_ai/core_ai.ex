@@ -181,54 +181,6 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  @doc """
-  Accurately restate a noisy support message as a concise request, incorporating
-  any extracted attachment contents and keeping every reference (waybill / quote /
-  account / ticket number) verbatim. Drives the console "Simplify" action. Falls
-  back to the original text when qwen is unavailable.
-  """
-  @spec summarize(String.t()) :: {:ok, String.t()}
-  def summarize(text) when is_binary(text) do
-    case mode() do
-      :ollama ->
-        with_fallback(
-          fn -> ollama_summarize(text) end,
-          fn -> {:ok, text} end,
-          "summarize"
-        )
-
-      _ ->
-        {:ok, text}
-    end
-  end
-
-  # Restate the message concisely. Thinking is forced OFF so this stays fast even
-  # when the reasoning toggle is on — it's a mechanical rewrite, not an answer.
-  defp ollama_summarize(text) do
-    [
-      %{role: "system", content: summarize_system_prompt()},
-      %{role: "user", content: text}
-    ]
-    |> ollama_generate(nil, ollama_model(), think: false)
-  end
-
-  defp summarize_system_prompt do
-    """
-    Restate the following support message as a single concise, accurate request —
-    what the customer actually needs. Fold in any relevant detail from attached
-    documents (shown under "[Attached documents]").
-
-    Rules:
-    - Keep EVERY reference number exactly as written: waybill, quote, account,
-      ticket, order numbers. Never drop, alter, or invent one.
-    - Drop greetings, sign-offs, apologies, and narrative that isn't the request.
-    - Do not answer, look anything up, or add information. Output only the
-      rewritten request, in one or two short sentences.
-
-    /no_think
-    """
-  end
-
   # Reason fallback chain: the deep reason model first (thinking on), then the
   # fast local model, before ever using the stub — so a flaky/unavailable 30B
   # degrades to the 14B's answer, not a canned rule-based reply. (Cloud models,
