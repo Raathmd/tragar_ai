@@ -472,7 +472,9 @@ defmodule TragarAi.CoreAI do
   # errors mid-flight, fall back to a normal (non-stream) call so the caller
   # still gets a real model answer rather than the stub.
   defp ollama_generate(messages, on_chunk, model, opts \\ []) do
-    think = Keyword.get(opts, :think, false)
+    # Default thinking to the settings toggle (only fires for reasoning-capable
+    # models like Qwen3); callers that force reasoning still pass `think: true`.
+    think = Keyword.get(opts, :think, TragarAi.CoreAI.ModelSetting.model_thinks?(model))
 
     result =
       if is_function(on_chunk, 1) do
@@ -582,7 +584,9 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  defp ollama_model, do: Keyword.get(config(), :model) || "qwen3:14b"
+  # The active fast model — runtime-switchable from the settings page. Defaults to
+  # the configured CORE_AI_MODEL (then the first listed model) until switched.
+  defp ollama_model, do: TragarAi.CoreAI.ModelSetting.get()
 
   @reason_key {__MODULE__, :active_reason_model}
 
@@ -627,6 +631,25 @@ defmodule TragarAi.CoreAI do
         url: "/api/chat",
         json: %{model: model, messages: [], keep_alive: 0},
         receive_timeout: 10_000
+      )
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  @doc """
+  Warm a model into memory now and keep it resident (`keep_alive: -1`).
+  Best-effort; no-ops unless we're talking to real Ollama.
+  """
+  @spec preload(String.t()) :: :ok
+  def preload(model) when is_binary(model) do
+    if mode() == :ollama do
+      Req.post(req(),
+        url: "/api/chat",
+        json: %{model: model, messages: [], keep_alive: -1},
+        receive_timeout: 60_000
       )
     end
 
