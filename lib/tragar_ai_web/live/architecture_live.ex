@@ -54,7 +54,6 @@ defmodule TragarAiWeb.ArchitectureLive do
       path: "/architecture",
       note: "This page — a live tour of the design."
     },
-    %{name: "Chat", path: "/chat", note: "Plain chat with the local model."},
     %{
       name: "Admin",
       path: "/admin",

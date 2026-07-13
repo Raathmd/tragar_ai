@@ -35,9 +35,6 @@ defmodule TragarAiWeb.Router do
     # Read-only tour of the application's design (systems, surfaces, flows).
     live "/architecture", ArchitectureLive
 
-    # Plain chat with the local AI.
-    live "/chat", ChatLive
-
     # Runtime settings (search pipeline toggle, …).
     live "/settings", SettingsLive
   end

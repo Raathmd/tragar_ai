@@ -75,10 +75,10 @@ defmodule TragarAiWeb.ConsoleLiveTest do
     assert html =~ "Where is parcel DIS0124440"
   end
 
-  test "the console nav links to the dashboard and chat", %{conn: conn} do
+  test "the console nav links to the dashboard and settings", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/console")
     assert view |> element(~s{nav a[href="/"]}) |> has_element?()
-    assert view |> element(~s{nav a[href="/chat"]}) |> has_element?()
+    assert view |> element(~s{nav a[href="/settings"]}) |> has_element?()
   end
 
   test "asking surfaces the fetched facts as a drafted answer", %{conn: conn} do

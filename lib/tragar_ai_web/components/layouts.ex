@@ -29,7 +29,7 @@ defmodule TragarAiWeb.Layouts do
   """
   attr :active, :atom,
     default: nil,
-    doc: "current page — :dashboard | :console | :architecture | :chat"
+    doc: "current page — :dashboard | :console | :architecture | :settings"
 
   def app_nav(assigns) do
     ~H"""
@@ -55,12 +55,6 @@ defmodule TragarAiWeb.Layouts do
         class={["btn btn-sm", (@active == :architecture && "btn-primary") || "btn-ghost"]}
       >
         Architecture
-      </.link>
-      <.link
-        navigate={~p"/chat"}
-        class={["btn btn-sm", (@active == :chat && "btn-primary") || "btn-ghost"]}
-      >
-        Chat
       </.link>
       <.link
         navigate={~p"/settings"}

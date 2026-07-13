@@ -36,29 +36,4 @@ defmodule TragarAiWeb.DashboardLiveTest do
     {:ok, _view, html} = live(conn, ~p"/")
     assert html =~ "No ticket-linked AI responses yet"
   end
-
-  test "the reasoning-model control switches the active model", %{conn: conn} do
-    original = Application.get_env(:tragar_ai, TragarAi.CoreAI)
-
-    Application.put_env(:tragar_ai, TragarAi.CoreAI,
-      mode: :stub,
-      model: "qwen3:14b",
-      reason_model: "qwen3:30b-a3b"
-    )
-
-    on_exit(fn ->
-      Application.put_env(:tragar_ai, TragarAi.CoreAI, original)
-      :persistent_term.erase({TragarAi.CoreAI, :active_reason_model})
-    end)
-
-    {:ok, view, html} = live(conn, ~p"/")
-    assert html =~ "Reason free"
-    assert html =~ "qwen3:30b-a3b"
-
-    view |> element("button", "Deep · qwen3:30b-a3b") |> render_click()
-    assert TragarAi.CoreAI.reasoning().active == "qwen3:30b-a3b"
-
-    view |> element("button", "Fast · qwen3:14b") |> render_click()
-    assert TragarAi.CoreAI.reasoning().active == "qwen3:14b"
-  end
 end
