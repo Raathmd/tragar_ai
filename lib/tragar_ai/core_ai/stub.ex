@@ -13,7 +13,9 @@ defmodule TragarAi.CoreAI.Stub do
   @waybill_re ~r/\b(?:load|waybill|wb|consignment)?\s*#?\s*([A-Z]{2,4}[-]?\d{4,}[A-Z0-9-]*|\d{4,}[A-Z]{0,4})\b/i
   @account_re ~r/\b(?:account|acc|customer)\s*#?\s*([A-Z0-9]{3,})\b/i
   @acc_code_re ~r/\b(ACC\d{3,})\b/i
-  @quote_re ~r/\bquote\s*#?\s*(\d{3,})\b/i
+  # Quote numbers are alphanumeric like waybills — a branch-prefixed form
+  # (JHB-00014504), the numeric quote object id (1184695750), or a plain number.
+  @quote_re ~r/\bquote\s*#?\s*([A-Z]{2,4}-?\d{3,}[A-Z0-9-]*|\d{3,}[A-Z]{0,4})\b/i
 
   @doc false
   def interpret(question, _context \\ %{}) do

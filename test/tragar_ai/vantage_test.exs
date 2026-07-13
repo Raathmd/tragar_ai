@@ -77,6 +77,13 @@ defmodule TragarAi.VantageTest do
              TragarAi.Adapters.Vantage.fetch(:vehicle_tracking, %{registration: "TRA4T012"})
   end
 
+  test "matches the alphanumeric waybill case-insensitively and trimmed" do
+    assert {:ok, slice} = TragarAi.Vantage.find_trip_by_waybill("  jhb-00099980 ")
+    # Matched despite lowercase + whitespace; keyed by the trimmed waybill.
+    assert slice["vehicle"] == "TRA4T012"
+    assert slice["waybill_number"] == "jhb-00099980"
+  end
+
   test "an unknown waybill is not found" do
     assert {:error, :not_found} = TragarAi.Vantage.find_trip_by_waybill("NOPE-999")
   end

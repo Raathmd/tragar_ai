@@ -48,15 +48,22 @@ defmodule TragarAi.Vantage do
 
   @doc "The recent trip whose order matches `waybill`, normalised — or `{:error, :not_found}`."
   def find_trip_by_waybill(waybill, days \\ @default_days) do
-    wb = to_string(waybill)
+    # Waybills are alphanumeric (e.g. DIS0124440); match on the whole identifier,
+    # case-insensitively and trimmed, so casing/whitespace differences between
+    # FreightWare and Vantage don't miss a real trip.
+    wb = normalize_ref(waybill)
 
     with {:ok, trips} <- recent_trips(days) do
-      case Enum.find(trips, fn t -> wb in Normalize.order_numbers(t) end) do
+      case Enum.find(trips, fn t ->
+             Enum.any?(Normalize.order_numbers(t), &(normalize_ref(&1) == wb))
+           end) do
         nil -> {:error, :not_found}
-        trip -> {:ok, Normalize.route_slice(trip, wb)}
+        trip -> {:ok, Normalize.route_slice(trip, String.trim(to_string(waybill)))}
       end
     end
   end
+
+  defp normalize_ref(ref), do: ref |> to_string() |> String.trim() |> String.upcase()
 
   @doc "The recent trip for vehicle `registration` (fleet number), normalised."
   def find_trip_by_vehicle(registration, days \\ @default_days) do
