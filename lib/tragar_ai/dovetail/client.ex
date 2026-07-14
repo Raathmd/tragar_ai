@@ -174,7 +174,10 @@ defmodule TragarAi.Dovetail.Client do
   # FreightWare passes search filters/paging in an `esfilters` HTTP header whose
   # value is a JSON string (capitalised Filters/Paging, camelCase inner keys).
   defp maybe_put_esfilters(req, filters, paging) do
-    if filters in [nil, []] and is_nil(paging) do
+    # `nil` filters → no header. An explicit `[]` still sends `{"Filters": []}` —
+    # some endpoints (e.g. collections/unauthorised) REQUIRE the header even though
+    # they support no filter sub-pattern.
+    if is_nil(filters) and is_nil(paging) do
       req
     else
       payload =

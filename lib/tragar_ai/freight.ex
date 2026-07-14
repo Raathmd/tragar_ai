@@ -161,6 +161,36 @@ defmodule TragarAi.Freight do
     end
   end
 
+  # ── Collections ───────────────────────────────────────────────────────────────
+
+  @doc """
+  Unauthorised collections for the current branch. The endpoint supports no filter
+  sub-pattern but REQUIRES the esfilters header, so we send an empty one (`[]`).
+  """
+  def unauthorised_collections do
+    with {:ok, resp} <- Client.get("/collections/unauthorised", filters: []) do
+      {:ok, Normalize.unauthorised_collections(resp)}
+    end
+  end
+
+  @doc """
+  Outstanding collections — those NOT yet allocated to a collection manifest for
+  the current branch. `params` keys: `route_code`, `driver_reference`,
+  `vehicle_registration` (all optional).
+  """
+  def outstanding_collections(params \\ %{}) do
+    filters =
+      build_filters(params, [
+        {"routeCode", :route_code},
+        {"driverReference", :driver_reference},
+        {"vehicleRegistration", :vehicle_registration}
+      ])
+
+    with {:ok, resp} <- Client.get("/collections/outstanding", filters: filters) do
+      {:ok, Normalize.outstanding_collections(resp)}
+    end
+  end
+
   @doc "Track & trace by reference. `ref_type` is `:waybills` or `:quotes`."
   def track_and_trace(ref_type, reference) do
     with {:ok, resp} <- Client.get("/#{ref_type}/#{reference}/trackAndTrace") do

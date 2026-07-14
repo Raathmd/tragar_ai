@@ -353,6 +353,60 @@ defmodule TragarAi.Freight.Normalize do
   def rates(%{"esRates" => es}), do: es |> array("Rate") |> Enum.map(&rate/1)
   def rates(_), do: []
 
+  # ── Collections ───────────────────────────────────────────────────────────────
+
+  @collection [
+    {"originatingBranch", "originating_branch"},
+    {"collectionReference", "collection_reference"},
+    {"collectionObj", "collection_obj"},
+    {"collectionDate", "collection_date"},
+    {"collectAfter", "collect_after"},
+    {"collectBefore", "collect_before"},
+    {"consignorName", "consignor_name"},
+    {"consignorBuilding", "consignor_building"},
+    {"consignorStreet", "consignor_street"},
+    {"consignorSuburb", "consignor_suburb"},
+    {"consignorCity", "consignor_city"},
+    {"consignorPostalCode", "consignor_postal_code"},
+    {"consigneeName", "consignee_name"},
+    {"consigneeBuilding", "consignee_building"},
+    {"consigneeStreet", "consignee_street"},
+    {"consigneeSuburb", "consignee_suburb"},
+    {"consigneeCity", "consignee_city"},
+    {"consigneePostalCode", "consignee_postal_code"},
+    {"estimatedWaybills", "estimated_waybills"},
+    {"estimatedParcels", "estimated_parcels"},
+    {"routeCode", "route_code"},
+    {"driverReference", "driver_reference"},
+    {"vehicleRegistration", "vehicle_registration"}
+  ]
+
+  @doc "Unauthorised collections → `[%{...}]` (FreightWare casing varies; be lenient)."
+  def unauthorised_collections(resp),
+    do: collections(resp, ["esUnAuthorisedCollections", "esunAuthorisedCollections"])
+
+  @doc "Outstanding (unmanifested) collections → `[%{...}]`."
+  def outstanding_collections(resp),
+    do: collections(resp, ["esManifestCollections", "esManifestCollection"])
+
+  # The `esXxxCollections` object wraps a single array whose key also varies in
+  # casing — take the first list value found under whichever es-key is present.
+  defp collections(resp, es_keys) when is_map(resp) do
+    es_keys
+    |> Enum.find_value(%{}, &Map.get(resp, &1))
+    |> first_list()
+    |> Enum.map(&collection/1)
+  end
+
+  defp collections(_, _), do: []
+
+  defp collection(m), do: take(m, @collection)
+
+  defp first_list(m) when is_map(m),
+    do: Enum.find_value(Map.values(m), [], fn v -> if is_list(v), do: v end)
+
+  defp first_list(_), do: []
+
   def tracking(%{"esTrackAndTrace" => es}),
     do: es |> array("TrackAndTrace") |> Enum.map(&track_event/1)
 

@@ -32,6 +32,9 @@ defmodule TragarAiWeb.Router do
     # Phase 1 — the support-assist agent console.
     live "/console", ConsoleLive
 
+    # Staff view of FreightWare collections (unauthorised + outstanding).
+    live "/collections", CollectionsLive
+
     # Read-only tour of the application's design (systems, surfaces, flows).
     live "/architecture", ArchitectureLive
 
