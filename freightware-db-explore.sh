@@ -65,21 +65,56 @@ echo "== Introspecting schema -> $OUT =="
 
 case "$DB_ENGINE" in
   progress)
-    # Progress OpenEdge. Its SQL catalog is in the SYSPROGRESS schema; user tables
-    # live in the PUB schema. OpenEdge is NOT reachable with psql — it needs one of:
-    #   - sqlexp        (ships with an OpenEdge client install)
-    #   - isql          (unixODBC + the Progress DataDirect OpenEdge ODBC driver)
-    #   - a JDBC client (openedge.jar + Java)
-    # none of which are standard on macOS. Introspection queries, once wired:
-    #   tables : SELECT "_File-Name" FROM PUB."_File" WHERE "_File-Number" > 0;
-    #   columns: SELECT "_File-Name","_Field-Name","_Data-Type" FROM PUB."_Field" f
-    #            JOIN PUB."_File" t ON t.RECID = f."_File-recid";
-    echo
-    echo "Progress OpenEdge selected — credentials saved to $ENV_FILE."
-    echo "OpenEdge needs an OpenEdge SQL client (sqlexp / ODBC isql / JDBC), none of"
-    echo "which ship on macOS by default. Tell me which one you have (or can install)"
-    echo "and I'll finalise the introspection for it. See the comments in this script."
-    exit 0
+    # Progress OpenEdge over JDBC (the DataDirect openedge.jar). Point OE_JDBC_JAR at
+    # the driver (default ./openedge.jar). Java comes from PATH or the Homebrew openjdk.
+    JAR="${OE_JDBC_JAR:-./openedge.jar}"
+    JAVA_BIN="$(command -v java 2>/dev/null || echo /opt/homebrew/opt/openjdk/bin/java)"
+    JAVAC_BIN="$(command -v javac 2>/dev/null || echo /opt/homebrew/opt/openjdk/bin/javac)"
+
+    if [ ! -f "$JAR" ]; then
+      echo "OpenEdge JDBC driver not found at '$JAR'." >&2
+      echo "Copy openedge.jar from your OpenEdge server (\$DLC/java/openedge.jar) here," >&2
+      echo "or set OE_JDBC_JAR=/path/to/openedge.jar, then re-run." >&2
+      exit 1
+    fi
+    "$JAVA_BIN" -version >/dev/null 2>&1 || { echo "No Java runtime (brew install openjdk)." >&2; exit 1; }
+
+    export FREIGHTWARE_DB_HOST="$DB_HOST" FREIGHTWARE_DB_PORT="$DB_PORT" \
+           FREIGHTWARE_DB_NAME="$DB_NAME" FREIGHTWARE_DB_USER="$DB_USER" \
+           FREIGHTWARE_DB_PASSWORD="$DB_PASS"
+
+    WORK="$(mktemp -d)"
+    cat > "$WORK/SchemaDump.java" <<'JAVA'
+import java.sql.*;
+public class SchemaDump {
+  public static void main(String[] a) throws Exception {
+    try { Class.forName("com.ddtek.jdbc.openedge.OpenEdgeDriver"); } catch (Throwable t) {}
+    String h = System.getenv("FREIGHTWARE_DB_HOST"), p = System.getenv("FREIGHTWARE_DB_PORT"),
+           d = System.getenv("FREIGHTWARE_DB_NAME"), u = System.getenv("FREIGHTWARE_DB_USER"),
+           pw = System.getenv("FREIGHTWARE_DB_PASSWORD");
+    String url = "jdbc:datadirect:openedge://" + h + ":" + p + ";databaseName=" + d;
+    try (Connection c = DriverManager.getConnection(url, u, pw)) {
+      DatabaseMetaData m = c.getMetaData();
+      System.out.println("### TABLES (schema.table : type)");
+      try (ResultSet r = m.getTables(null, null, "%", new String[]{"TABLE"})) {
+        while (r.next())
+          System.out.println(r.getString("TABLE_SCHEM") + "." + r.getString("TABLE_NAME")
+            + " : " + r.getString("TABLE_TYPE"));
+      }
+      System.out.println();
+      System.out.println("### COLUMNS (schema.table.column : type)");
+      try (ResultSet r = m.getColumns(null, null, "%", "%")) {
+        while (r.next())
+          System.out.println(r.getString("TABLE_SCHEM") + "." + r.getString("TABLE_NAME")
+            + "." + r.getString("COLUMN_NAME") + " : " + r.getString("TYPE_NAME"));
+      }
+    }
+  }
+}
+JAVA
+    "$JAVAC_BIN" -cp "$JAR" -d "$WORK" "$WORK/SchemaDump.java"
+    "$JAVA_BIN" -cp "$JAR:$WORK" SchemaDump > "$OUT"
+    rm -rf "$WORK"
     ;;
 
   postgres)
