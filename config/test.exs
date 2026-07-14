@@ -70,3 +70,6 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Don't run the FreightWare collections background poller in tests.
+config :tragar_ai, TragarAi.Freight.CollectionsCache, enabled: false
