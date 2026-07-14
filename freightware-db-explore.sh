@@ -21,22 +21,20 @@ set -euo pipefail
 ENV_FILE="${ENV_FILE:-.env}"
 OUT="${OUT:-freightware-schema.txt}"
 
+DEFAULT_HOST="tragar-db.dovetail.co.za"
+DEFAULT_PORT="9007"
+
 echo "== FreightWare replica DB — connection =="
-read -rp "Engine (postgres | mysql | mssql): " DB_ENGINE
-read -rp "Host: " DB_HOST
-read -rp "Port (blank = engine default): " DB_PORT
+read -rp "Engine (progress | postgres | mysql | mssql) [progress]: " DB_ENGINE
+DB_ENGINE="${DB_ENGINE:-progress}"
+read -rp "Host [${DEFAULT_HOST}]: " DB_HOST
+DB_HOST="${DB_HOST:-$DEFAULT_HOST}"
+read -rp "Port [${DEFAULT_PORT}]: " DB_PORT
+DB_PORT="${DB_PORT:-$DEFAULT_PORT}"
 read -rp "Database name: " DB_NAME
 read -rp "User: " DB_USER
 read -rsp "Password: " DB_PASS
 echo
-
-if [ -z "$DB_PORT" ]; then
-  case "$DB_ENGINE" in
-    postgres) DB_PORT=5432 ;;
-    mysql) DB_PORT=3306 ;;
-    mssql) DB_PORT=1433 ;;
-  esac
-fi
 
 # --- store the credentials in .env (replacing any earlier FREIGHTWARE_DB_* block) ---
 touch "$ENV_FILE"
@@ -62,6 +60,24 @@ need() {
 echo "== Introspecting schema -> $OUT =="
 
 case "$DB_ENGINE" in
+  progress)
+    # Progress OpenEdge. Its SQL catalog is in the SYSPROGRESS schema; user tables
+    # live in the PUB schema. OpenEdge is NOT reachable with psql — it needs one of:
+    #   - sqlexp        (ships with an OpenEdge client install)
+    #   - isql          (unixODBC + the Progress DataDirect OpenEdge ODBC driver)
+    #   - a JDBC client (openedge.jar + Java)
+    # none of which are standard on macOS. Introspection queries, once wired:
+    #   tables : SELECT "_File-Name" FROM PUB."_File" WHERE "_File-Number" > 0;
+    #   columns: SELECT "_File-Name","_Field-Name","_Data-Type" FROM PUB."_Field" f
+    #            JOIN PUB."_File" t ON t.RECID = f."_File-recid";
+    echo
+    echo "Progress OpenEdge selected — credentials saved to $ENV_FILE."
+    echo "OpenEdge needs an OpenEdge SQL client (sqlexp / ODBC isql / JDBC), none of"
+    echo "which ship on macOS by default. Tell me which one you have (or can install)"
+    echo "and I'll finalise the introspection for it. See the comments in this script."
+    exit 0
+    ;;
+
   postgres)
     need psql
     export PGPASSWORD="$DB_PASS"
