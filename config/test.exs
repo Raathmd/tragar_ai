@@ -73,3 +73,6 @@ config :phoenix,
 
 # Don't run the FreightWare collections background poller in tests.
 config :tragar_ai, TragarAi.Freight.CollectionsCache, enabled: false
+
+# Short login-failure cooldown so TokenStore tests don't sleep.
+config :tragar_ai, TragarAi.Dovetail.TokenStore, cooldown_ms: 200
