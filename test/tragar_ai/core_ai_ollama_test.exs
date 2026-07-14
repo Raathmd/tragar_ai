@@ -247,6 +247,31 @@ defmodule TragarAi.CoreAIOllamaTest do
     refute reason_sys =~ "/no_think"
   end
 
+  test "phrase forces think OFF on Qwen3; only reason sends think: true" do
+    parent = self()
+
+    Application.put_env(:tragar_ai, CoreAI,
+      mode: :ollama,
+      model: "qwen3:14b",
+      reason_model: "qwen3:30b-a3b",
+      base_url: "http://ollama.test",
+      req_options: [
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          d = Jason.decode!(body)
+          send(parent, {:think, d["model"], d["think"]})
+          Req.Test.json(conn, %{"message" => %{"content" => "ok"}})
+        end
+      ]
+    )
+
+    CoreAI.phrase(:load_status, %{"status" => "OND"})
+    assert_received {:think, "qwen3:14b", false}
+
+    CoreAI.reason("why is the sky blue?")
+    assert_received {:think, "qwen3:30b-a3b", true}
+  end
+
   test "info/0 reports the Ollama provider and the fallback" do
     configure(fn conn -> Req.Test.json(conn, %{}) end)
     info = CoreAI.info()
