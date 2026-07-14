@@ -76,4 +76,30 @@ defmodule TragarAi.Freight.NormalizeTest do
     assert %{"quote_obj" => "Q1", "quote_number" => "Q1"} =
              Normalize.quote_created(%{"quoteObj" => "Q1"})
   end
+
+  test "branches: extracts codes/names, ignores Paging" do
+    resp = %{
+      "esBranches" => %{
+        "Branches" => [
+          %{
+            "branchCode" => "JHB",
+            "branchName" => "JOHANNESBURG",
+            "organisationCode" => "Tragar",
+            "organisationName" => "Tragar"
+          }
+        ],
+        "Paging" => []
+      }
+    }
+
+    assert [b] = Normalize.branches(resp)
+    assert b["branch_code"] == "JHB"
+    assert b["branch_name"] == "JOHANNESBURG"
+    assert b["organisation_code"] == "Tragar"
+  end
+
+  test "branches: [] when the wrapper is missing" do
+    assert Normalize.branches(%{}) == []
+  end
+
 end

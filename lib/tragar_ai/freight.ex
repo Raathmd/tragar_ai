@@ -219,6 +219,20 @@ defmodule TragarAi.Freight do
     Date.new!(year, month, day)
   end
 
+  @doc """
+  Branches the FreightWare integration user may log into — i.e. every branch that
+  belongs to the account we integrate with. Returns
+  `{:ok, [%{"branch_code" => ..., "branch_name" => ...}]}`. The session token
+  authorises the call; the username in the path just identifies the user.
+  """
+  def user_branches do
+    username = Client.config()[:username] || ""
+
+    with {:ok, resp} <- Client.get("/system/auth/login/#{URI.encode(username)}/branches") do
+      {:ok, Normalize.branches(resp)}
+    end
+  end
+
   @doc "Track & trace by reference. `ref_type` is `:waybills` or `:quotes`."
   def track_and_trace(ref_type, reference) do
     with {:ok, resp} <- Client.get("/#{ref_type}/#{reference}/trackAndTrace") do

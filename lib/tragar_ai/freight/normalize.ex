@@ -402,6 +402,19 @@ defmodule TragarAi.Freight.Normalize do
 
   defp collection(m), do: take(m, @collection)
 
+  @branch [
+    {"branchCode", "branch_code"},
+    {"branchName", "branch_name"},
+    {"organisationCode", "organisation_code"},
+    {"organisationName", "organisation_name"}
+  ]
+
+  @doc "Branches a user may log into → `[%{branch_code, branch_name, ...}]`."
+  def branches(%{"esBranches" => es}), do: es |> first_list() |> Enum.map(&branch/1)
+  def branches(_), do: []
+
+  defp branch(m), do: take(m, @branch)
+
   defp first_list(m) when is_map(m),
     do: Enum.find_value(Map.values(m), [], fn v -> if is_list(v), do: v end)
 

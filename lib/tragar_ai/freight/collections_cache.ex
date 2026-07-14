@@ -62,9 +62,23 @@ defmodule TragarAi.Freight.CollectionsCache do
     {:noreply, kick(state)}
   end
 
-  def handle_info({:refreshed, data}, state) do
-    {:noreply, %{state | data: data, refreshing?: false}}
+  def handle_info({:refreshed, fresh}, state) do
+    {:noreply, %{state | data: merge_good(state.data, fresh), refreshing?: false}}
   end
+
+  # Keep the last good result per key when a refresh returns an error, so a
+  # transient FreightWare 500/timeout doesn't blank the dashboard.
+  defp merge_good(nil, fresh), do: fresh
+
+  defp merge_good(old, fresh) do
+    %{
+      unauthorised: keep_good(old.unauthorised, fresh.unauthorised),
+      outstanding: keep_good(old.outstanding, fresh.outstanding)
+    }
+  end
+
+  defp keep_good(_old, {:ok, _} = fresh), do: fresh
+  defp keep_good(old, _error), do: old
 
   # Fetch off the GenServer (it's ~15s) so get/0 stays instant; skip if one is
   # already in flight. Always reports back so `refreshing?` can't get stuck.
