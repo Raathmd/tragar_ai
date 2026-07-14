@@ -23,6 +23,8 @@ OUT="${OUT:-freightware-schema.txt}"
 
 DEFAULT_HOST="tragar-db.dovetail.co.za"
 DEFAULT_PORT="9007"
+DEFAULT_DB="fwdb"          # SQL db name; physical DB is "Freightware" (case-sensitive; -mdbg:Freightware)
+DEFAULT_USER="fwsqllive"
 
 echo "== FreightWare replica DB — connection =="
 read -rp "Engine (progress | postgres | mysql | mssql) [progress]: " DB_ENGINE
@@ -31,8 +33,10 @@ read -rp "Host [${DEFAULT_HOST}]: " DB_HOST
 DB_HOST="${DB_HOST:-$DEFAULT_HOST}"
 read -rp "Port [${DEFAULT_PORT}]: " DB_PORT
 DB_PORT="${DB_PORT:-$DEFAULT_PORT}"
-read -rp "Database name: " DB_NAME
-read -rp "User: " DB_USER
+read -rp "Database name [${DEFAULT_DB}]: " DB_NAME
+DB_NAME="${DB_NAME:-$DEFAULT_DB}"
+read -rp "User [${DEFAULT_USER}]: " DB_USER
+DB_USER="${DB_USER:-$DEFAULT_USER}"
 read -rsp "Password: " DB_PASS
 echo
 
