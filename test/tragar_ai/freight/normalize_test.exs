@@ -101,5 +101,4 @@ defmodule TragarAi.Freight.NormalizeTest do
   test "branches: [] when the wrapper is missing" do
     assert Normalize.branches(%{}) == []
   end
-
 end
