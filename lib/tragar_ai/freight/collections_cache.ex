@@ -29,8 +29,14 @@ defmodule TragarAi.Freight.CollectionsCache do
   @doc """
   The latest cached `%{unauthorised: ..., outstanding: ...}` (each a `Freight`
   result tuple), served instantly. Returns empty lists until the first fetch lands.
+  When the background poller is disabled (test), fetches live so callers still get
+  real data.
   """
-  def get, do: GenServer.call(__MODULE__, :get)
+  def get do
+    if enabled?(), do: GenServer.call(__MODULE__, :get), else: fetch()
+  end
+
+  defp enabled?, do: Application.get_env(:tragar_ai, __MODULE__, [])[:enabled] != false
 
   @doc "Force an out-of-band background refresh now (the manual ↻)."
   def refresh, do: GenServer.cast(__MODULE__, :refresh)
@@ -38,10 +44,7 @@ defmodule TragarAi.Freight.CollectionsCache do
   @impl true
   def init(_) do
     # Skip the background poll in test (no live FreightWare); prod/dev refresh.
-    if Application.get_env(:tragar_ai, __MODULE__, [])[:enabled] != false do
-      send(self(), :tick)
-    end
-
+    if enabled?(), do: send(self(), :tick)
     {:ok, %{data: nil, refreshing?: false}}
   end
 
@@ -73,10 +76,7 @@ defmodule TragarAi.Freight.CollectionsCache do
     Task.start(fn ->
       data =
         try do
-          %{
-            unauthorised: Freight.unauthorised_collections(),
-            outstanding: Freight.outstanding_collections()
-          }
+          fetch()
         rescue
           e ->
             Logger.error("[collections_cache] refresh crashed: #{inspect(e)}")
@@ -87,5 +87,12 @@ defmodule TragarAi.Freight.CollectionsCache do
     end)
 
     %{state | refreshing?: true}
+  end
+
+  defp fetch do
+    %{
+      unauthorised: Freight.unauthorised_collections(),
+      outstanding: Freight.outstanding_collections()
+    }
   end
 end
