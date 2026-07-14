@@ -11,14 +11,11 @@ defmodule TragarAiWeb.CollectionsLive do
 
   alias TragarAi.Freight
 
-  # Poll fast during core operating hours, slowly overnight. South Africa is a
-  # fixed UTC+2 (no DST). Core hours: 05:00–20:00 SAST → every 10s; otherwise
-  # once an hour.
-  @sast_offset_hours 2
-  @core_start_hour 5
-  @core_end_hour 20
-  @core_poll_ms 10_000
-  @offpeak_poll_ms 60 * 60 * 1000
+  # Auto-refresh interval, adjustable live from the header. Defaults to 1 minute —
+  # the FreightWare collections fetch is heavy (~15s for the full branch set), so
+  # polling faster than that just piles requests up.
+  @default_poll_ms 60_000
+  @poll_options [{"30s", 30_000}, {"1m", 60_000}, {"2m", 120_000}, {"5m", 300_000}, {"Off", 0}]
 
   # Age thresholds (seconds) for the open-duration highlight.
   @amber_after 30 * 60
@@ -38,26 +35,31 @@ defmodule TragarAiWeb.CollectionsLive do
         new_keys: MapSet.new(),
         now: DateTime.utc_now(),
         updated_at: nil,
-        loading: true
+        loading: true,
+        poll_ms: @default_poll_ms,
+        poll_timer: nil
       )
 
     if connected?(socket) do
-      Process.send_after(self(), :poll, poll_ms())
-      {:ok, start_load(socket)}
+      {:ok, socket |> start_load() |> schedule_poll()}
     else
       {:ok, socket}
     end
   end
 
-  # Re-poll FreightWare every 10s.
+  # Re-poll FreightWare on the current interval.
   @impl true
   def handle_info(:poll, socket) do
-    Process.send_after(self(), :poll, poll_ms())
-    {:noreply, start_load(socket)}
+    {:noreply, socket |> start_load() |> schedule_poll()}
   end
 
   @impl true
   def handle_event("refresh", _params, socket), do: {:noreply, start_load(socket)}
+
+  # Live interval change from the header select.
+  def handle_event("set_poll", %{"ms" => ms}, socket) do
+    {:noreply, socket |> assign(poll_ms: String.to_integer(ms)) |> schedule_poll()}
+  end
 
   @impl true
   def handle_async(:collections, {:ok, %{unauthorised: unauth, outstanding: out}}, socket) do
@@ -102,14 +104,25 @@ defmodule TragarAiWeb.CollectionsLive do
     end)
   end
 
-  # 10s during core SAST hours, hourly overnight.
-  defp poll_ms do
-    hour = rem(DateTime.utc_now().hour + @sast_offset_hours, 24)
+  # (Re)arm the auto-refresh timer for the current interval, cancelling any pending
+  # one first so an interval change takes effect immediately. `Off` (0) stops
+  # auto-refresh — the manual ↻ button still works.
+  defp schedule_poll(socket) do
+    if ref = socket.assigns.poll_timer, do: Process.cancel_timer(ref)
 
-    if hour >= @core_start_hour and hour < @core_end_hour,
-      do: @core_poll_ms,
-      else: @offpeak_poll_ms
+    ref =
+      case socket.assigns.poll_ms do
+        ms when is_integer(ms) and ms > 0 -> Process.send_after(self(), :poll, ms)
+        _ -> nil
+      end
+
+    assign(socket, poll_timer: ref)
   end
+
+  defp poll_options, do: @poll_options
+
+  defp poll_label(0), do: "auto-refresh off"
+  defp poll_label(_), do: "live"
 
   defp ok_list({:ok, l}) when is_list(l), do: l
   defp ok_list(_), do: []
@@ -199,12 +212,26 @@ defmodule TragarAiWeb.CollectionsLive do
             and new ones flash.
           </p>
         </div>
-        <div class="text-right shrink-0">
-          <button class="btn btn-sm btn-ghost" phx-click="refresh" disabled={@loading}>
-            <span :if={@loading} class="loading loading-spinner loading-xs"></span> ↻ Refresh
-          </button>
+        <div class="shrink-0 space-y-1 text-right">
+          <div class="flex items-center justify-end gap-2">
+            <span class="text-[11px] text-base-content/50">Auto-refresh</span>
+            <form phx-change="set_poll">
+              <select name="ms" class="select select-xs select-bordered">
+                <option
+                  :for={{label, ms} <- poll_options()}
+                  value={ms}
+                  selected={@poll_ms == ms}
+                >
+                  {label}
+                </option>
+              </select>
+            </form>
+            <button class="btn btn-sm btn-ghost" phx-click="refresh" disabled={@loading}>
+              <span :if={@loading} class="loading loading-spinner loading-xs"></span> ↻ Refresh
+            </button>
+          </div>
           <div :if={@updated_at} class="text-[11px] text-base-content/50">
-            live · updated {duration(DateTime.diff(@now, @updated_at, :second))} ago
+            {poll_label(@poll_ms)} · {duration(DateTime.diff(@now, @updated_at, :second))} ago
           </div>
         </div>
       </header>
