@@ -169,7 +169,7 @@ defmodule TragarAi.Freight do
   """
   def unauthorised_collections do
     with {:ok, resp} <- Client.get("/collections/unauthorised", filters: []) do
-      {:ok, Normalize.unauthorised_collections(resp)}
+      {:ok, resp |> Normalize.unauthorised_collections() |> recent_collections()}
     end
   end
 
@@ -187,8 +187,36 @@ defmodule TragarAi.Freight do
       ])
 
     with {:ok, resp} <- Client.get("/collections/outstanding", filters: filters) do
-      {:ok, Normalize.outstanding_collections(resp)}
+      {:ok, resp |> Normalize.outstanding_collections() |> recent_collections()}
     end
+  end
+
+  # FreightWare ignores date filters on the collection endpoints (they only honour
+  # route/driver/vehicle), so the raw list spans YEARS. Bound it in-process to the
+  # recent window so the staff view shows current collections, not history. Dates
+  # are ISO strings (sort lexically); undated rows are kept — we can't age them out.
+  @collection_window_months 4
+
+  @doc false
+  def recent_collections(list, today \\ Date.utc_today()) when is_list(list) do
+    cutoff = Date.to_iso8601(months_ago(today, @collection_window_months))
+
+    Enum.filter(list, fn c ->
+      case c["collection_date"] do
+        d when is_binary(d) and d != "" -> d >= cutoff
+        _ -> true
+      end
+    end)
+  end
+
+  # `date` shifted back `months` calendar months (clamping the day for shorter
+  # months, e.g. Mar 31 → Nov 30).
+  defp months_ago(date, months) do
+    total = date.year * 12 + (date.month - 1) - months
+    year = div(total, 12)
+    month = rem(total, 12) + 1
+    day = min(date.day, Date.days_in_month(Date.new!(year, month, 1)))
+    Date.new!(year, month, day)
   end
 
   @doc "Track & trace by reference. `ref_type` is `:waybills` or `:quotes`."
