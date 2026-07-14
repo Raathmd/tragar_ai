@@ -12,6 +12,28 @@ defmodule TragarAi.FreightTest do
     assert {:error, :account_required} = Freight.search_waybills(%{status_code: "POD"})
   end
 
+  test "recent_collections bounds the list to the last 4 months (undated kept)" do
+    today = ~D[2026-07-14]
+
+    rows = [
+      %{"collection_date" => "2026-07-01"},
+      %{"collection_date" => "2026-03-20"},
+      %{"collection_date" => "2026-01-01"},
+      %{"collection_date" => ""},
+      %{"collection_date" => nil}
+    ]
+
+    kept = Freight.recent_collections(rows, today)
+    dates = Enum.map(kept, & &1["collection_date"])
+
+    # 4 months before 2026-07-14 is 2026-03-14.
+    assert "2026-07-01" in dates
+    assert "2026-03-20" in dates
+    refute "2026-01-01" in dates
+    # undated rows can't be aged out, so they're kept.
+    assert length(kept) == 4
+  end
+
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
