@@ -23,16 +23,12 @@ defmodule TragarAi.Dovetail.TokenStore do
   # Refresh proactively a little before the server-side session (~30 min) lapses.
   @ttl_ms :timer.minutes(25)
 
-  # On a failed login, keep the queued callers parked and retry a few times with a
-  # short backoff between attempts (transient wobbles recover transparently). After
-  # @max_attempts we give up, reply the error, and enter a cooldown during which new
-  # callers fail fast WITHOUT starting another barrier — so a persistent outage
-  # doesn't stampede FreightWare with logins.
-  @max_attempts 3
-
-  defp retry_backoff_ms,
-    do: Application.get_env(:tragar_ai, __MODULE__, [])[:retry_backoff_ms] || 2_000
-
+  # Req already retries a login on 5xx (with its own backoff), so a transient
+  # FreightWare wobble is handled at that layer — the barrier just parks concurrent
+  # callers on the one in-flight login and shares its result. When that login
+  # ultimately fails, we reply the error to the queue and enter a cooldown, during
+  # which new callers fail fast WITHOUT starting another login — so a persistent
+  # outage doesn't stampede FreightWare with barriers.
   defp cooldown_ms,
     do: Application.get_env(:tragar_ai, __MODULE__, [])[:cooldown_ms] || :timer.seconds(30)
 
@@ -41,14 +37,8 @@ defmodule TragarAi.Dovetail.TokenStore do
     # token / fetched_at_ms: the cached session.
     # logging_in?:           a login task is currently in flight (the barrier).
     # waiters:               callers parked until a token is generated.
-    # attempts:              login attempts in the current barrier (for the retry cap).
-    # failed_at_ms:          when the barrier last gave up (for the cooldown).
-    defstruct token: nil,
-              fetched_at_ms: nil,
-              logging_in?: false,
-              waiters: [],
-              attempts: 0,
-              failed_at_ms: nil
+    # failed_at_ms:          when the last login failed (for the cooldown).
+    defstruct token: nil, fetched_at_ms: nil, logging_in?: false, waiters: [], failed_at_ms: nil
   end
 
   # ── Public API ────────────────────────────────────────────────────────────
@@ -128,40 +118,22 @@ defmodule TragarAi.Dovetail.TokenStore do
     {:noreply, %State{token: token, fetched_at_ms: now_ms()}}
   end
 
-  # Failure → keep the queued callers parked and retry after a backoff (up to
-  # @max_attempts) so a transient FreightWare wobble resolves transparently
-  # instead of failing the whole queue on the first error.
+  # Failure (after Req's own 5xx retries) → reply the parked queue and start the
+  # cooldown so new callers fail fast instead of each opening a fresh barrier.
   def handle_info({:login_result, {:error, reason}}, %State{} = state) do
-    if state.attempts < @max_attempts do
-      Logger.warning(
-        "Dovetail login attempt #{state.attempts}/#{@max_attempts} failed: #{inspect(reason)}"
-      )
-
-      Process.send_after(self(), :retry_login, retry_backoff_ms())
-      {:noreply, state}
-    else
-      Logger.error("Dovetail login failed after #{@max_attempts} attempts: #{inspect(reason)}")
-      Enum.each(state.waiters, &GenServer.reply(&1, {:error, reason}))
-      {:noreply, %State{failed_at_ms: now_ms()}}
-    end
+    Logger.error("Dovetail login failed: #{inspect(reason)}")
+    Enum.each(state.waiters, &GenServer.reply(&1, {:error, reason}))
+    {:noreply, %State{failed_at_ms: now_ms()}}
   end
-
-  # Retry the login while the barrier is engaged; waiters stay queued throughout.
-  def handle_info(:retry_login, %State{logging_in?: true} = state) do
-    {:noreply, spawn_login(%State{state | attempts: state.attempts + 1})}
-  end
-
-  def handle_info(:retry_login, %State{} = state), do: {:noreply, state}
 
   # Ignore any late/unknown message so a stray signal can't crash the store.
   def handle_info(_msg, state), do: {:noreply, state}
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
 
-  # Engage the barrier (logging_in?) and run the first login attempt. Subsequent
-  # retries reuse spawn_login/1 while the barrier stays up.
+  # Engage the barrier (logging_in?) and run the one login, clearing any cooldown.
   defp start_login(%State{} = state) do
-    spawn_login(%State{state | logging_in?: true, attempts: 1, failed_at_ms: nil})
+    spawn_login(%State{state | logging_in?: true, failed_at_ms: nil})
   end
 
   # Run a login in a throwaway task that reports back via {:login_result, _}.
