@@ -476,9 +476,10 @@ defmodule TragarAi.CoreAI do
   # errors mid-flight, fall back to a normal (non-stream) call so the caller
   # still gets a real model answer rather than the stub.
   defp ollama_generate(messages, on_chunk, model, opts \\ []) do
-    # Default thinking to the settings toggle (only fires for reasoning-capable
-    # models like Qwen3); callers that force reasoning still pass `think: true`.
-    think = Keyword.get(opts, :think, TragarAi.CoreAI.ModelSetting.model_thinks?(model))
+    # Thinking is OFF by default so the fast structured steps (interpret, phrase)
+    # never run in reasoning mode — even on a Qwen3 model with the toggle on. Only
+    # the explicit "reason freely" path passes `think: true`.
+    think = Keyword.get(opts, :think, false)
 
     result =
       if is_function(on_chunk, 1) do
@@ -504,15 +505,17 @@ defmodule TragarAi.CoreAI do
   end
 
   defp ollama_chat(messages, opts) do
+    model = Keyword.get(opts, :model) || ollama_model()
+
     body =
       %{
-        model: Keyword.get(opts, :model) || ollama_model(),
+        model: model,
         messages: messages,
         stream: false,
         options: %{temperature: 0}
       }
       |> maybe_put(:format, Keyword.get(opts, :format))
-      |> maybe_put(:think, if(Keyword.get(opts, :think), do: true))
+      |> put_think(model, Keyword.get(opts, :think, false))
 
     case Req.post(req(), url: "/api/chat", json: body) do
       {:ok, %Req.Response{status: 200, body: %{"message" => %{"content" => content}}}}
@@ -541,7 +544,7 @@ defmodule TragarAi.CoreAI do
         stream: true,
         options: %{temperature: 0}
       }
-      |> maybe_put(:think, if(think, do: true))
+      |> put_think(model, think)
 
     Process.put({__MODULE__, :buf}, "")
     Process.put({__MODULE__, :acc}, "")
@@ -672,6 +675,22 @@ defmodule TragarAi.CoreAI do
 
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
+
+  # Send the `think` flag only for models that support it (Qwen3), as an explicit
+  # boolean. Qwen3 thinks BY DEFAULT, so to keep interpret/phrase fast we must send
+  # `think: false` — omitting it isn't enough. Non-thinking models (e.g. qwen2.5)
+  # get no `think` field at all, since some error when it's present.
+  defp put_think(body, model, think) do
+    if thinking_model?(model) do
+      Map.put(body, :think, think == true)
+    else
+      body
+    end
+  end
+
+  # The Qwen3 family supports Ollama's `think` flag (and thinks by default); other
+  # models (qwen2.5, llama, …) don't, and can error if it's set.
+  defp thinking_model?(model), do: is_binary(model) and String.starts_with?(model, "qwen3")
 
   # Some thinking models emit a <think>…</think> preamble in free-text replies.
   defp strip_think(text), do: Regex.replace(~r/<think>.*?<\/think>/s, text, "")
