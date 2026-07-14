@@ -32,6 +32,8 @@ defmodule TragarAiWeb.Layouts do
     doc: "current page — :dashboard | :console | :architecture | :settings"
 
   def app_nav(assigns) do
+    assigns = assign(assigns, :fw_online, fw_online?())
+
     ~H"""
     <nav class="sticky top-0 z-40 flex items-center gap-1 rounded-lg border border-base-300 bg-base-100/95 px-2 py-1.5 shadow-sm backdrop-blur">
       <span class="select-none px-2 text-sm font-semibold tracking-tight text-base-content/80">
@@ -69,7 +71,21 @@ defmodule TragarAiWeb.Layouts do
         Settings
       </.link>
 
-      <div class="ml-auto flex items-center gap-1">
+      <div class="ml-auto flex items-center gap-2">
+        <span
+          class="flex items-center gap-1.5"
+          title={
+            (@fw_online && "FreightWare: connected (session token held)") ||
+              "FreightWare: no token — auth unavailable"
+          }
+        >
+          <span class={[
+            "inline-block h-2 w-2 rounded-full",
+            (@fw_online && "bg-success") || "bg-error"
+          ]}>
+          </span>
+          <span class="text-xs text-base-content/60">FreightWare</span>
+        </span>
         <.theme_toggle />
         <.link :if={dev_routes?()} href="/admin" class="btn btn-sm btn-ghost">
           Admin <span aria-hidden="true">↗</span>
@@ -83,6 +99,17 @@ defmodule TragarAiWeb.Layouts do
   # menu link tracks the actual route rather than dangling in production.
   @dev_routes Application.compile_env(:tragar_ai, :dev_routes, false)
   defp dev_routes?, do: @dev_routes
+
+  # Whether we currently hold a FreightWare session token — drives the nav status
+  # dot. Never triggers a login, and degrades to "offline" (red) if the store is
+  # unreachable, so it can never break a page render.
+  defp fw_online? do
+    TragarAi.Dovetail.TokenStore.has_token?()
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
 
   @doc """
   Renders your app layout.

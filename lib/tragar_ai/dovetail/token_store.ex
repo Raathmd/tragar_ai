@@ -55,6 +55,13 @@ defmodule TragarAi.Dovetail.TokenStore do
   def token(server \\ __MODULE__), do: GenServer.call(server, :token, 30_000)
 
   @doc """
+  Whether we currently hold a valid (fresh) token — for a status indicator.
+  Never triggers a login; just reports the cached state.
+  """
+  @spec has_token?(GenServer.server()) :: boolean()
+  def has_token?(server \\ __MODULE__), do: GenServer.call(server, :status)
+
+  @doc """
   Invalidate the cached token so the next `token/1` re-authenticates.
 
     * `invalidate(token)` — **compare-and-invalidate**: clears only if the cache
@@ -91,6 +98,11 @@ defmodule TragarAi.Dovetail.TokenStore do
       true ->
         {:noreply, start_login(%State{state | waiters: [from | state.waiters]})}
     end
+  end
+
+  # Non-blocking status peek for the UI — never triggers a login.
+  def handle_call(:status, _from, %State{} = state) do
+    {:reply, fresh?(state), state}
   end
 
   @impl true

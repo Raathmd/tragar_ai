@@ -60,7 +60,17 @@ defmodule TragarAi.Dovetail.Client do
       }
     }
 
-    req = base_request() |> Req.merge(url: @api_path <> "/system/auth/login", json: body)
+    # Fail fast on a login: don't retry a 5xx (retrying a down auth server just
+    # burns ~60s before the TokenStore's cooldown can engage) and cap the wait so a
+    # hang doesn't stall callers.
+    req =
+      base_request()
+      |> Req.merge(
+        url: @api_path <> "/system/auth/login",
+        json: body,
+        retry: false,
+        receive_timeout: 10_000
+      )
 
     case Req.post(req) do
       {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
