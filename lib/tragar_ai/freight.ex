@@ -353,6 +353,12 @@ defmodule TragarAi.Freight do
     end
   end
 
+  @doc """
+  Branches the configured FreightWare integration user may log into — i.e. every
+  branch that belongs to the account we integrate with.
+  """
+  def user_branches, do: user_branches(Client.config()[:username] || "")
+
   def user_branches(username) do
     with {:ok, resp} <- Client.get("/system/auth/login/#{username}/branches") do
       {:ok, Normalize.branches(resp)}
