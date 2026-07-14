@@ -51,6 +51,12 @@ defmodule TragarAiWeb.Layouts do
         Console
       </.link>
       <.link
+        navigate={~p"/collections"}
+        class={["btn btn-sm", (@active == :collections && "btn-primary") || "btn-ghost"]}
+      >
+        Collections
+      </.link>
+      <.link
         navigate={~p"/architecture"}
         class={["btn btn-sm", (@active == :architecture && "btn-primary") || "btn-ghost"]}
       >
