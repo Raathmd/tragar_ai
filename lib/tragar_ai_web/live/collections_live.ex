@@ -54,7 +54,10 @@ defmodule TragarAiWeb.CollectionsLive do
   end
 
   @impl true
-  def handle_event("refresh", _params, socket), do: {:noreply, start_load(socket)}
+  def handle_event("refresh", _params, socket) do
+    Freight.CollectionsCache.refresh()
+    {:noreply, start_load(socket)}
+  end
 
   # Live interval change from the header select.
   def handle_event("set_poll", %{"ms" => ms}, socket) do
@@ -93,15 +96,12 @@ defmodule TragarAiWeb.CollectionsLive do
      )}
   end
 
+  # Read the self-refreshing cache (instant) — the heavy FreightWare fetch runs on
+  # the cache's own timer, not per viewer/poll. The ↻ button forces a refetch.
   defp start_load(socket) do
     socket
     |> assign(loading: true)
-    |> start_async(:collections, fn ->
-      %{
-        unauthorised: Freight.unauthorised_collections(),
-        outstanding: Freight.outstanding_collections()
-      }
-    end)
+    |> start_async(:collections, fn -> Freight.CollectionsCache.get() end)
   end
 
   # (Re)arm the auto-refresh timer for the current interval, cancelling any pending

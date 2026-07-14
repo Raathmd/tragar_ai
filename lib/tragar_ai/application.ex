@@ -17,6 +17,9 @@ defmodule TragarAi.Application do
       TragarAi.Dovetail.TokenStore,
       # Caches the Vantage auth token.
       TragarAi.Vantage.TokenStore,
+      # TTL cache over the heavy FreightWare collections fetch (shared by all
+      # staff dashboards + the poll, so the ~15s all-rows pull runs once per TTL).
+      TragarAi.Freight.CollectionsCache,
       # Runs the ticket auto-answer work off the request path so the webhook can
       # return immediately (Freshdesk's webhook timeout is short).
       {Task.Supervisor, name: TragarAi.TaskSupervisor},
