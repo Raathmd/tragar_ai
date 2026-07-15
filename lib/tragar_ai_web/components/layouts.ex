@@ -86,6 +86,15 @@ defmodule TragarAiWeb.Layouts do
           </span>
           <span class="text-xs text-base-content/60">FreightWare</span>
         </span>
+        <.link
+          :if={not @fw_online}
+          href={~p"/fw/login"}
+          method="post"
+          class="btn btn-xs btn-warning"
+          title="Force a FreightWare login now (uses the configured credentials)"
+        >
+          Log in
+        </.link>
         <.theme_toggle />
         <.link :if={dev_routes?()} href="/admin" class="btn btn-sm btn-ghost">
           Admin <span aria-hidden="true">↗</span>

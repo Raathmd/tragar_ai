@@ -40,6 +40,9 @@ defmodule TragarAiWeb.Router do
 
     # Runtime settings (search pipeline toggle, …).
     live "/settings", SettingsLive
+
+    # Force a FreightWare login (nav "Log in" button when there's no token).
+    post "/fw/login", FreightWareController, :login
   end
 
   # Freshdesk-facing API: guided quote intake from a ticket.
