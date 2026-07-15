@@ -40,11 +40,13 @@ defmodule TragarAiWeb.CollectionsLive do
         poll_ms: @default_poll_ms,
         poll_timer: nil,
         filters: empty_filters(),
-        hidden_columns: MapSet.new(),
+        hidden_columns: MapSet.new(Freight.ColumnPrefs.get()),
+        columns_shared: Freight.ColumnPrefs.set?(),
         show_columns_panel: false
       )
 
     if connected?(socket) do
+      Phoenix.PubSub.subscribe(TragarAi.PubSub, Freight.ColumnPrefs.topic())
       {:ok, socket |> start_load() |> schedule_poll()}
     else
       {:ok, socket}
@@ -55,6 +57,22 @@ defmodule TragarAiWeb.CollectionsLive do
   @impl true
   def handle_info(:poll, socket) do
     {:noreply, socket |> start_load() |> schedule_poll()}
+  end
+
+  # A column-selection change from another browser/session — re-apply and refresh
+  # this browser's localStorage cache. Skipped when it matches what we already
+  # show (e.g. the echo of our own change).
+  def handle_info({:columns_changed, cols}, socket) do
+    hidden = MapSet.new(cols)
+
+    if MapSet.equal?(hidden, socket.assigns.hidden_columns) do
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> assign(hidden_columns: hidden, columns_shared: true)
+       |> push_event("columns_changed", %{cols: cols})}
+    end
   end
 
   @impl true
@@ -85,11 +103,38 @@ defmodule TragarAiWeb.CollectionsLive do
         do: MapSet.delete(hidden, col),
         else: MapSet.put(hidden, col)
 
-    {:noreply, assign(socket, hidden_columns: hidden)}
+    {:noreply, persist_columns(socket, hidden)}
   end
 
   def handle_event("show_all_columns", _params, socket),
-    do: {:noreply, assign(socket, hidden_columns: MapSet.new())}
+    do: {:noreply, persist_columns(socket, MapSet.new())}
+
+  # The browser's localStorage copy (fired by the ColumnPrefs hook on mount). The
+  # shared server-side store wins when it holds a value; localStorage only seeds it
+  # the first time any browser makes a choice, so a fresh install adopts the first
+  # selection instead of starting blank.
+  def handle_event("restore_columns", %{"cols" => cols}, socket) when is_list(cols) do
+    if socket.assigns.columns_shared do
+      {:noreply, socket}
+    else
+      hidden = for c <- cols, is_binary(c), into: MapSet.new(), do: c
+      {:noreply, socket |> assign(columns_shared: true) |> persist_columns(hidden)}
+    end
+  end
+
+  def handle_event("restore_columns", _params, socket), do: {:noreply, socket}
+
+  # Persist the hidden-columns set to the shared ETS store (broadcasts to other
+  # open dashboards) and to this browser's localStorage, so the selection survives
+  # a refresh and is the same across browsers.
+  defp persist_columns(socket, hidden) do
+    cols = MapSet.to_list(hidden)
+    Freight.ColumnPrefs.put(cols)
+
+    socket
+    |> assign(hidden_columns: hidden, columns_shared: true)
+    |> push_event("columns_changed", %{cols: cols})
+  end
 
   # Waybills defaults to "0" — staff want the outstanding, not-yet-waybilled work
   # up front. "All" (empty) shows waybilled collections too.
@@ -248,6 +293,28 @@ defmodule TragarAiWeb.CollectionsLive do
     ~H"""
     <div class="p-4 lg:p-6 space-y-4 max-w-7xl mx-auto">
       <Layouts.app_nav active={:collections} flash={@flash} />
+
+      <div id="column-prefs" phx-hook=".ColumnPrefs" class="hidden"></div>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ColumnPrefs">
+        export default {
+          mounted() {
+            const KEY = "collections_hidden_columns"
+            // Persist whenever the server reports a change.
+            this.handleEvent("columns_changed", ({cols}) => {
+              try { window.localStorage.setItem(KEY, JSON.stringify(cols)) } catch (_e) {}
+            })
+            // Re-apply the saved selection on (re)mount / refresh.
+            let saved = null
+            try { saved = window.localStorage.getItem(KEY) } catch (_e) {}
+            if (saved) {
+              try {
+                const cols = JSON.parse(saved)
+                if (Array.isArray(cols) && cols.length) this.pushEvent("restore_columns", {cols})
+              } catch (_e) {}
+            }
+          }
+        }
+      </script>
 
       <header class="flex items-end justify-between gap-3">
         <div>
