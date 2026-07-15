@@ -91,4 +91,20 @@ defmodule TragarAiWeb.CollectionsLiveTest do
 
     assert html =~ "WB77"
   end
+
+  test "restoring saved columns hides those columns on mount", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/collections")
+    render_async(view, 5000)
+
+    # The outstanding rows carry a route code column by default.
+    assert render(view) =~ "route code"
+
+    # The ColumnPrefs hook replays the browser's saved selection.
+    html =
+      view
+      |> element("#column-prefs")
+      |> render_hook("restore_columns", %{"cols" => ["route_code"]})
+
+    refute html =~ "route code"
+  end
 end

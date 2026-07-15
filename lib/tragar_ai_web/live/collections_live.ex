@@ -85,11 +85,28 @@ defmodule TragarAiWeb.CollectionsLive do
         do: MapSet.delete(hidden, col),
         else: MapSet.put(hidden, col)
 
-    {:noreply, assign(socket, hidden_columns: hidden)}
+    {:noreply, persist_columns(socket, hidden)}
   end
 
   def handle_event("show_all_columns", _params, socket),
-    do: {:noreply, assign(socket, hidden_columns: MapSet.new())}
+    do: {:noreply, persist_columns(socket, MapSet.new())}
+
+  # Re-apply the column selection the browser saved (fired by the ColumnPrefs hook
+  # on mount), so a page refresh keeps the staff member's chosen columns.
+  def handle_event("restore_columns", %{"cols" => cols}, socket) when is_list(cols) do
+    hidden = for c <- cols, is_binary(c), into: MapSet.new(), do: c
+    {:noreply, assign(socket, hidden_columns: hidden)}
+  end
+
+  def handle_event("restore_columns", _params, socket), do: {:noreply, socket}
+
+  # Update the hidden-columns set and tell the browser to persist it to
+  # localStorage, so the selection survives a refresh (restored by the hook).
+  defp persist_columns(socket, hidden) do
+    socket
+    |> assign(hidden_columns: hidden)
+    |> push_event("columns_changed", %{cols: MapSet.to_list(hidden)})
+  end
 
   # Waybills defaults to "0" — staff want the outstanding, not-yet-waybilled work
   # up front. "All" (empty) shows waybilled collections too.
@@ -248,6 +265,28 @@ defmodule TragarAiWeb.CollectionsLive do
     ~H"""
     <div class="p-4 lg:p-6 space-y-4 max-w-7xl mx-auto">
       <Layouts.app_nav active={:collections} flash={@flash} />
+
+      <div id="column-prefs" phx-hook=".ColumnPrefs" class="hidden"></div>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ColumnPrefs">
+        export default {
+          mounted() {
+            const KEY = "collections_hidden_columns"
+            // Persist whenever the server reports a change.
+            this.handleEvent("columns_changed", ({cols}) => {
+              try { window.localStorage.setItem(KEY, JSON.stringify(cols)) } catch (_e) {}
+            })
+            // Re-apply the saved selection on (re)mount / refresh.
+            let saved = null
+            try { saved = window.localStorage.getItem(KEY) } catch (_e) {}
+            if (saved) {
+              try {
+                const cols = JSON.parse(saved)
+                if (Array.isArray(cols) && cols.length) this.pushEvent("restore_columns", {cols})
+              } catch (_e) {}
+            }
+          }
+        }
+      </script>
 
       <header class="flex items-end justify-between gap-3">
         <div>
