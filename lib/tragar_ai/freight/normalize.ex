@@ -355,32 +355,6 @@ defmodule TragarAi.Freight.Normalize do
 
   # ── Collections ───────────────────────────────────────────────────────────────
 
-  @collection [
-    {"originatingBranch", "originating_branch"},
-    {"collectionReference", "collection_reference"},
-    {"collectionObj", "collection_obj"},
-    {"collectionDate", "collection_date"},
-    {"collectAfter", "collect_after"},
-    {"collectBefore", "collect_before"},
-    {"consignorName", "consignor_name"},
-    {"consignorBuilding", "consignor_building"},
-    {"consignorStreet", "consignor_street"},
-    {"consignorSuburb", "consignor_suburb"},
-    {"consignorCity", "consignor_city"},
-    {"consignorPostalCode", "consignor_postal_code"},
-    {"consigneeName", "consignee_name"},
-    {"consigneeBuilding", "consignee_building"},
-    {"consigneeStreet", "consignee_street"},
-    {"consigneeSuburb", "consignee_suburb"},
-    {"consigneeCity", "consignee_city"},
-    {"consigneePostalCode", "consignee_postal_code"},
-    {"estimatedWaybills", "estimated_waybills"},
-    {"estimatedParcels", "estimated_parcels"},
-    {"routeCode", "route_code"},
-    {"driverReference", "driver_reference"},
-    {"vehicleRegistration", "vehicle_registration"}
-  ]
-
   @doc "Unauthorised collections → `[%{...}]` (FreightWare casing varies; be lenient)."
   def unauthorised_collections(resp),
     do: collections(resp, ["esUnAuthorisedCollections", "esunAuthorisedCollections"])
@@ -400,7 +374,16 @@ defmodule TragarAi.Freight.Normalize do
 
   defp collections(_, _), do: []
 
-  defp collection(m), do: take(m, @collection)
+  # Pass through EVERY field the record carries, snake-cased — so any field the API
+  # returns (e.g. a status) is captured rather than silently dropped by a
+  # whitelist. Blanks are trimmed out; scalars kept as-is.
+  defp collection(m) when is_map(m) do
+    for {k, v} <- m, is_binary(k), tv = trim(v), tv not in [nil, ""], into: %{} do
+      {Macro.underscore(k), tv}
+    end
+  end
+
+  defp collection(_), do: %{}
 
   defp first_list(m) when is_map(m),
     do: Enum.find_value(Map.values(m), [], fn v -> if is_list(v), do: v end)

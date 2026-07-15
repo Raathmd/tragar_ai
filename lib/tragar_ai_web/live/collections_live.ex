@@ -241,7 +241,6 @@ defmodule TragarAiWeb.CollectionsLive do
         rows={@unauthorised}
         error={@unauthorised_error}
         loading={@loading}
-        show_route={false}
         first_seen={@first_seen}
         new_keys={@new_keys}
         now={@now}
@@ -252,7 +251,6 @@ defmodule TragarAiWeb.CollectionsLive do
         rows={@outstanding}
         error={@outstanding_error}
         loading={@loading}
-        show_route={true}
         first_seen={@first_seen}
         new_keys={@new_keys}
         now={@now}
@@ -265,12 +263,13 @@ defmodule TragarAiWeb.CollectionsLive do
   attr :rows, :list, required: true
   attr :error, :string, default: nil
   attr :loading, :boolean, default: false
-  attr :show_route, :boolean, default: false
   attr :first_seen, :map, required: true
   attr :new_keys, :any, required: true
   attr :now, :any, required: true
 
   defp collections_section(assigns) do
+    assigns = assign(assigns, :columns, columns(assigns.rows))
+
     ~H"""
     <section class="space-y-3">
       <div class="flex items-center gap-2">
@@ -291,16 +290,8 @@ defmodule TragarAiWeb.CollectionsLive do
         <table class="table table-xs">
           <thead>
             <tr>
-              <th>Open</th>
-              <th>Reference</th>
-              <th>Branch</th>
-              <th>Date</th>
-              <th>Window</th>
-              <th>Consignor</th>
-              <th>Consignee</th>
-              <th :if={@show_route}>Route / Driver / Vehicle</th>
-              <th class="text-right">Waybills</th>
-              <th class="text-right">Parcels</th>
+              <th class="whitespace-nowrap">Open</th>
+              <th :for={col <- @columns} class="whitespace-nowrap">{col_header(col)}</th>
             </tr>
           </thead>
           <tbody>
@@ -313,28 +304,41 @@ defmodule TragarAiWeb.CollectionsLive do
                 )
               }
             >
-              <% age = age_seconds(c, @first_seen, @now) %>
               <td class="whitespace-nowrap">
-                <span :if={new?(c, @new_keys, age)} class="badge badge-xs badge-success mr-1">
+                <span
+                  :if={new?(c, @new_keys, age_seconds(c, @first_seen, @now))}
+                  class="badge badge-xs badge-success mr-1"
+                >
                   NEW
                 </span>
-                <span class={"font-mono " <> age_class(age)}>{duration(age)}</span>
+                <span class={"font-mono " <> age_class(age_seconds(c, @first_seen, @now))}>
+                  {duration(age_seconds(c, @first_seen, @now))}
+                </span>
               </td>
-              <td class="font-mono">{c["collection_reference"] || "—"}</td>
-              <td>{c["originating_branch"] || "—"}</td>
-              <td class="whitespace-nowrap">{c["collection_date"] || "—"}</td>
-              <td class="whitespace-nowrap text-base-content/60">{window(c)}</td>
-              <td>{party(c, "consignor")}</td>
-              <td>{party(c, "consignee")}</td>
-              <td :if={@show_route} class="text-base-content/60">{route(c)}</td>
-              <td class="text-right font-mono">{c["estimated_waybills"] || "—"}</td>
-              <td class="text-right font-mono">{c["estimated_parcels"] || "—"}</td>
+              <td :for={col <- @columns} class="whitespace-nowrap">{cell(c, col)}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
     """
+  end
+
+  # Every field key present across the rows — a few useful ones first, then the
+  # rest sorted. No whitelist: whatever FreightWare returns is shown as a column.
+  @preferred_columns ~w(collection_reference status originating_branch collection_date collect_after collect_before)
+  defp columns(rows) do
+    keys = rows |> Enum.flat_map(&Map.keys/1) |> Enum.uniq()
+    Enum.filter(@preferred_columns, &(&1 in keys)) ++ Enum.sort(keys -- @preferred_columns)
+  end
+
+  defp col_header(col), do: String.replace(col, "_", " ")
+
+  defp cell(c, col) do
+    case Map.get(c, col) do
+      nil -> "—"
+      v -> to_string(v)
+    end
   end
 
   defp row_class(_age, true), do: "bg-success/10"
@@ -356,30 +360,4 @@ defmodule TragarAiWeb.CollectionsLive do
   end
 
   defp duration(_), do: "—"
-
-  defp party(c, role) do
-    [c["#{role}_name"], c["#{role}_city"]]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join(" · ")
-    |> nonempty()
-  end
-
-  defp window(c) do
-    case {c["collect_after"], c["collect_before"]} do
-      {nil, nil} -> "—"
-      {a, nil} -> "from #{a}"
-      {nil, b} -> "by #{b}"
-      {a, b} -> "#{a}–#{b}"
-    end
-  end
-
-  defp route(c) do
-    [c["route_code"], c["driver_reference"], c["vehicle_registration"]]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join(" / ")
-    |> nonempty()
-  end
-
-  defp nonempty(""), do: "—"
-  defp nonempty(s), do: s
 end
