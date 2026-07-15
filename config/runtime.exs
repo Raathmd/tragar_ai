@@ -78,8 +78,8 @@ if config_env() != :test do
     base_url:
       dt.("BASE_URL") ||
         if(dovetail_env == "prod",
-          do: "https://tragar-db.dovetail.co.za/WebServices/web",
-          else: "https://tragar-db.dovetail.co.za/WebServicesUAT/web"
+          do: "http://tragar-db.dovetail.co.za:4001/WebServices/web",
+          else: "http://tragar-db.dovetail.co.za:5001/WebServices/web"
         ),
     username: dt.("USERNAME"),
     password: dt.("PASSWORD"),
