@@ -23,6 +23,21 @@ defmodule TragarAi.Dovetail.TokenStore do
   # Refresh proactively a little before the server-side session (~30 min) lapses.
   @ttl_ms :timer.minutes(25)
 
+  # Heartbeat: a background timer keeps the token warm so callers rarely wait on a
+  # login. It fires every @heartbeat_ms and, once the cached token is @refresh_
+  # after_ms old (or missing/invalidated), re-logs in through the barrier — so if
+  # the session expired, the fresh token is minted proactively while any callers
+  # that arrive meanwhile queue on that one login. Kept under the TTL and the
+  # server-side lapse so a valid token is (almost) always cached.
+  @heartbeat_ms :timer.minutes(5)
+  @refresh_after_ms :timer.minutes(20)
+
+  defp heartbeat_ms,
+    do: Application.get_env(:tragar_ai, __MODULE__, [])[:heartbeat_ms] || @heartbeat_ms
+
+  defp refresh_after_ms,
+    do: Application.get_env(:tragar_ai, __MODULE__, [])[:refresh_after_ms] || @refresh_after_ms
+
   # Req already retries a login on 5xx (with its own backoff), so a transient
   # FreightWare wobble is handled at that layer — the barrier just parks concurrent
   # callers on the one in-flight login and shares its result. When that login
@@ -78,17 +93,22 @@ defmodule TragarAi.Dovetail.TokenStore do
   # ── GenServer callbacks ─────────────────────────────────────────────────────
 
   @impl true
-  def init(_opts), do: {:ok, %State{}}
+  def init(_opts) do
+    schedule_heartbeat()
+    {:ok, %State{}}
+  end
 
   @impl true
   def handle_call(:token, from, %State{} = state) do
     cond do
-      fresh?(state) ->
-        {:reply, {:ok, state.token}, state}
-
-      # A login is already running — park this caller on it (the barrier).
+      # A login is already running (on-demand OR the heartbeat refresh) — park on
+      # the barrier. Even if a token is still cached, we don't hand out one that a
+      # refresh is about to replace; the caller shares the fresh one instead.
       state.logging_in? ->
         {:noreply, %State{state | waiters: [from | state.waiters]}}
+
+      fresh?(state) ->
+        {:reply, {:ok, state.token}, state}
 
       # In the post-failure cooldown — fail fast without starting a new barrier.
       backing_off?(state) ->
@@ -138,6 +158,20 @@ defmodule TragarAi.Dovetail.TokenStore do
     {:noreply, %State{failed_at_ms: now_ms()}}
   end
 
+  # Heartbeat: keep the token warm. Re-log in proactively once it's aging (or
+  # missing/invalidated), unless a login is already in flight or we're cooling
+  # down. Runs through the same barrier, so callers arriving mid-refresh queue on
+  # the one login and share the fresh token.
+  def handle_info(:heartbeat, %State{} = state) do
+    schedule_heartbeat()
+
+    if not state.logging_in? and not backing_off?(state) and aging?(state) do
+      {:noreply, start_login(state)}
+    else
+      {:noreply, state}
+    end
+  end
+
   # Ignore any late/unknown message so a stray signal can't crash the store.
   def handle_info(_msg, state), do: {:noreply, state}
 
@@ -164,6 +198,17 @@ defmodule TragarAi.Dovetail.TokenStore do
   catch
     kind, reason -> {:error, {kind, reason}}
   end
+
+  defp schedule_heartbeat, do: Process.send_after(self(), :heartbeat, heartbeat_ms())
+
+  # Time to proactively refresh: no token cached, or the cached one is old enough
+  # that it's approaching the server-side lapse.
+  defp aging?(%State{token: nil}), do: true
+
+  defp aging?(%State{fetched_at_ms: fetched_at}) when is_integer(fetched_at),
+    do: now_ms() - fetched_at >= refresh_after_ms()
+
+  defp aging?(_), do: true
 
   defp fresh?(%State{token: nil}), do: false
 
