@@ -169,7 +169,7 @@ defmodule TragarAiWeb.ArchitectureLive do
   def render(assigns) do
     ~H"""
     <div class="p-4 lg:p-6 space-y-8 max-w-6xl mx-auto">
-      <Layouts.app_nav active={:architecture} />
+      <Layouts.app_nav active={:architecture} flash={@flash} />
 
       <header class="space-y-1">
         <h1 class="text-2xl font-semibold">Tragar · Architecture</h1>

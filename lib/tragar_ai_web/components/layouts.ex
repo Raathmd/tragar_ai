@@ -31,10 +31,13 @@ defmodule TragarAiWeb.Layouts do
     default: nil,
     doc: "current page — :dashboard | :console | :architecture | :settings"
 
+  attr :flash, :map, default: %{}, doc: "flash from the LiveView, rendered above the nav"
+
   def app_nav(assigns) do
     assigns = assign(assigns, :fw_online, fw_online?())
 
     ~H"""
+    <.flash_group flash={@flash} />
     <nav class="sticky top-0 z-40 flex items-center gap-1 rounded-lg border border-base-300 bg-base-100/95 px-2 py-1.5 shadow-sm backdrop-blur">
       <span class="select-none px-2 text-sm font-semibold tracking-tight text-base-content/80">
         Tragar<span class="text-primary">·</span>AI
@@ -86,15 +89,16 @@ defmodule TragarAiWeb.Layouts do
           </span>
           <span class="text-xs text-base-content/60">FreightWare</span>
         </span>
-        <.link
-          :if={not @fw_online}
-          href={~p"/fw/login"}
-          method="post"
-          class="btn btn-xs btn-warning"
-          title="Force a FreightWare login now (uses the configured credentials)"
-        >
-          Log in
-        </.link>
+        <form :if={not @fw_online} action={~p"/fw/login"} method="post" class="contents">
+          <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+          <button
+            type="submit"
+            class="btn btn-xs btn-warning"
+            title="Force a FreightWare login now (uses the configured credentials)"
+          >
+            Log in
+          </button>
+        </form>
         <.theme_toggle />
         <.link :if={dev_routes?()} href="/admin" class="btn btn-sm btn-ghost">
           Admin <span aria-hidden="true">↗</span>

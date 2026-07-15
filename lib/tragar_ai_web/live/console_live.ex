@@ -291,7 +291,7 @@ defmodule TragarAiWeb.ConsoleLive do
   def render(assigns) do
     ~H"""
     <div id="console" phx-hook=".DragDrop" class="p-4 lg:p-6 space-y-4">
-      <Layouts.app_nav active={:console} />
+      <Layouts.app_nav active={:console} flash={@flash} />
       <header class="flex items-start justify-between gap-3">
         <div>
           <h1 class="text-2xl font-semibold">Tragar · Support Assist</h1>
