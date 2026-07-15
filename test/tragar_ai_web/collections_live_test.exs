@@ -45,6 +45,11 @@ defmodule TragarAiWeb.CollectionsLiveTest do
                     "collectionDate" => "2026-07-13",
                     "routeCode" => "R1",
                     "driverReference" => "D5"
+                  },
+                  %{
+                    "collectionReference" => "WB77",
+                    "collectionDate" => "2026-07-12",
+                    "waybills" => 3
                   }
                 ]
               },
@@ -71,5 +76,19 @@ defmodule TragarAiWeb.CollectionsLiveTest do
     assert html =~ "OUT99"
     # Outstanding shows route/driver.
     assert html =~ "R1"
+    # Waybilled collections are hidden by default (waybills filter defaults to 0).
+    refute html =~ "WB77"
+  end
+
+  test "showing all waybills surfaces already-waybilled collections", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/collections")
+    render_async(view, 5000)
+
+    html =
+      view
+      |> element("form[phx-change=\"filter\"]")
+      |> render_change(%{"filters" => %{"waybills" => ""}})
+
+    assert html =~ "WB77"
   end
 end
