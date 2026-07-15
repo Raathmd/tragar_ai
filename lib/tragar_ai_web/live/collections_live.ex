@@ -37,7 +37,10 @@ defmodule TragarAiWeb.CollectionsLive do
         updated_at: nil,
         loading: true,
         poll_ms: @default_poll_ms,
-        poll_timer: nil
+        poll_timer: nil,
+        filters: empty_filters(),
+        hidden_columns: MapSet.new(),
+        show_columns_panel: false
       )
 
     if connected?(socket) do
@@ -63,6 +66,32 @@ defmodule TragarAiWeb.CollectionsLive do
   def handle_event("set_poll", %{"ms" => ms}, socket) do
     {:noreply, socket |> assign(poll_ms: String.to_integer(ms)) |> schedule_poll()}
   end
+
+  def handle_event("filter", %{"filters" => filters}, socket),
+    do: {:noreply, assign(socket, filters: Map.merge(empty_filters(), filters))}
+
+  def handle_event("clear_filters", _params, socket),
+    do: {:noreply, assign(socket, filters: empty_filters())}
+
+  def handle_event("toggle_columns_panel", _params, socket),
+    do: {:noreply, assign(socket, show_columns_panel: not socket.assigns.show_columns_panel)}
+
+  def handle_event("toggle_column", %{"col" => col}, socket) do
+    hidden = socket.assigns.hidden_columns
+
+    hidden =
+      if MapSet.member?(hidden, col),
+        do: MapSet.delete(hidden, col),
+        else: MapSet.put(hidden, col)
+
+    {:noreply, assign(socket, hidden_columns: hidden)}
+  end
+
+  def handle_event("show_all_columns", _params, socket),
+    do: {:noreply, assign(socket, hidden_columns: MapSet.new())}
+
+  defp empty_filters,
+    do: %{"account" => "", "branch" => "", "status" => "", "month" => "", "year" => ""}
 
   @impl true
   def handle_async(:collections, {:ok, %{unauthorised: unauth, outstanding: out}}, socket) do
@@ -199,17 +228,36 @@ defmodule TragarAiWeb.CollectionsLive do
 
   @impl true
   def render(assigns) do
+    all = assigns.unauthorised ++ assigns.outstanding
+    fu = filtered(assigns.unauthorised, assigns.filters)
+    fo = filtered(assigns.outstanding, assigns.filters)
+    all_cols = columns(fu ++ fo)
+    visible = Enum.reject(all_cols, &MapSet.member?(assigns.hidden_columns, &1))
+
+    assigns =
+      assign(assigns,
+        fu: fu,
+        fo: fo,
+        all_columns: all_cols,
+        visible_columns: visible,
+        totals: totals(fu, fo),
+        opt_accounts: options(all, "account_reference"),
+        opt_branches: options(all, "originating_branch"),
+        opt_statuses: options(all, "status"),
+        opt_years: years(all),
+        any_filter: any_filter?(assigns.filters)
+      )
+
     ~H"""
-    <div class="p-4 lg:p-6 space-y-6 max-w-6xl mx-auto">
+    <div class="p-4 lg:p-6 space-y-4 max-w-7xl mx-auto">
       <Layouts.app_nav active={:collections} flash={@flash} />
 
       <header class="flex items-end justify-between gap-3">
         <div>
           <h1 class="text-2xl font-semibold">Collections</h1>
           <p class="text-sm text-base-content/60">
-            Awaiting authorisation and outstanding, for the current branch. Auto-refreshes every 10s
-            during business hours (hourly overnight); rows are coloured by how long they've been open,
-            and new ones flash.
+            Awaiting authorisation and outstanding. Rows are coloured by how long they've been open;
+            new ones flash. Filter, choose columns, and see totals below.
           </p>
         </div>
         <div class="shrink-0 space-y-1 text-right">
@@ -217,11 +265,7 @@ defmodule TragarAiWeb.CollectionsLive do
             <span class="text-[11px] text-base-content/50">Auto-refresh</span>
             <form phx-change="set_poll">
               <select name="ms" class="select select-xs select-bordered">
-                <option
-                  :for={{label, ms} <- poll_options()}
-                  value={ms}
-                  selected={@poll_ms == ms}
-                >
+                <option :for={{label, ms} <- poll_options()} value={ms} selected={@poll_ms == ms}>
                   {label}
                 </option>
               </select>
@@ -236,36 +280,160 @@ defmodule TragarAiWeb.CollectionsLive do
         </div>
       </header>
 
-      <.collections_section
-        title="Awaiting authorisation"
-        rows={@unauthorised}
-        error={@unauthorised_error}
-        loading={@loading}
-        show_route={false}
-        first_seen={@first_seen}
-        new_keys={@new_keys}
-        now={@now}
-      />
+      <%!-- Totals across the (filtered) set --%>
+      <div class="stats stats-horizontal shadow w-full overflow-x-auto">
+        <div class="stat">
+          <div class="stat-title">Collections</div>
+          <div class="stat-value text-2xl">{@totals.total}</div>
+          <div class="stat-desc">
+            {@totals.unauthorised} unauth · {@totals.outstanding} outstanding
+          </div>
+        </div>
+        <div class="stat">
+          <div class="stat-title">Est. waybills</div>
+          <div class="stat-value text-2xl">{@totals.waybills}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-title">Est. parcels</div>
+          <div class="stat-value text-2xl">{@totals.parcels}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-title">Branches</div>
+          <div class="stat-value text-2xl">{@totals.branches}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-title">Accounts</div>
+          <div class="stat-value text-2xl">{@totals.accounts}</div>
+        </div>
+      </div>
 
-      <.collections_section
-        title="Outstanding (not yet manifested)"
-        rows={@outstanding}
-        error={@outstanding_error}
-        loading={@loading}
-        show_route={true}
-        first_seen={@first_seen}
-        new_keys={@new_keys}
-        now={@now}
-      />
+      <%!-- Filters --%>
+      <form
+        phx-change="filter"
+        class="flex flex-wrap items-end gap-2 rounded-lg border border-base-300 p-2"
+      >
+        <.filter_select
+          name="account"
+          label="Account"
+          value={@filters["account"]}
+          options={@opt_accounts}
+        />
+        <.filter_select
+          name="branch"
+          label="Branch"
+          value={@filters["branch"]}
+          options={@opt_branches}
+        />
+        <.filter_select
+          name="status"
+          label="Status"
+          value={@filters["status"]}
+          options={@opt_statuses}
+        />
+        <.filter_select name="year" label="Year" value={@filters["year"]} options={@opt_years} />
+        <.filter_select name="month" label="Month" value={@filters["month"]} options={months()} />
+        <button
+          :if={@any_filter}
+          type="button"
+          phx-click="clear_filters"
+          class="btn btn-xs btn-ghost"
+        >
+          Clear filters
+        </button>
+        <button
+          type="button"
+          phx-click="toggle_columns_panel"
+          class={"btn btn-xs ml-auto " <> if(@show_columns_panel, do: "btn-primary", else: "btn-ghost")}
+        >
+          Columns ⚙
+        </button>
+      </form>
+
+      <div class={["grid gap-4", @show_columns_panel && "lg:grid-cols-[minmax(0,1fr)_240px]"]}>
+        <div class="space-y-6 min-w-0">
+          <.collections_section
+            title="Awaiting authorisation"
+            rows={@fu}
+            columns={@visible_columns}
+            error={@unauthorised_error}
+            loading={@loading}
+            first_seen={@first_seen}
+            new_keys={@new_keys}
+            now={@now}
+          />
+
+          <.collections_section
+            title="Outstanding (not yet manifested)"
+            rows={@fo}
+            columns={@visible_columns}
+            error={@outstanding_error}
+            loading={@loading}
+            first_seen={@first_seen}
+            new_keys={@new_keys}
+            now={@now}
+          />
+        </div>
+
+        <aside
+          :if={@show_columns_panel}
+          class="rounded-lg border border-base-300 p-3 space-y-2 h-fit lg:sticky lg:top-16"
+        >
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-medium">Show columns</h3>
+            <button type="button" phx-click="show_all_columns" class="btn btn-xs btn-ghost">
+              All
+            </button>
+          </div>
+          <div class="space-y-1 max-h-[60vh] overflow-y-auto pr-1">
+            <label
+              :for={col <- @all_columns}
+              class="flex items-center gap-2 text-xs cursor-pointer hover:bg-base-200 rounded px-1 py-0.5"
+            >
+              <input
+                type="checkbox"
+                class="checkbox checkbox-xs"
+                checked={not MapSet.member?(@hidden_columns, col)}
+                phx-click="toggle_column"
+                phx-value-col={col}
+              />
+              <span>{col_header(col)}</span>
+            </label>
+          </div>
+        </aside>
+      </div>
     </div>
     """
   end
 
+  attr :name, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :string, default: ""
+  attr :options, :list, required: true
+
+  defp filter_select(assigns) do
+    ~H"""
+    <label class="flex flex-col gap-0.5">
+      <span class="text-[10px] uppercase tracking-wide text-base-content/50">{@label}</span>
+      <select name={"filters[#{@name}]"} class="select select-xs select-bordered">
+        <option value="" selected={@value in [nil, ""]}>All</option>
+        <option :for={o <- @options} value={opt_value(o)} selected={@value == opt_value(o)}>
+          {opt_label(o)}
+        </option>
+      </select>
+    </label>
+    """
+  end
+
+  defp opt_value({v, _label}), do: v
+  defp opt_value(v), do: v
+  defp opt_label({_v, label}), do: label
+  defp opt_label(v), do: v
+
   attr :title, :string, required: true
   attr :rows, :list, required: true
+  attr :columns, :list, required: true
   attr :error, :string, default: nil
   attr :loading, :boolean, default: false
-  attr :show_route, :boolean, default: false
   attr :first_seen, :map, required: true
   attr :new_keys, :any, required: true
   attr :now, :any, required: true
@@ -291,16 +459,8 @@ defmodule TragarAiWeb.CollectionsLive do
         <table class="table table-xs">
           <thead>
             <tr>
-              <th>Open</th>
-              <th>Reference</th>
-              <th>Branch</th>
-              <th>Date</th>
-              <th>Window</th>
-              <th>Consignor</th>
-              <th>Consignee</th>
-              <th :if={@show_route}>Route / Driver / Vehicle</th>
-              <th class="text-right">Waybills</th>
-              <th class="text-right">Parcels</th>
+              <th class="whitespace-nowrap">Open</th>
+              <th :for={col <- @columns} class="whitespace-nowrap">{col_header(col)}</th>
             </tr>
           </thead>
           <tbody>
@@ -313,28 +473,41 @@ defmodule TragarAiWeb.CollectionsLive do
                 )
               }
             >
-              <% age = age_seconds(c, @first_seen, @now) %>
               <td class="whitespace-nowrap">
-                <span :if={new?(c, @new_keys, age)} class="badge badge-xs badge-success mr-1">
+                <span
+                  :if={new?(c, @new_keys, age_seconds(c, @first_seen, @now))}
+                  class="badge badge-xs badge-success mr-1"
+                >
                   NEW
                 </span>
-                <span class={"font-mono " <> age_class(age)}>{duration(age)}</span>
+                <span class={"font-mono " <> age_class(age_seconds(c, @first_seen, @now))}>
+                  {duration(age_seconds(c, @first_seen, @now))}
+                </span>
               </td>
-              <td class="font-mono">{c["collection_reference"] || "—"}</td>
-              <td>{c["originating_branch"] || "—"}</td>
-              <td class="whitespace-nowrap">{c["collection_date"] || "—"}</td>
-              <td class="whitespace-nowrap text-base-content/60">{window(c)}</td>
-              <td>{party(c, "consignor")}</td>
-              <td>{party(c, "consignee")}</td>
-              <td :if={@show_route} class="text-base-content/60">{route(c)}</td>
-              <td class="text-right font-mono">{c["estimated_waybills"] || "—"}</td>
-              <td class="text-right font-mono">{c["estimated_parcels"] || "—"}</td>
+              <td :for={col <- @columns} class="whitespace-nowrap">{cell(c, col)}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
     """
+  end
+
+  # Every field key present across the rows — a few useful ones first, then the
+  # rest sorted. No whitelist: whatever FreightWare returns is shown as a column.
+  @preferred_columns ~w(collection_reference status originating_branch collection_date collect_after collect_before)
+  defp columns(rows) do
+    keys = rows |> Enum.flat_map(&Map.keys/1) |> Enum.uniq()
+    Enum.filter(@preferred_columns, &(&1 in keys)) ++ Enum.sort(keys -- @preferred_columns)
+  end
+
+  defp col_header(col), do: String.replace(col, "_", " ")
+
+  defp cell(c, col) do
+    case Map.get(c, col) do
+      nil -> "—"
+      v -> to_string(v)
+    end
   end
 
   defp row_class(_age, true), do: "bg-success/10"
@@ -357,29 +530,112 @@ defmodule TragarAiWeb.CollectionsLive do
 
   defp duration(_), do: "—"
 
-  defp party(c, role) do
-    [c["#{role}_name"], c["#{role}_city"]]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join(" · ")
-    |> nonempty()
+  # ── Filtering, options, totals ────────────────────────────────────────────────
+
+  defp filtered(rows, filters) do
+    Enum.filter(rows, fn c ->
+      match_val(c["account_reference"], filters["account"]) and
+        match_val(c["originating_branch"], filters["branch"]) and
+        match_val(c["status"], filters["status"]) and
+        match_year(c["collection_date"], filters["year"]) and
+        match_month(c["collection_date"], filters["month"])
+    end)
   end
 
-  defp window(c) do
-    case {c["collect_after"], c["collect_before"]} do
-      {nil, nil} -> "—"
-      {a, nil} -> "from #{a}"
-      {nil, b} -> "by #{b}"
-      {a, b} -> "#{a}–#{b}"
+  defp match_val(_v, f) when f in [nil, ""], do: true
+  defp match_val(v, f), do: to_string(v) == f
+
+  defp match_year(_d, f) when f in [nil, ""], do: true
+  defp match_year(date, y), do: is_binary(date) and String.starts_with?(date, y <> "-")
+
+  defp match_month(_d, f) when f in [nil, ""], do: true
+
+  defp match_month(date, m) when is_binary(date) do
+    case String.split(date, "-") do
+      [_y, mm | _] -> mm == m
+      _ -> false
     end
   end
 
-  defp route(c) do
-    [c["route_code"], c["driver_reference"], c["vehicle_registration"]]
+  defp match_month(_d, _m), do: false
+
+  defp any_filter?(filters), do: Enum.any?(filters, fn {_k, v} -> v not in [nil, ""] end)
+
+  # Distinct non-blank values of `key` across rows, as sorted strings.
+  defp options(rows, key) do
+    rows
+    |> Enum.map(&Map.get(&1, key))
     |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join(" / ")
-    |> nonempty()
+    |> Enum.map(&to_string/1)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
-  defp nonempty(""), do: "—"
-  defp nonempty(s), do: s
+  # Distinct years present in the collection dates.
+  defp years(rows) do
+    rows
+    |> Enum.map(fn c ->
+      with d when is_binary(d) <- c["collection_date"], do: String.slice(d, 0, 4)
+    end)
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
+    |> Enum.sort(:desc)
+  end
+
+  @months [
+    {"01", "January"},
+    {"02", "February"},
+    {"03", "March"},
+    {"04", "April"},
+    {"05", "May"},
+    {"06", "June"},
+    {"07", "July"},
+    {"08", "August"},
+    {"09", "September"},
+    {"10", "October"},
+    {"11", "November"},
+    {"12", "December"}
+  ]
+  defp months, do: @months
+
+  defp totals(unauth, out) do
+    all = unauth ++ out
+
+    %{
+      total: length(all),
+      unauthorised: length(unauth),
+      outstanding: length(out),
+      waybills: sum_field(all, "estimated_waybills"),
+      parcels: sum_field(all, "estimated_parcels"),
+      branches: distinct_count(all, "originating_branch"),
+      accounts: distinct_count(all, "account_reference")
+    }
+  end
+
+  defp sum_field(rows, key), do: rows |> Enum.map(&num(Map.get(&1, key))) |> Enum.sum()
+
+  defp distinct_count(rows, key) do
+    rows
+    |> Enum.map(&Map.get(&1, key))
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
+    |> length()
+  end
+
+  defp num(v) when is_number(v), do: v
+
+  defp num(v) when is_binary(v) do
+    case Integer.parse(v) do
+      {n, _} ->
+        n
+
+      :error ->
+        case Float.parse(v) do
+          {f, _} -> f
+          :error -> 0
+        end
+    end
+  end
+
+  defp num(_), do: 0
 end
