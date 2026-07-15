@@ -3,9 +3,10 @@ defmodule TragarAiWeb.CollectionsLive do
   Staff view of FreightWare collections for the current branch: those awaiting
   authorisation, and those still outstanding (not yet on a collection manifest).
 
-  A LiveView over the socket: the server re-polls FreightWare every 10s, flashes
-  collections that are newly seen, and colours each row by how long it has been
-  open (age since it first appeared / its collection date).
+  A LiveView over the socket: the server re-polls FreightWare on an adjustable
+  interval, flashes collections that are newly seen, and colours each row by its
+  age in days since the collection date (stable across refreshes) while it is not
+  yet waybilled. The list defaults to the not-yet-waybilled set.
   """
   use TragarAiWeb, :live_view
 
@@ -17,11 +18,11 @@ defmodule TragarAiWeb.CollectionsLive do
   @default_poll_ms 60_000
   @poll_options [{"30s", 30_000}, {"1m", 60_000}, {"2m", 120_000}, {"5m", 300_000}, {"Off", 0}]
 
-  # Age thresholds (seconds) for the open-duration highlight.
-  @amber_after 30 * 60
-  @red_after 2 * 60 * 60
-  # A collection first seen within this window still reads as "new".
-  @new_within 20
+  # Age thresholds (days) for the open-duration highlight. Measured from the
+  # collection date, so the colour is stable across browser refreshes rather than
+  # being reset by per-session tracking.
+  @amber_after_days 2
+  @red_after_days 4
 
   @impl true
   def mount(_params, _session, socket) do
@@ -31,7 +32,7 @@ defmodule TragarAiWeb.CollectionsLive do
         outstanding: [],
         unauthorised_error: nil,
         outstanding_error: nil,
-        first_seen: %{},
+        seen_keys: MapSet.new(),
         new_keys: MapSet.new(),
         now: DateTime.utc_now(),
         updated_at: nil,
@@ -90,8 +91,17 @@ defmodule TragarAiWeb.CollectionsLive do
   def handle_event("show_all_columns", _params, socket),
     do: {:noreply, assign(socket, hidden_columns: MapSet.new())}
 
+  # Waybills defaults to "0" — staff want the outstanding, not-yet-waybilled work
+  # up front. "All" (empty) shows waybilled collections too.
   defp empty_filters,
-    do: %{"account" => "", "branch" => "", "status" => "", "month" => "", "year" => ""}
+    do: %{
+      "account" => "",
+      "branch" => "",
+      "status" => "",
+      "month" => "",
+      "year" => "",
+      "waybills" => "0"
+    }
 
   @impl true
   def handle_async(:collections, {:ok, %{unauthorised: unauth, outstanding: out}}, socket) do
@@ -99,8 +109,7 @@ defmodule TragarAiWeb.CollectionsLive do
     outstanding = out |> ok_list() |> by_date_desc()
     now = DateTime.utc_now()
 
-    {first_seen, new_keys} =
-      track_seen(socket.assigns.first_seen, unauthorised ++ outstanding, now)
+    {seen_keys, new_keys} = track_seen(socket.assigns.seen_keys, unauthorised ++ outstanding)
 
     {:noreply,
      assign(socket,
@@ -108,7 +117,7 @@ defmodule TragarAiWeb.CollectionsLive do
        unauthorised_error: error(unauth),
        outstanding: outstanding,
        outstanding_error: error(out),
-       first_seen: first_seen,
+       seen_keys: seen_keys,
        new_keys: new_keys,
        now: now,
        updated_at: now,
@@ -165,66 +174,54 @@ defmodule TragarAiWeb.CollectionsLive do
   defp error({:error, reason}), do: inspect(reason)
   defp error(_), do: nil
 
-  # First-seen timestamp per collection, so we can show how long each has been
-  # open. A first appearance is seeded from the collection's own date/time (real
-  # age) when parseable, else now. `new_keys` are those that appeared since the
-  # previous poll — flashed as "new" (never on the very first load).
-  defp track_seen(prev, rows, now) do
-    first_load? = map_size(prev) == 0
-
-    first_seen =
-      for c <- rows, into: %{} do
-        k = key(c)
-        {k, Map.get(prev, k) || seed_seen(c, now)}
-      end
+  # The set of collection keys present now, plus those that appeared since the
+  # previous poll — flashed as "new" (never on the very first load). This is the
+  # only session state; the row colour is derived from the collection date, so it
+  # survives a browser refresh.
+  defp track_seen(prev_keys, rows) do
+    keys = for c <- rows, into: MapSet.new(), do: key(c)
 
     new_keys =
-      if first_load? do
-        MapSet.new()
-      else
-        for c <- rows, k = key(c), not Map.has_key?(prev, k), into: MapSet.new(), do: k
-      end
+      if MapSet.size(prev_keys) == 0,
+        do: MapSet.new(),
+        else: MapSet.difference(keys, prev_keys)
 
-    {first_seen, new_keys}
+    {keys, new_keys}
   end
 
   defp key(c), do: c["collection_reference"] || c["collection_obj"] || :erlang.phash2(c)
 
-  defp seed_seen(c, now) do
-    case open_datetime(c) do
-      %DateTime{} = dt -> if DateTime.compare(dt, now) == :lt, do: dt, else: now
-      _ -> now
-    end
-  end
+  defp new?(c, new_keys), do: MapSet.member?(new_keys, key(c))
 
-  defp open_datetime(c) do
-    with d when is_binary(d) <- c["collection_date"],
-         {:ok, date} <- Date.from_iso8601(d),
-         time <- parse_time(c["collect_after"]),
-         {:ok, naive} <- NaiveDateTime.new(date, time) do
-      DateTime.from_naive!(naive, "Etc/UTC")
-    else
+  # Whole days since the collection date (stable across refreshes). nil when the
+  # date is missing or unparseable.
+  defp age_days(c, now) do
+    case Date.from_iso8601(to_string(c["collection_date"])) do
+      {:ok, date} -> max(0, Date.diff(DateTime.to_date(now), date))
       _ -> nil
     end
   end
 
-  defp parse_time(t) when is_binary(t) do
-    case Time.from_iso8601(t) do
-      {:ok, time} -> time
-      _ -> ~T[00:00:00]
+  # A collection is "waybilled" once one or more waybills exist for it. An absent
+  # count reads as 0 (not yet waybilled).
+  defp waybilled?(c), do: num(c["waybills"]) > 0
+
+  # Age/status bucket driving the row colour: green while fresh, amber ageing, red
+  # stale — but only while not yet waybilled. Waybilled or dateless rows are muted.
+  defp bucket(c, now) do
+    cond do
+      waybilled?(c) ->
+        :done
+
+      true ->
+        case age_days(c, now) do
+          nil -> :none
+          d when d >= @red_after_days -> :red
+          d when d >= @amber_after_days -> :amber
+          _ -> :green
+        end
     end
   end
-
-  defp parse_time(_), do: ~T[00:00:00]
-
-  defp age_seconds(c, first_seen, now) do
-    case Map.get(first_seen, key(c)) do
-      %DateTime{} = seen -> max(0, DateTime.diff(now, seen, :second))
-      _ -> 0
-    end
-  end
-
-  defp new?(c, new_keys, age), do: MapSet.member?(new_keys, key(c)) or age <= @new_within
 
   @impl true
   def render(assigns) do
@@ -256,8 +253,9 @@ defmodule TragarAiWeb.CollectionsLive do
         <div>
           <h1 class="text-2xl font-semibold">Collections</h1>
           <p class="text-sm text-base-content/60">
-            Awaiting authorisation and outstanding. Rows are coloured by how long they've been open;
-            new ones flash. Filter, choose columns, and see totals below.
+            Awaiting authorisation and outstanding. Rows are coloured by age since the collection date
+            while not yet waybilled — green under 2d, amber 2–4d, red beyond. Defaults to
+            not-yet-waybilled; new ones flash.
           </p>
         </div>
         <div class="shrink-0 space-y-1 text-right">
@@ -332,6 +330,12 @@ defmodule TragarAiWeb.CollectionsLive do
         />
         <.filter_select name="year" label="Year" value={@filters["year"]} options={@opt_years} />
         <.filter_select name="month" label="Month" value={@filters["month"]} options={months()} />
+        <.filter_select
+          name="waybills"
+          label="Waybills"
+          value={@filters["waybills"]}
+          options={[{"0", "Not waybilled"}]}
+        />
         <button
           :if={@any_filter}
           type="button"
@@ -357,7 +361,6 @@ defmodule TragarAiWeb.CollectionsLive do
             columns={@visible_columns}
             error={@unauthorised_error}
             loading={@loading}
-            first_seen={@first_seen}
             new_keys={@new_keys}
             now={@now}
           />
@@ -368,7 +371,6 @@ defmodule TragarAiWeb.CollectionsLive do
             columns={@visible_columns}
             error={@outstanding_error}
             loading={@loading}
-            first_seen={@first_seen}
             new_keys={@new_keys}
             now={@now}
           />
@@ -434,7 +436,6 @@ defmodule TragarAiWeb.CollectionsLive do
   attr :columns, :list, required: true
   attr :error, :string, default: nil
   attr :loading, :boolean, default: false
-  attr :first_seen, :map, required: true
   attr :new_keys, :any, required: true
   attr :now, :any, required: true
 
@@ -464,24 +465,13 @@ defmodule TragarAiWeb.CollectionsLive do
             </tr>
           </thead>
           <tbody>
-            <tr
-              :for={c <- @rows}
-              class={
-                row_class(
-                  age_seconds(c, @first_seen, @now),
-                  new?(c, @new_keys, age_seconds(c, @first_seen, @now))
-                )
-              }
-            >
+            <tr :for={c <- @rows} class={row_class(c, @now)}>
               <td class="whitespace-nowrap">
-                <span
-                  :if={new?(c, @new_keys, age_seconds(c, @first_seen, @now))}
-                  class="badge badge-xs badge-success mr-1"
-                >
+                <span :if={new?(c, @new_keys)} class="badge badge-xs badge-success mr-1">
                   NEW
                 </span>
-                <span class={"font-mono " <> age_class(age_seconds(c, @first_seen, @now))}>
-                  {duration(age_seconds(c, @first_seen, @now))}
+                <span class={"font-mono " <> age_class(c, @now)}>
+                  {age_label(c, @now)}
                 </span>
               </td>
               <td :for={col <- @columns} class="whitespace-nowrap">{cell(c, col)}</td>
@@ -510,13 +500,32 @@ defmodule TragarAiWeb.CollectionsLive do
     end
   end
 
-  defp row_class(_age, true), do: "bg-success/10"
-  defp row_class(age, _new) when age >= @red_after, do: "bg-error/5"
-  defp row_class(_age, _new), do: ""
+  defp row_class(c, now) do
+    case bucket(c, now) do
+      :red -> "bg-error/10"
+      :amber -> "bg-warning/10"
+      :green -> "bg-success/10"
+      _ -> ""
+    end
+  end
 
-  defp age_class(age) when age >= @red_after, do: "text-error font-semibold"
-  defp age_class(age) when age >= @amber_after, do: "text-warning"
-  defp age_class(_age), do: "text-success"
+  defp age_class(c, now) do
+    case bucket(c, now) do
+      :red -> "text-error font-semibold"
+      :amber -> "text-warning"
+      :green -> "text-success"
+      _ -> "text-base-content/50"
+    end
+  end
+
+  # Open age in days since the collection date: "today", "1d", "5d", or "—".
+  defp age_label(c, now) do
+    case age_days(c, now) do
+      nil -> "—"
+      0 -> "today"
+      d -> "#{d}d"
+    end
+  end
 
   # Compact duration: 45s, 12m, 3h, 2d.
   defp duration(seconds) when is_integer(seconds) do
@@ -538,12 +547,18 @@ defmodule TragarAiWeb.CollectionsLive do
         match_val(c["originating_branch"], filters["branch"]) and
         match_val(c["status"], filters["status"]) and
         match_year(c["collection_date"], filters["year"]) and
-        match_month(c["collection_date"], filters["month"])
+        match_month(c["collection_date"], filters["month"]) and
+        match_waybills(c, filters["waybills"])
     end)
   end
 
   defp match_val(_v, f) when f in [nil, ""], do: true
   defp match_val(v, f), do: to_string(v) == f
+
+  # Match on the waybill count, treating an absent count as 0 (not waybilled) so
+  # the default "0" filter keeps dateless/partial rows in the not-yet-waybilled set.
+  defp match_waybills(_c, f) when f in [nil, ""], do: true
+  defp match_waybills(c, f), do: to_string(trunc(num(c["waybills"]))) == f
 
   defp match_year(_d, f) when f in [nil, ""], do: true
   defp match_year(date, y), do: is_binary(date) and String.starts_with?(date, y <> "-")
@@ -559,7 +574,9 @@ defmodule TragarAiWeb.CollectionsLive do
 
   defp match_month(_d, _m), do: false
 
-  defp any_filter?(filters), do: Enum.any?(filters, fn {_k, v} -> v not in [nil, ""] end)
+  # "Any filter active" means it differs from the defaults (waybills = "0"), so the
+  # Clear button doesn't show for the default not-yet-waybilled view.
+  defp any_filter?(filters), do: filters != empty_filters()
 
   # Distinct non-blank values of `key` across rows, as sorted strings.
   defp options(rows, key) do
