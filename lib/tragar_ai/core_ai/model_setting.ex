@@ -22,18 +22,18 @@ defmodule TragarAi.CoreAI.ModelSetting do
   # you ever want it selectable again.
   @models [
     %{
-      tag: "qwen2.5:14b-instruct",
-      label: "Qwen2.5 14B",
-      reasoning: false,
-      describe: "Fast, instruction-tuned generalist. No reasoning mode. The original default."
-    },
-    %{
       tag: "qwen3:14b",
       label: "Qwen3 14B",
       reasoning: true,
       describe:
-        "Newer generation, same family as the 30B. Supports a reasoning (thinking) " <>
-          "mode you can toggle below."
+        "Default. Newer generation, same family as the 30B. Runs with reasoning " <>
+          "(thinking) OFF for interpret/phrase; the mode can be toggled below."
+    },
+    %{
+      tag: "qwen2.5:14b-instruct",
+      label: "Qwen2.5 14B",
+      reasoning: false,
+      describe: "Fast, instruction-tuned generalist. No reasoning mode. The previous default."
     }
   ]
 
