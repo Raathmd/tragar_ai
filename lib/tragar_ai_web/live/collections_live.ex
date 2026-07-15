@@ -40,11 +40,13 @@ defmodule TragarAiWeb.CollectionsLive do
         poll_ms: @default_poll_ms,
         poll_timer: nil,
         filters: empty_filters(),
-        hidden_columns: MapSet.new(),
+        hidden_columns: MapSet.new(Freight.ColumnPrefs.get()),
+        columns_shared: Freight.ColumnPrefs.set?(),
         show_columns_panel: false
       )
 
     if connected?(socket) do
+      Phoenix.PubSub.subscribe(TragarAi.PubSub, Freight.ColumnPrefs.topic())
       {:ok, socket |> start_load() |> schedule_poll()}
     else
       {:ok, socket}
@@ -55,6 +57,22 @@ defmodule TragarAiWeb.CollectionsLive do
   @impl true
   def handle_info(:poll, socket) do
     {:noreply, socket |> start_load() |> schedule_poll()}
+  end
+
+  # A column-selection change from another browser/session — re-apply and refresh
+  # this browser's localStorage cache. Skipped when it matches what we already
+  # show (e.g. the echo of our own change).
+  def handle_info({:columns_changed, cols}, socket) do
+    hidden = MapSet.new(cols)
+
+    if MapSet.equal?(hidden, socket.assigns.hidden_columns) do
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> assign(hidden_columns: hidden, columns_shared: true)
+       |> push_event("columns_changed", %{cols: cols})}
+    end
   end
 
   @impl true
@@ -91,21 +109,31 @@ defmodule TragarAiWeb.CollectionsLive do
   def handle_event("show_all_columns", _params, socket),
     do: {:noreply, persist_columns(socket, MapSet.new())}
 
-  # Re-apply the column selection the browser saved (fired by the ColumnPrefs hook
-  # on mount), so a page refresh keeps the staff member's chosen columns.
+  # The browser's localStorage copy (fired by the ColumnPrefs hook on mount). The
+  # shared server-side store wins when it holds a value; localStorage only seeds it
+  # the first time any browser makes a choice, so a fresh install adopts the first
+  # selection instead of starting blank.
   def handle_event("restore_columns", %{"cols" => cols}, socket) when is_list(cols) do
-    hidden = for c <- cols, is_binary(c), into: MapSet.new(), do: c
-    {:noreply, assign(socket, hidden_columns: hidden)}
+    if socket.assigns.columns_shared do
+      {:noreply, socket}
+    else
+      hidden = for c <- cols, is_binary(c), into: MapSet.new(), do: c
+      {:noreply, socket |> assign(columns_shared: true) |> persist_columns(hidden)}
+    end
   end
 
   def handle_event("restore_columns", _params, socket), do: {:noreply, socket}
 
-  # Update the hidden-columns set and tell the browser to persist it to
-  # localStorage, so the selection survives a refresh (restored by the hook).
+  # Persist the hidden-columns set to the shared ETS store (broadcasts to other
+  # open dashboards) and to this browser's localStorage, so the selection survives
+  # a refresh and is the same across browsers.
   defp persist_columns(socket, hidden) do
+    cols = MapSet.to_list(hidden)
+    Freight.ColumnPrefs.put(cols)
+
     socket
-    |> assign(hidden_columns: hidden)
-    |> push_event("columns_changed", %{cols: MapSet.to_list(hidden)})
+    |> assign(hidden_columns: hidden, columns_shared: true)
+    |> push_event("columns_changed", %{cols: cols})
   end
 
   # Waybills defaults to "0" — staff want the outstanding, not-yet-waybilled work

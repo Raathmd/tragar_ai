@@ -20,6 +20,9 @@ defmodule TragarAi.Application do
       # TTL cache over the heavy FreightWare collections fetch (shared by all
       # staff dashboards + the poll, so the ~15s all-rows pull runs once per TTL).
       TragarAi.Freight.CollectionsCache,
+      # Shared (cross-browser) persistence of the Collections dashboard column
+      # selection, broadcast over PubSub so open dashboards update live.
+      TragarAi.Freight.ColumnPrefs,
       # Runs the ticket auto-answer work off the request path so the webhook can
       # return immediately (Freshdesk's webhook timeout is short).
       {Task.Supervisor, name: TragarAi.TaskSupervisor},

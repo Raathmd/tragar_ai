@@ -6,6 +6,7 @@ defmodule TragarAiWeb.CollectionsLiveTest do
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()
+    TragarAi.Freight.ColumnPrefs.reset()
 
     Req.Test.stub(TragarAi.Dovetail.Client, fn conn ->
       cond do
@@ -106,5 +107,21 @@ defmodule TragarAiWeb.CollectionsLiveTest do
       |> render_hook("restore_columns", %{"cols" => ["route_code"]})
 
     refute html =~ "route code"
+  end
+
+  test "column selection is shared across browsers via the server store", %{conn: conn} do
+    # Browser A hides the route code column.
+    {:ok, view_a, _html} = live(conn, ~p"/collections")
+    render_async(view_a, 5000)
+
+    view_a |> element("button[phx-click=\"toggle_columns_panel\"]") |> render_click()
+    view_a |> element("input[phx-value-col=\"route_code\"]") |> render_click()
+
+    # A fresh browser B (panel closed) adopts the shared selection on mount, so the
+    # route code column header is gone without B ever touching the columns panel.
+    {:ok, view_b, _html} = live(conn, ~p"/collections")
+    html_b = render_async(view_b, 5000)
+    assert html_b =~ "OUT99"
+    refute html_b =~ "route code"
   end
 end
