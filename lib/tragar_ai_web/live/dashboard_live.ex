@@ -127,7 +127,7 @@ defmodule TragarAiWeb.DashboardLive do
   def render(assigns) do
     ~H"""
     <div class="p-4 lg:p-6 space-y-6 max-w-6xl mx-auto">
-      <Layouts.app_nav active={:dashboard} />
+      <Layouts.app_nav active={:dashboard} flash={@flash} />
 
       <header class="flex items-end justify-between gap-3">
         <div>
