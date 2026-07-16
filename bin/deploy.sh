@@ -58,9 +58,12 @@ else
 fi
 changed() { [ "$CHANGED" = "__ALL__" ] || grep -qE "$1" <<<"$CHANGED"; }
 
-# Deps: only when the lockfile moved.
-if changed '^mix\.lock$'; then
-  echo "==> Fetching prod deps (mix.lock changed)"
+# Deps: when the deps manifest OR the lockfile moved. We key on mix.exs (not just
+# mix.lock) because the committed lock can't be auto-regenerated here (adding a
+# workflow needs a scope this runner's token lacks, and mix can't run locally), so
+# a new/removed dep shows up as a mix.exs change and `deps.get` resolves it.
+if changed '^mix\.(exs|lock)$'; then
+  echo "==> Fetching prod deps (mix.exs/mix.lock changed)"
   mix deps.get --only prod
 else
   echo "==> Deps unchanged; skipping deps.get"
