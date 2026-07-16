@@ -106,17 +106,22 @@ if config_env() != :test do
   # :stub is the deterministic in-process responder — the default.)
   config :tragar_ai, TragarAi.CoreAI,
     mode: String.to_atom(System.get_env("CORE_AI_MODE") || "stub"),
-    # Fast model for interpret + grounded phrasing (e.g. qwen2.5:14b-instruct).
-    model: System.get_env("CORE_AI_MODEL"),
+    # Default inference model shown/selected in Settings. "claude" routes to the
+    # cloud tier below; a Qwen tag runs the local model. Ships as claude; override
+    # per-env with CORE_AI_MODEL.
+    model: System.get_env("CORE_AI_MODEL") || "claude",
     # Optional deeper/slower model used only when "reason freely" is toggled on
     # (e.g. qwen3:30b-a3b). Falls back to CORE_AI_MODEL when unset.
     reason_model: System.get_env("CORE_AI_REASON_MODEL"),
     base_url: System.get_env("CORE_AI_URL") || "http://127.0.0.1:11434",
     receive_timeout: String.to_integer(System.get_env("CORE_AI_TIMEOUT_MS") || "180000"),
-    # Cloud fallback tier (Anthropic Claude) — used ONLY when local Ollama is
-    # unavailable AND this is enabled. Sensitive values are redacted to [[N]]
-    # tokens before the request and rehydrated before the answer is shown.
-    cloud_enabled: System.get_env("CORE_AI_CLOUD_ENABLED") == "true",
+    # Cloud tier (Anthropic Claude). Primary engine when the active model is
+    # "claude", else a fallback behind the local model. Sensitive values are
+    # redacted to [[N]] tokens before the request and rehydrated before the answer
+    # is shown. Enabled by default, but only actually active when an API key is
+    # also present (see CoreAI.Cloud.enabled?/0) — so prod need only supply the
+    # key. Set CORE_AI_CLOUD_ENABLED=false to force it off even with a key.
+    cloud_enabled: System.get_env("CORE_AI_CLOUD_ENABLED", "true") == "true",
     cloud_api_key: System.get_env("CORE_AI_CLOUD_API_KEY"),
     cloud_model: System.get_env("CORE_AI_CLOUD_MODEL") || "claude-haiku-4-5",
     cloud_url: System.get_env("CORE_AI_CLOUD_URL") || "https://api.anthropic.com/v1/messages"
