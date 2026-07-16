@@ -1,0 +1,39 @@
+name: Lockfile
+
+# When a PR changes mix.exs, regenerate mix.lock on the runner and commit it back
+# to the PR branch. The prod deploy (bin/deploy.sh) only runs `mix deps.get` when
+# mix.lock changed, so a new/removed Hex dep needs the lock committed — this does
+# that automatically, so `mix` never has to run locally.
+on:
+  pull_request:
+    paths:
+      - mix.exs
+
+permissions:
+  contents: write
+
+jobs:
+  update-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "28.4"
+      - run: mix deps.get
+      - name: Commit mix.lock if it changed
+        run: |
+          if git diff --quiet -- mix.lock; then
+            echo "mix.lock unchanged — nothing to commit."
+          else
+            git config user.name "tragar-lockbot"
+            git config user.email "noreply@tragar.local"
+            git add mix.lock
+            git commit -m "chore(deps): regenerate mix.lock for mix.exs change"
+            git push origin HEAD:"${{ github.head_ref }}"
+            echo "Committed regenerated mix.lock."
+          fi
