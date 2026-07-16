@@ -45,13 +45,32 @@ defmodule TragarAiWeb.SettingsLiveTest do
     assert SearchStrategy.get() == :sequential
   end
 
-  test "renders both models and marks the active one", %{conn: conn} do
+  test "renders the models (Claude + local) and marks the active one", %{conn: conn} do
     ModelSetting.set("qwen2.5:14b-instruct")
     {:ok, _view, html} = live(conn, ~p"/settings")
 
-    assert html =~ "Local model"
+    assert html =~ "Inference model"
+    assert html =~ "Claude (cloud)"
     assert html =~ "Qwen2.5 14B"
     assert html =~ "Qwen3 14B"
+  end
+
+  test "Claude is the default model and uses the cloud provider", %{conn: _conn} do
+    ModelSetting.reset()
+    assert ModelSetting.get() == "claude"
+    assert ModelSetting.provider("claude") == :cloud
+    assert ModelSetting.cloud?()
+    refute ModelSetting.provider("qwen3:14b") == :cloud
+  end
+
+  test "clicking Claude switches the active model to the cloud provider", %{conn: conn} do
+    ModelSetting.set("qwen3:14b")
+    {:ok, view, _html} = live(conn, ~p"/settings")
+
+    view |> element("button[phx-value-model='claude']") |> render_click()
+
+    assert ModelSetting.get() == "claude"
+    assert ModelSetting.cloud?()
   end
 
   test "clicking a model switches the active model", %{conn: conn} do
@@ -78,7 +97,7 @@ defmodule TragarAiWeb.SettingsLiveTest do
     assert ModelSetting.thinking_active?() == true
   end
 
-  test "reasoning has no effect on a non-reasoning model", %{conn: conn} do
+  test "reasoning has no effect on a non-reasoning model", %{conn: _conn} do
     ModelSetting.set("qwen2.5:14b-instruct")
     ModelSetting.set_reasoning_enabled(true)
 

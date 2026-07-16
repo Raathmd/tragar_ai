@@ -39,8 +39,10 @@ defmodule TragarAi.CoreAI do
     case mode() do
       :ollama ->
         with_fallbacks(
-          [fn -> ollama_interpret(question, context) end] ++
-            cloud_interpret_attempts(question, context),
+          order(
+            [fn -> ollama_interpret(question, context) end],
+            cloud_interpret_attempts(question, context)
+          ),
           fn -> {:ok, ensure_intents(__MODULE__.Stub.interpret(question, context))} end,
           "interpret"
         )
@@ -97,8 +99,10 @@ defmodule TragarAi.CoreAI do
     case mode() do
       :ollama ->
         with_fallbacks(
-          [fn -> ollama_phrase(intent, facts, context, on_chunk) end] ++
-            cloud_phrase_attempts(intent, facts, context, on_chunk),
+          order(
+            [fn -> ollama_phrase(intent, facts, context, on_chunk) end],
+            cloud_phrase_attempts(intent, facts, context, on_chunk)
+          ),
           fn -> single_chunk(__MODULE__.Stub.phrase(intent, facts, context), on_chunk) end,
           "phrase"
         )
@@ -122,8 +126,13 @@ defmodule TragarAi.CoreAI do
   def clarify(reason) do
     case mode() do
       :ollama ->
-        with_fallback(
-          fn -> ollama_phrase(:clarify, clarify_facts(reason), %{}, nil) end,
+        facts = clarify_facts(reason)
+
+        with_fallbacks(
+          order(
+            [fn -> ollama_phrase(:clarify, facts, %{}, nil) end],
+            cloud_phrase_attempts(:clarify, facts, %{}, nil)
+          ),
           fn -> {:ok, __MODULE__.Stub.clarify(reason)} end,
           "clarify"
         )
@@ -148,8 +157,11 @@ defmodule TragarAi.CoreAI do
   def quote_extract(transcript) when is_binary(transcript) do
     case mode() do
       :ollama ->
-        with_fallback(
-          fn -> ollama_quote_extract(transcript) end,
+        with_fallbacks(
+          order(
+            [fn -> ollama_quote_extract(transcript) end],
+            cloud_quote_extract_attempts(transcript)
+          ),
           fn -> {:ok, __MODULE__.Stub.quote_extract(transcript)} end,
           "quote_extract"
         )
@@ -188,13 +200,26 @@ defmodule TragarAi.CoreAI do
   defp reason_attempts(question, context, on_chunk) do
     models = Enum.uniq([active_reason_model(), ollama_model()])
     local = for m <- models, do: fn -> ollama_reason(question, context, on_chunk, m) end
-    local ++ cloud_reason_attempts(question, context, on_chunk)
+    order(local, cloud_reason_attempts(question, context, on_chunk))
   end
 
-  # ── Cloud fallback tier (Claude, redacted) ───────────────────────────────────
-  # These attempts are appended to each chain only when the cloud tier is enabled;
-  # otherwise they're an empty list (no-op). Sensitive values are redacted to
-  # [[N]] tokens before the request and rehydrated before the answer is returned.
+  # ── Cloud tier (Claude, redacted) ────────────────────────────────────────────
+  # Claude can serve either as the PRIMARY engine (when the active model's provider
+  # is :cloud — the "Claude" setting) or as a FALLBACK behind the local model
+  # (when a Qwen model is active). `order/2` decides which by putting the cloud
+  # attempts first or last. Either way the cloud attempts are only present when the
+  # tier is enabled. Sensitive values are redacted to [[N]] tokens before the
+  # request and rehydrated before the answer is returned — Anthropic sees only
+  # tokens.
+
+  # Cloud-first when the operator selected Claude and the tier is usable; otherwise
+  # local-first with cloud as a trailing fallback.
+  defp order(local, cloud) do
+    if use_cloud?(), do: cloud ++ local, else: local ++ cloud
+  end
+
+  defp use_cloud?,
+    do: TragarAi.CoreAI.ModelSetting.cloud?() and __MODULE__.Cloud.enabled?()
 
   defp cloud_interpret_attempts(question, context) do
     if __MODULE__.Cloud.enabled?(),
@@ -211,6 +236,12 @@ defmodule TragarAi.CoreAI do
   defp cloud_reason_attempts(question, context, on_chunk) do
     if __MODULE__.Cloud.enabled?(),
       do: [fn -> cloud_reason(question, context, on_chunk) end],
+      else: []
+  end
+
+  defp cloud_quote_extract_attempts(transcript) do
+    if __MODULE__.Cloud.enabled?(),
+      do: [fn -> cloud_quote_extract(transcript) end],
       else: []
   end
 
@@ -261,15 +292,41 @@ defmodule TragarAi.CoreAI do
     end
   end
 
+  defp cloud_quote_extract(transcript) do
+    map = redact_map(transcript, %{}, %{})
+
+    with {:ok, content} <- cloud_chat_redacted(quote_extract_prompt(), transcript, map),
+         {:ok, body} <- Jason.decode(strip_think(content)) do
+      slots =
+        body
+        |> take_quote_slots()
+        |> Map.new(fn {k, v} -> {k, Redact.restore(v, map)} end)
+
+      {:ok, slots}
+    else
+      {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
+      {:error, _} = err -> err
+    end
+  end
+
   # Build the user prompt with REAL values, then redact the whole thing — so any
   # secret that landed in either the question or the encoded context/facts is
   # tokenised before it leaves the network.
   defp cloud_chat_redacted(system, user, map) do
     [
-      %{role: "system", content: system <> cloud_redaction_note()},
+      %{role: "system", content: strip_qwen_control(system) <> cloud_redaction_note()},
       %{role: "user", content: Redact.apply(user, map)}
     ]
     |> __MODULE__.Cloud.chat()
+  end
+
+  # `/no_think` and `/think` are Qwen-specific control tokens. Claude is no-think by
+  # default (we never request extended thinking), so drop them from Claude-bound
+  # prompts rather than shipping meaningless directives.
+  defp strip_qwen_control(text) do
+    text
+    |> String.replace(~r{/no_think|/think}, "")
+    |> String.trim_trailing()
   end
 
   defp redact_map(question, facts, entities) do
@@ -324,17 +381,21 @@ defmodule TragarAi.CoreAI do
     # For real providers, reflect the *active* runtime model (settings-switchable),
     # not just the configured default. Stub mode has no model.
     {provider, label, model} =
-      case mode do
-        :ollama ->
+      cond do
+        mode == :ollama and use_cloud?() ->
+          m = Keyword.get(cfg, :cloud_model) || "claude-haiku-4-5"
+          {"Anthropic", "#{m} · Claude (cloud, redacted → local/stub fallback)", m}
+
+        mode == :ollama ->
           m = ollama_model()
           {"Ollama", "#{m} · Ollama (→ stub fallback)", m}
 
-        :http ->
+        mode == :http ->
           m = ollama_model()
           prov = if base && String.contains?(base, "11434"), do: "Ollama", else: "sidecar"
           {prov, "#{m} · #{prov}", m}
 
-        _ ->
+        true ->
           m = Keyword.get(cfg, :model)
           {"in-process", m || "Core AI stub (rule-based)", m}
       end
@@ -343,22 +404,6 @@ defmodule TragarAi.CoreAI do
   end
 
   # ── Ollama (qwen3:30b, direct) ──────────────────────────────────────────────
-
-  # Run the primary; on any error/exception, log and use the deterministic
-  # fallback. This is what makes the stub the safety net when qwen is down.
-  defp with_fallback(primary, fallback, what) do
-    case safe(primary) do
-      {:ok, _} = ok ->
-        ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "CoreAI #{what}: qwen/Ollama unavailable (#{inspect(reason)}); using fallback"
-        )
-
-        fallback.()
-    end
-  end
 
   # Try each attempt in order; first success wins. Only if every attempt fails do
   # we run `final` (the deterministic stub). This gives a model→model→stub chain

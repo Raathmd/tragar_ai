@@ -103,11 +103,13 @@ defmodule TragarAiWeb.SettingsLive do
 
       <section class="rounded-lg border border-base-300 p-4 space-y-3 max-w-2xl">
         <div>
-          <h2 class="text-sm font-medium">Local model</h2>
+          <h2 class="text-sm font-medium">Inference model</h2>
           <p class="text-xs text-base-content/60">
-            Which local model answers. Switching loads the selected model and unloads the other,
-            so only one stays resident. Applies immediately; resets to the configured default on
-            restart.
+            Which model answers interpret/phrase. <span class="font-medium">Claude (cloud)</span>
+            runs on Anthropic's API (private values redacted to tokens first) and falls back to a
+            local model, then the stub, if the API is down. A local model keeps everything on the
+            box. Switching a local model loads it and unloads the other so only one stays resident.
+            Applies immediately; resets to the configured default on restart.
           </p>
         </div>
 

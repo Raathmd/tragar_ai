@@ -17,23 +17,36 @@ defmodule TragarAi.CoreAI.ModelSetting do
   @model_key :core_ai_active_model
   @reasoning_key :core_ai_reasoning_enabled
 
-  # Selectable chat models, in display order (first = default). `reasoning: true`
-  # marks models that support Ollama's `think` field (Qwen3). Add the 30B here if
-  # you ever want it selectable again.
+  # Selectable chat models, in display order (first = default). `provider` is
+  # `:cloud` (Anthropic Claude, via the CoreAI cloud tier) or `:ollama` (a resident
+  # local model). `reasoning: true` marks models that support Ollama's `think`
+  # field (Qwen3). Add the 30B here if you ever want it selectable again.
   @models [
+    %{
+      tag: "claude",
+      label: "Claude (cloud)",
+      provider: :cloud,
+      reasoning: false,
+      describe:
+        "Default. Anthropic Claude (claude-haiku-4-5) via API — highest-quality " <>
+          "interpret/phrase. Private values are redacted to tokens before they leave " <>
+          "the network; falls back to the local model, then the stub, if the API is down."
+    },
     %{
       tag: "qwen3:14b",
       label: "Qwen3 14B",
+      provider: :ollama,
       reasoning: true,
       describe:
-        "Default. Newer generation, same family as the 30B. Runs with reasoning " <>
+        "Local. Newer generation, same family as the 30B. Runs with reasoning " <>
           "(thinking) OFF for interpret/phrase; the mode can be toggled below."
     },
     %{
       tag: "qwen2.5:14b-instruct",
       label: "Qwen2.5 14B",
+      provider: :ollama,
       reasoning: false,
-      describe: "Fast, instruction-tuned generalist. No reasoning mode. The previous default."
+      describe: "Local. Fast, instruction-tuned generalist. No reasoning mode."
     }
   ]
 
@@ -83,6 +96,12 @@ defmodule TragarAi.CoreAI.ModelSetting do
   @doc "Whether a model supports the reasoning (thinking) mode."
   def reasoning_capable?(tag), do: field(tag, :reasoning, false) == true
 
+  @doc "The inference provider for a tag — `:cloud` (Claude) or `:ollama` (local)."
+  def provider(tag), do: field(tag, :provider, :ollama)
+
+  @doc "Whether the active model runs on the cloud (Claude) provider."
+  def cloud?, do: provider(get()) == :cloud
+
   @doc "The metadata map for a tag, or nil if unknown."
   def meta(tag), do: Enum.find(@models, &(&1.tag == tag))
 
@@ -121,13 +140,18 @@ defmodule TragarAi.CoreAI.ModelSetting do
     end
   end
 
-  # Unload every other selectable model, then warm the chosen one, in the
-  # background so the settings click returns immediately. Best-effort; the
-  # unload/preload calls no-op unless CoreAI is in :ollama mode.
+  # Unload every other resident (local) model, then warm the chosen one if it's
+  # local, in the background so the settings click returns immediately. Cloud
+  # (Claude) has nothing to load/unload, and switching TO it frees the local
+  # models from memory. Best-effort; the unload/preload calls no-op unless CoreAI
+  # is in :ollama mode.
   defp swap_resident(tag) do
     Task.start(fn ->
-      for other <- tags(), other != tag, do: TragarAi.CoreAI.unload(other)
-      TragarAi.CoreAI.preload(tag)
+      for other <- tags(), other != tag, provider(other) == :ollama do
+        TragarAi.CoreAI.unload(other)
+      end
+
+      if provider(tag) == :ollama, do: TragarAi.CoreAI.preload(tag)
     end)
 
     :ok
