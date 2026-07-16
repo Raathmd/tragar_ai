@@ -8,13 +8,13 @@ defmodule TragarAi.Assist.SearchStrategy do
       harmonise.
 
   Backed by application env so it can be flipped live (e.g. from the settings
-  page) without a restart; it falls back to the configured default (`:sequential`)
-  on boot. Set the boot default with
-  `config :tragar_ai, :search_strategy, :fanout`.
+  page) without a restart; it falls back to the configured default (`:fanout`)
+  on boot. Override the boot default with
+  `config :tragar_ai, :search_strategy, :sequential`.
   """
 
   @key :search_strategy
-  @default :sequential
+  @default :fanout
   @strategies [:sequential, :fanout]
 
   @doc "Every selectable strategy."
