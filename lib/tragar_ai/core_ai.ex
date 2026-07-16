@@ -637,9 +637,17 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  # The active fast model — runtime-switchable from the settings page. Defaults to
-  # the configured CORE_AI_MODEL (then the first listed model) until switched.
-  defp ollama_model, do: TragarAi.CoreAI.ModelSetting.get()
+  # The tag used for the actual Ollama call — the local tier, and the fallback when
+  # a cloud model (Claude) is active. When the active selection is itself a local
+  # model, use it; when it's Claude, use the configured local model so the loop
+  # degrades to a real local model, not straight to the stub.
+  defp ollama_model do
+    tag = TragarAi.CoreAI.ModelSetting.get()
+
+    if TragarAi.CoreAI.ModelSetting.provider(tag) == :ollama,
+      do: tag,
+      else: TragarAi.CoreAI.ModelSetting.local_model()
+  end
 
   @reason_key {__MODULE__, :active_reason_model}
 

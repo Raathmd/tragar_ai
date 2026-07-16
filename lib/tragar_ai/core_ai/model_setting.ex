@@ -13,9 +13,14 @@ defmodule TragarAi.CoreAI.ModelSetting do
   The swap runs in the background; the setting itself applies immediately.
   """
 
-  # Atom app-env keys (Elixir 1.19 deprecates non-atom keys).
+  # Atom app-env keys (Elixir 1.19 deprecates non-atom keys). Application env is the
+  # fast in-memory cache; the same values are mirrored to the durable
+  # `RuntimeSettings` store under the string keys below so a choice survives a
+  # restart, and hydrated back into app env on boot (see `load_persisted/0`).
   @model_key :core_ai_active_model
   @reasoning_key :core_ai_reasoning_enabled
+  @persist_model "core_ai_active_model"
+  @persist_reasoning "core_ai_reasoning_enabled"
 
   # Selectable chat models, in display order (first = default). `provider` is
   # `:cloud` (Anthropic Claude, via the CoreAI cloud tier) or `:ollama` (a resident
@@ -57,12 +62,41 @@ defmodule TragarAi.CoreAI.ModelSetting do
   def tags, do: Enum.map(@models, & &1.tag)
 
   @doc """
-  The boot default: the configured `CORE_AI_MODEL` when set (so existing prod
-  behaviour is preserved), otherwise the first listed model.
+  The boot default SELECTION: the configured `CORE_AI_MODEL` when it names a
+  selectable model, otherwise the first listed model (Claude). A `CORE_AI_MODEL`
+  that names a non-selectable local model (e.g. qwen3:30b) is treated as the local
+  tier model (see `local_model/0`), not the selection — so the default is Claude
+  and that model becomes the local/fallback engine.
   """
   def default do
-    case Application.get_env(:tragar_ai, TragarAi.CoreAI, [])[:model] do
-      tag when is_binary(tag) and tag != "" -> tag
+    tag = config_model()
+    if is_binary(tag) and tag != "" and tag in tags(), do: tag, else: hd(@models).tag
+  end
+
+  # The configured CORE_AI_MODEL (may be unset, a selectable tag, or a
+  # non-selectable local model like qwen3:30b).
+  defp config_model, do: Application.get_env(:tragar_ai, TragarAi.CoreAI, [])[:model]
+
+  @doc """
+  The local Ollama model tag for the local tier: the model the app calls when a
+  local model is selected, and the fallback the loop uses when a cloud model
+  (Claude) is active — so it degrades to the real local model, never straight to
+  the stub. Uses `CORE_AI_MODEL` when it names a local model (any Ollama tag,
+  including non-selectable ones such as qwen3:30b), else the first local model.
+  """
+  def local_model do
+    case config_model() do
+      tag when is_binary(tag) and tag != "" ->
+        if provider(tag) == :ollama, do: tag, else: first_local_tag()
+
+      _ ->
+        first_local_tag()
+    end
+  end
+
+  defp first_local_tag do
+    case Enum.find(@models, &(&1.provider == :ollama)) do
+      %{tag: tag} -> tag
       _ -> hd(@models).tag
     end
   end
@@ -78,6 +112,7 @@ defmodule TragarAi.CoreAI.ModelSetting do
   def set(tag) when is_binary(tag) do
     if tag in tags() do
       Application.put_env(:tragar_ai, @model_key, tag)
+      TragarAi.RuntimeSettings.put(@persist_model, tag)
       swap_resident(tag)
       {:ok, tag}
     else
@@ -111,16 +146,43 @@ defmodule TragarAi.CoreAI.ModelSetting do
   @doc "Turn the reasoning toggle on/off. Returns `{:ok, on}`."
   def set_reasoning_enabled(on) when is_boolean(on) do
     Application.put_env(:tragar_ai, @reasoning_key, on)
+    TragarAi.RuntimeSettings.put(@persist_reasoning, to_string(on))
     {:ok, on}
   end
 
   @doc """
-  Clear both runtime overrides, reverting to the configured defaults (the
-  `CORE_AI_MODEL` model and reasoning off). Mainly for test isolation.
+  Hydrate the runtime overrides from the durable store into application env, so a
+  model / reasoning choice made before a restart is restored. Called once at boot
+  after the Repo starts. Best-effort — a missing store leaves the configured
+  defaults in place; a persisted model no longer offered is ignored.
+  """
+  def load_persisted do
+    case TragarAi.RuntimeSettings.get(@persist_model) do
+      tag when is_binary(tag) and tag != "" ->
+        if tag in tags(), do: Application.put_env(:tragar_ai, @model_key, tag)
+
+      _ ->
+        :ok
+    end
+
+    case TragarAi.RuntimeSettings.get(@persist_reasoning) do
+      "true" -> Application.put_env(:tragar_ai, @reasoning_key, true)
+      "false" -> Application.put_env(:tragar_ai, @reasoning_key, false)
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  @doc """
+  Clear both runtime overrides (in-memory and durable), reverting to the
+  configured defaults (Claude selection, reasoning off). Mainly for test isolation.
   """
   def reset do
     Application.delete_env(:tragar_ai, @model_key)
     Application.delete_env(:tragar_ai, @reasoning_key)
+    TragarAi.RuntimeSettings.delete(@persist_model)
+    TragarAi.RuntimeSettings.delete(@persist_reasoning)
     :ok
   end
 

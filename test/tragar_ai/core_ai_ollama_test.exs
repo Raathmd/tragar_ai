@@ -285,9 +285,10 @@ defmodule TragarAi.CoreAIOllamaTest do
 
     Application.put_env(:tragar_ai, CoreAI,
       mode: :ollama,
-      model: "fast",
+      # A local model is active, so the local tier runs first; Ollama is down →
+      # the chain must fall through to the cloud tier.
+      model: "qwen3:14b",
       base_url: "http://ollama.test",
-      # Ollama is down → the chain must fall through to the cloud tier.
       req_options: [plug: fn conn -> Plug.Conn.send_resp(conn, 500, "down") end],
       cloud_enabled: true,
       cloud_api_key: "sk-ant-test",
@@ -324,7 +325,7 @@ defmodule TragarAi.CoreAIOllamaTest do
 
     Application.put_env(:tragar_ai, CoreAI,
       mode: :ollama,
-      model: "fast",
+      model: "qwen3:14b",
       base_url: "http://ollama.test",
       req_options: [plug: fn conn -> Plug.Conn.send_resp(conn, 500, "down") end],
       cloud_enabled: false,
@@ -340,5 +341,34 @@ defmodule TragarAi.CoreAIOllamaTest do
 
     assert {:ok, _} = CoreAI.phrase(:load_status, %{"status" => "OND"}, %{})
     refute_received :cloud_called
+  end
+
+  test "Claude is the default selection, but with cloud off the local model answers" do
+    parent = self()
+    TragarAi.CoreAI.ModelSetting.reset()
+
+    Application.put_env(:tragar_ai, CoreAI,
+      mode: :ollama,
+      # A non-selectable local model → the selection defaults to Claude, and this
+      # becomes the local/fallback model.
+      model: "qwen3:30b",
+      base_url: "http://ollama.test",
+      cloud_enabled: false,
+      req_options: [
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(parent, {:model, Jason.decode!(body)["model"]})
+          Req.Test.json(conn, %{"message" => %{"content" => "Out for delivery."}})
+        end
+      ]
+    )
+
+    # Default selection is Claude…
+    assert TragarAi.CoreAI.ModelSetting.get() == "claude"
+
+    # …but with the cloud tier off, the loop runs the LOCAL model (qwen3:30b),
+    # not the "claude" tag and not the stub.
+    assert {:ok, "Out for delivery."} = CoreAI.phrase(:load_status, %{"status" => "OND"})
+    assert_received {:model, "qwen3:30b"}
   end
 end

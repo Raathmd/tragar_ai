@@ -35,9 +35,23 @@ defmodule TragarAi.Application do
     opts = [strategy: :one_for_one, name: TragarAi.Supervisor]
 
     with {:ok, _pid} = ok <- Supervisor.start_link(children, opts) do
+      restore_runtime_settings()
       warm_accounts_cache()
       ok
     end
+  end
+
+  # Restore the durable runtime settings (active Core AI model, reasoning toggle)
+  # into application env, so a choice made in the UI survives a restart/redeploy.
+  # Runs after the Repo is up; best-effort so a cold/missing store can't block boot.
+  defp restore_runtime_settings do
+    TragarAi.CoreAI.ModelSetting.load_persisted()
+    :ok
+  rescue
+    error ->
+      require Logger
+      Logger.warning("[settings] restore on boot failed: #{inspect(error)}")
+      :ok
   end
 
   # Enqueue an immediate background refresh of the FreightWare account directory
