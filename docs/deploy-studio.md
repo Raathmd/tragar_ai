@@ -41,10 +41,19 @@ DOVETAIL_PROD_USERNAME=
 DOVETAIL_PROD_PASSWORD=
 DOVETAIL_PROD_STATION=
 
-# Core AI — talk directly to Ollama/qwen3:30b on the Studio
+# Core AI — run the model chain on the Studio (Ollama local models + optional
+# Claude cloud tier). CORE_AI_MODE must be `ollama` for any model to engage.
 CORE_AI_MODE=ollama
 CORE_AI_URL=http://127.0.0.1:11434
-CORE_AI_MODEL=qwen3:30b
+CORE_AI_MODEL=qwen3:30b          # active inference model. Set to `claude` to default to Claude.
+
+# Claude (Anthropic) cloud tier — OPT-IN. Off unless BOTH are set. When on and
+# selected (CORE_AI_MODEL=claude) it is the primary engine, falling back to the
+# local model then the stub. Private values are redacted to [[N]] tokens before
+# any request leaves the box. Omit both lines to keep inference fully local.
+# CORE_AI_CLOUD_ENABLED=true
+# CORE_AI_CLOUD_API_KEY=          # sk-ant-… (the Anthropic key)
+# CORE_AI_CLOUD_MODEL=claude-haiku-4-5   # optional; this is the default
 
 # Vantage, Freshdesk, inbound API auth
 VANTAGE_EMAIL=
