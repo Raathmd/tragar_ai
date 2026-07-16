@@ -398,8 +398,8 @@ defmodule TragarAi.CoreAI do
 
     # `format: "json"` constrains the decode grammar — the content is valid JSON,
     # so there is no thinking-tag preamble to strip.
-    with {:ok, content} <- ollama_chat(messages, format: "json", think: think_now()),
-         {:ok, body} <- Jason.decode(strip_think(content)) do
+    with {:ok, content} <- ollama_chat(messages, format: "json"),
+         {:ok, body} <- Jason.decode(content) do
       {:ok, finalize(parse_interpret(body), question)}
     else
       {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
@@ -413,8 +413,8 @@ defmodule TragarAi.CoreAI do
       %{role: "user", content: transcript}
     ]
 
-    with {:ok, content} <- ollama_chat(messages, format: "json", think: think_now()),
-         {:ok, body} <- Jason.decode(strip_think(content)) do
+    with {:ok, content} <- ollama_chat(messages, format: "json"),
+         {:ok, body} <- Jason.decode(content) do
       {:ok, take_quote_slots(body)}
     else
       {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
@@ -457,7 +457,7 @@ defmodule TragarAi.CoreAI do
       %{role: "system", content: phrase_system_prompt()},
       %{role: "user", content: phrase_user_prompt(intent, facts, context)}
     ]
-    |> ollama_generate(on_chunk, ollama_model(), think: think_now())
+    |> ollama_generate(on_chunk, ollama_model())
   end
 
   # "Reason freely" uses the active reasoning model (dashboard-switchable) — slower
@@ -475,10 +475,11 @@ defmodule TragarAi.CoreAI do
   # Stream when an on_chunk sink is given; otherwise one-shot. If streaming
   # errors mid-flight, fall back to a normal (non-stream) call so the caller
   # still gets a real model answer rather than the stub.
-  defp ollama_generate(messages, on_chunk, model, opts) do
-    # The caller decides whether to think: interpret/phrase pass the reasoning
-    # toggle (think_now/0 — off unless enabled AND on a Qwen3 model); the explicit
-    # "reason freely" path passes `think: true`.
+  defp ollama_generate(messages, on_chunk, model, opts \\ []) do
+    # Thinking is OFF by default, so the fast structured steps (interpret, phrase)
+    # never run in reasoning mode — grounded rendering doesn't benefit from it and
+    # it costs ~10x latency. Only the explicit "reason freely" path opts in with
+    # `think: true`.
     think = Keyword.get(opts, :think, false)
 
     result =
@@ -594,12 +595,6 @@ defmodule TragarAi.CoreAI do
   # The active fast model — runtime-switchable from the settings page. Defaults to
   # the configured CORE_AI_MODEL (then the first listed model) until switched.
   defp ollama_model, do: TragarAi.CoreAI.ModelSetting.get()
-
-  # Whether interpret/phrase should run with thinking on right now — the Settings
-  # reasoning toggle AND the active model supporting it (Qwen3). Off → the model
-  # answers directly (fast); the deep "reason freely" path passes think: true
-  # explicitly and doesn't go through here.
-  defp think_now, do: TragarAi.CoreAI.ModelSetting.thinking_active?()
 
   @reason_key {__MODULE__, :active_reason_model}
 

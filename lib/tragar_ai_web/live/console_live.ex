@@ -1391,7 +1391,11 @@ defmodule TragarAiWeb.ConsoleLive do
         intent: frame.intent,
         history: build_history(socket.assigns.messages),
         on_chunk: fn chunk -> send(lv, {:chunk, id, chunk}) end,
-        on_event: fn event -> send(lv, {:event, id, event}) end
+        on_event: fn event -> send(lv, {:event, id, event}) end,
+        # The reasoning toggle only affects the no-facts path: when a lookup finds
+        # nothing, reason a plausible answer instead of a clarify prompt. interpret
+        # and phrase always run think-off regardless.
+        free_reasoning: TragarAi.CoreAI.ModelSetting.reasoning_enabled?()
       }
       |> maybe_scope(socket.assigns.ticket_accounts)
 
