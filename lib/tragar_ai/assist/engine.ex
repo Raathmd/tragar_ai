@@ -538,7 +538,7 @@ defmodule TragarAi.Assist.Engine do
   # outage apart from "not found", exactly as the fan-out does).
   defp step_gather(subs, context) do
     valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
-    {groups, entries, fail} = gather(valid, context)
+    {groups, entries, fail, _scoped_out} = gather(valid, context)
     {groups, entries, fail}
   end
 
@@ -569,7 +569,7 @@ defmodule TragarAi.Assist.Engine do
     subs = expand_probe(values)
     interpret_entry = multi_interpret_entry(question, subs)
     valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
-    {groups, fetch_entries, fail_reason} = gather(valid, context)
+    {groups, fetch_entries, fail_reason, scoped_out} = gather(valid, context)
     log = [interpret_entry | fetch_entries]
 
     # The value matched a waybill/quote NUMBER → surface it. Otherwise fall back to
@@ -577,6 +577,14 @@ defmodule TragarAi.Assist.Engine do
     cond do
       groups != [] ->
         surface_reference(question, groups, context, log)
+
+      # The value matched a real waybill/quote by NUMBER, but it belongs to an
+      # account not on this ticket. Deny by scope here — same as the sequential
+      # cascade — and DON'T cascade to the account-cycling shipper-reference search
+      # or report a bare "not found".
+      scoped_out != nil ->
+        {intent, entities} = scoped_out
+        scope_refused(question, intent, entities, context, log)
 
       # We couldn't even check the reference because the source was unreachable or
       # the session was reset by a crossed prompt — say so (and to retry) instead
@@ -701,7 +709,7 @@ defmodule TragarAi.Assist.Engine do
 
         _ ->
           subs = for n <- Enum.take(numbers, @ref_match_limit), do: waybill_sub(n)
-          {groups, fetch_entries, _fail_reason} = gather(subs, context)
+          {groups, fetch_entries, _fail_reason, _scoped_out} = gather(subs, context)
           {:halt, {:matches, groups, entries ++ fetch_entries}}
       end
     end)
@@ -806,7 +814,7 @@ defmodule TragarAi.Assist.Engine do
         ])
 
       _ ->
-        {groups, fetch_entries, fail_reason} = gather(valid, context)
+        {groups, fetch_entries, fail_reason, _scoped_out} = gather(valid, context)
 
         case groups do
           [] ->
@@ -990,7 +998,19 @@ defmodule TragarAi.Assist.Engine do
         }
       end
 
-    {groups, fetch_entries, aggregate_failure(triples)}
+    # The first reference we found but denied by scope, as `{intent, entities}`, so
+    # a caller can deny it explicitly (`out_of_scope`) instead of reporting a bare
+    # "not found" — keeping fan-out's outcome identical to the sequential cascade.
+    scoped_out =
+      Enum.find_value(triples, fn
+        {r, _src, {:ok, facts}} ->
+          if deny_out_of_scope?(facts, context), do: {r.intent, r.entities}
+
+        _ ->
+          nil
+      end)
+
+    {groups, fetch_entries, aggregate_failure(triples), scoped_out}
   end
 
   # The most actionable failure across the gathered results, for the empty-groups
