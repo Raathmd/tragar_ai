@@ -41,6 +41,11 @@ defmodule TragarAiWeb.Router do
     # Runtime settings (search pipeline toggle, …).
     live "/settings", SettingsLive
 
+    # Hidden, read-only DB inspection console — intentionally NOT linked in the
+    # app menu. Gated by :inspect_token (reach it at /_inspect?token=…). Streams
+    # SELECT results in-app so raw data stays inside Tragar's infrastructure.
+    live "/_inspect", InspectLive
+
     # Force a FreightWare login (nav "Log in" button when there's no token).
     post "/fw/login", FreightWareController, :login
   end
