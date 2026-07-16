@@ -150,8 +150,8 @@ defmodule TragarAiWeb.CollectionsLive do
 
   @impl true
   def handle_async(:collections, {:ok, %{unauthorised: unauth, outstanding: out}}, socket) do
-    unauthorised = unauth |> ok_list() |> by_date_desc()
-    outstanding = out |> ok_list() |> by_date_desc()
+    unauthorised = unauth |> ok_list() |> oldest_first()
+    outstanding = out |> ok_list() |> oldest_first()
     now = DateTime.utc_now()
 
     {seen_keys, new_keys} = track_seen(socket.assigns.seen_keys, unauthorised ++ outstanding)
@@ -210,10 +210,16 @@ defmodule TragarAiWeb.CollectionsLive do
   defp ok_list({:ok, l}) when is_list(l), do: l
   defp ok_list(_), do: []
 
-  # Newest first — by collection date, then collect-after time (ISO strings sort
-  # lexically; blanks sort last).
-  defp by_date_desc(rows),
-    do: Enum.sort_by(rows, &{&1["collection_date"] || "", &1["collect_after"] || ""}, :desc)
+  # Oldest first — by collection date, then collect-after time (ISO strings sort
+  # lexically). So the stalest collections (reddest, most overdue) sit at the top
+  # of the queue. Undated rows sort last (they can't be placed on the timeline).
+  defp oldest_first(rows),
+    do:
+      Enum.sort_by(
+        rows,
+        &{&1["collection_date"] || "9999-99-99", &1["collect_after"] || ""},
+        :asc
+      )
 
   defp error({:ok, _}), do: nil
   defp error({:error, reason}), do: inspect(reason)
