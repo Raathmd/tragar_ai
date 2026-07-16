@@ -55,7 +55,11 @@ defmodule TragarAi.Assist.TicketResponder do
       channel: :freshdesk,
       accounts: accounts,
       entities: entities(account),
-      ticket_id: ticket_id
+      ticket_id: ticket_id,
+      # The reasoning toggle only affects the no-facts path: when a lookup finds
+      # nothing, reason a plausible answer instead of a clarify prompt. interpret
+      # and phrase always run think-off regardless.
+      free_reasoning: TragarAi.CoreAI.ModelSetting.reasoning_enabled?()
     }
 
     case Engine.answer(content, context) do
