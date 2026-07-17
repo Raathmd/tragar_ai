@@ -683,10 +683,7 @@ defmodule TragarAiWeb.MarginLive do
           </tr>
         </thead>
         <tbody>
-          <tr
-            :for={row <- @drill.rows}
-            class={@grain != "contractor" && row.margin < 0 && "text-error"}
-          >
+          <tr :for={row <- @drill.rows} class={row.margin < 0 && "text-error"}>
             <td class="whitespace-nowrap">
               <button
                 :if={row.next}

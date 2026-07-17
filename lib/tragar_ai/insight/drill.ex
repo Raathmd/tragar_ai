@@ -81,22 +81,31 @@ defmodule TragarAi.Insight.Drill do
     end
   end
 
+  # Contractor is charge-keyed, but a waybill can carry several contractors
+  # (collection / line-haul / delivery legs), so its sell (total_cost) must be
+  # counted ONCE. Group at the waybill grain first, then roll up to the day —
+  # sell = Σ distinct-waybill total_cost, buy = Σ this contractor's charges.
   def days("contractor", dim, %Date{year: y, month: m}) do
     sql =
-      "SELECT w.waybill_date AS d, COUNT(*) AS n, SUM(cc.total_charge_amount) AS buy " <>
+      "SELECT w.waybill_obj AS obj, w.waybill_date AS d, w.total_cost AS sell, " <>
+        "SUM(cc.total_charge_amount) AS buy " <>
         "FROM PUB.fwt_contractor_charge cc " <>
         "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
         "JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj " <>
         "WHERE sc.contractor_reference = '#{escape(dim)}' " <>
         "AND YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m} " <>
-        "GROUP BY w.waybill_date"
+        "GROUP BY w.waybill_obj, w.waybill_date, w.total_cost"
 
     with {:ok, rows} <- Db.query_rows(sql) do
       {:ok,
        rows
-       |> Enum.map(&{&1["d"], int(&1["n"]), f(&1["buy"])})
-       |> Enum.sort_by(&elem(&1, 0))
-       |> Enum.map(fn {d, n, buy} -> day_row(d, n, 0.0, buy) end)}
+       |> Enum.group_by(& &1["d"])
+       |> Enum.map(fn {d, wbs} ->
+         sell = wbs |> Enum.map(&f(&1["sell"])) |> Enum.sum()
+         buy = wbs |> Enum.map(&f(&1["buy"])) |> Enum.sum()
+         day_row(d, length(wbs), sell, buy)
+       end)
+       |> Enum.sort_by(& &1.next.v)}
     end
   end
 
@@ -144,20 +153,20 @@ defmodule TragarAi.Insight.Drill do
 
     sql =
       "SELECT w.waybill_number AS waybill_number, w.waybill_obj AS waybill_obj, " <>
-        "COUNT(*) AS charges, SUM(cc.total_charge_amount) AS buy " <>
+        "w.total_cost AS sell, SUM(cc.total_charge_amount) AS buy " <>
         "FROM PUB.fwt_contractor_charge cc " <>
         "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
         "JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj " <>
         "WHERE sc.contractor_reference = '#{escape(dim)}' AND w.waybill_date = '#{iso}' " <>
-        "GROUP BY w.waybill_number, w.waybill_obj"
+        "GROUP BY w.waybill_number, w.waybill_obj, w.total_cost"
 
     with {:ok, rows} <- Db.query_rows(sql) do
       {:ok,
        rows
        |> Enum.map(fn r ->
-         wb_row(r["waybill_number"], r["waybill_obj"], int(r["charges"]), 0.0, f(r["buy"]))
+         wb_row(r["waybill_number"], r["waybill_obj"], nil, f(r["sell"]), f(r["buy"]))
        end)
-       |> Enum.sort_by(& &1.buy, :desc)}
+       |> Enum.sort_by(& &1.margin)}
     end
   end
 
