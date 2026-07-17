@@ -30,8 +30,56 @@ defmodule TragarAiWeb.MarginLive do
      |> assign(:active, :margin)
      |> assign(:rows, Enum.reverse(rows))
      |> assign(:totals, totals)
+     |> assign(:chart, build_chart(rows))
      |> assign(:max_margin, max(max_margin, 1.0))}
   end
+
+  # ── Server-rendered SVG chart: sell (green) and buy (red) lines over the months;
+  # the shaded gap between them is the margin. No JS/chart deps.
+  @chart_w 960
+  @chart_h 240
+  @chart_pad_x 8
+  @chart_pad_top 10
+  @chart_pad_bottom 22
+
+  defp build_chart([]), do: nil
+
+  defp build_chart(rows) do
+    n = length(rows)
+    ymax = rows |> Enum.map(&to_f(&1.sell)) |> Enum.max(fn -> 1.0 end) |> max(1.0)
+    plot_w = @chart_w - 2 * @chart_pad_x
+    plot_h = @chart_h - @chart_pad_top - @chart_pad_bottom
+
+    coord = fn i, v ->
+      x = @chart_pad_x + if(n > 1, do: i / (n - 1) * plot_w, else: plot_w / 2)
+      y = @chart_pad_top + (1.0 - min(v / ymax, 1.0)) * plot_h
+      {Float.round(x, 1), Float.round(y, 1)}
+    end
+
+    sell = pts(rows, &to_f(&1.sell), coord)
+    buy = pts(rows, &to_f(&1.buy), coord)
+
+    ticks =
+      rows
+      |> Enum.with_index()
+      |> Enum.filter(fn {r, _} -> match?(%Date{month: 1}, r.period_month) end)
+      |> Enum.map(fn {r, i} -> {elem(coord.(i, 0.0), 0), r.period_month.year} end)
+
+    %{
+      sell: polyline(sell),
+      buy: polyline(buy),
+      area: polyline(sell) <> " " <> polyline(Enum.reverse(buy)),
+      ticks: ticks,
+      peak: money(ymax),
+      baseline: @chart_h - @chart_pad_bottom
+    }
+  end
+
+  defp pts(rows, fun, coord) do
+    rows |> Enum.with_index() |> Enum.map(fn {r, i} -> coord.(i, fun.(r)) end)
+  end
+
+  defp polyline(points), do: points |> Enum.map(fn {x, y} -> "#{x},#{y}" end) |> Enum.join(" ")
 
   defp totals(rows) do
     sell = sum(rows, & &1.sell)
@@ -102,6 +150,34 @@ defmodule TragarAiWeb.MarginLive do
           <div class="text-xs opacity-60">Margin %</div>
           <div class="text-lg font-semibold">{@totals.margin_pct}%</div>
         </div>
+      </div>
+
+      <div :if={@chart} class="mb-5 rounded border p-3">
+        <div class="mb-2 flex flex-wrap items-center gap-4 text-xs">
+          <span class="flex items-center gap-1">
+            <span class="inline-block h-2 w-3 rounded" style="background: rgb(34,197,94)"></span>
+            Sell
+          </span>
+          <span class="flex items-center gap-1">
+            <span class="inline-block h-2 w-3 rounded" style="background: rgb(239,68,68)"></span>
+            Buy
+          </span>
+          <span class="opacity-60">shaded gap = margin · peak {@chart.peak}/mo</span>
+        </div>
+        <svg viewBox="0 0 960 240" class="w-full" style="max-height:280px">
+          <polygon points={@chart.area} fill="rgba(34,197,94,0.15)" />
+          <polyline points={@chart.buy} fill="none" stroke="rgb(239,68,68)" stroke-width="1.5" />
+          <polyline points={@chart.sell} fill="none" stroke="rgb(34,197,94)" stroke-width="1.5" />
+          <text
+            :for={{x, yr} <- @chart.ticks}
+            x={x}
+            y={@chart.baseline + 14}
+            font-size="9"
+            text-anchor="middle"
+            fill="currentColor"
+            opacity="0.5"
+          >{yr}</text>
+        </svg>
       </div>
 
       <div class="overflow-x-auto">
