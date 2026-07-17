@@ -34,8 +34,92 @@ defmodule TragarAi.Insight.Predict do
         a.slope < 0 and active?(a.latest_month, cutoff)
     end)
     |> Enum.sort_by(& &1.slope)
+    |> Enum.map(&Map.put(&1, :detail, "#{&1.latest_pct}% -> #{&1.projected_pct}% (#{&1.slope}/mo)"))
     |> Enum.take(top)
   end
+
+  @doc "Year-over-year at-risk: dims whose current-year margin% fell vs a baseline."
+  @spec compare_risk(String.t(), integer(), String.t() | integer(), keyword()) :: [map()]
+  def compare_risk(grain, year, compare, opts \\ []) do
+    top = Keyword.get(opts, :top, 10)
+
+    year_over_year(grain, year, compare, opts)
+    |> Enum.filter(&(&1.delta != nil and &1.delta < 0))
+    |> Enum.sort_by(& &1.delta)
+    |> Enum.take(top)
+  end
+
+  @doc "Year-over-year rate flags: current-year loss-making or a big margin drop vs baseline."
+  @spec compare_flags(String.t(), integer(), String.t() | integer(), keyword()) :: [map()]
+  def compare_flags(grain, year, compare, opts \\ []) do
+    top = Keyword.get(opts, :top, 15)
+
+    year_over_year(grain, year, compare, opts)
+    |> Enum.map(fn d ->
+      reason =
+        cond do
+          d.margin < 0 -> "loss-making"
+          d.delta != nil and d.delta <= -5.0 -> "margin dropped"
+          true -> nil
+        end
+
+      Map.put(d, :reason, reason)
+    end)
+    |> Enum.filter(& &1.reason)
+    |> Enum.sort_by(& &1.current_pct)
+    |> Enum.take(top)
+  end
+
+  defp year_over_year(grain, year, compare, opts) do
+    min_sell = Keyword.get(opts, :min_sell, 100_000.0)
+    current = agg_range(grain, year, year)
+    {bf, bt} = baseline_range(year, compare)
+    baseline = agg_range(grain, bf, bt)
+
+    current
+    |> Enum.map(fn {dim, c} ->
+      b = Map.get(baseline, dim)
+      base = b && Float.round(b.pct, 1)
+      cur = Float.round(c.pct, 1)
+      delta = base && Float.round(cur - base, 1)
+
+      %{
+        dim: dim,
+        sell: c.sell,
+        buy: c.buy,
+        margin: c.margin,
+        current_pct: cur,
+        baseline_pct: base,
+        delta: delta,
+        detail: yoy_detail(cur, base, delta)
+      }
+    end)
+    |> Enum.filter(&(&1.dim != "(unknown)" and &1.sell >= min_sell))
+  end
+
+  defp yoy_detail(cur, nil, _delta), do: "#{cur}% (new)"
+  defp yoy_detail(cur, base, delta), do: "#{cur}% vs #{base}% (Δ#{delta})"
+
+  defp agg_range(grain, from_year, to_year) do
+    Repo.all(
+      from r in Rollup,
+        where:
+          r.grain == ^grain and
+            r.period_month >= ^Date.new!(from_year, 1, 1) and
+            r.period_month <= ^Date.new!(to_year, 12, 31),
+        select: {r.dim_key, r.sell, r.buy}
+    )
+    |> Enum.group_by(&elem(&1, 0))
+    |> Map.new(fn {dim, rows} ->
+      sell = rows |> Enum.map(&to_f(elem(&1, 1))) |> Enum.sum()
+      buy = rows |> Enum.map(&to_f(elem(&1, 2))) |> Enum.sum()
+      pct = if sell > 0, do: (sell - buy) / sell * 100, else: 0.0
+      {dim, %{sell: sell, buy: buy, margin: sell - buy, pct: pct}}
+    end)
+  end
+
+  defp baseline_range(year, "prev"), do: {2016, year - 1}
+  defp baseline_range(_year, y) when is_integer(y), do: {y, y}
 
   @doc "Active dimensions flagged for rate attention: loss-making or low-margin outliers."
   @spec exceptions(String.t(), integer() | nil, keyword()) :: [map()]
@@ -68,6 +152,7 @@ defmodule TragarAi.Insight.Predict do
       d |> Map.put(:reason, reason) |> Map.put(:z, Float.round(z, 1))
     end)
     |> Enum.filter(& &1.reason)
+    |> Enum.map(&Map.put(&1, :detail, "#{Float.round(&1.margin_pct, 1)}% (#{&1.reason})"))
     |> Enum.sort_by(& &1.margin_pct)
     |> Enum.take(top)
   end
