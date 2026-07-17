@@ -1,10 +1,8 @@
 defmodule TragarAiWeb.MarginLive do
   @moduledoc """
-  Management margin dashboard — the monthly sell / buy / margin trend across the
-  whole history, read from the `insight_rollups` warehouse (enterprise grain).
-
-  This is the first "charts and graphs" surface of the intelligence platform;
-  drill-down by customer / supplier / lane follows once those grains are backfilled.
+  Management margin dashboard over the `insight_rollups` warehouse, with drill-down
+  by grain (enterprise / client / lane / contractor): the enterprise sell-vs-buy
+  line chart, a revenue-share pie, and a margin-ranked table per dimension.
   """
   use TragarAiWeb, :live_view
 
@@ -13,29 +11,126 @@ defmodule TragarAiWeb.MarginLive do
   alias TragarAi.Insight.Rollup
   alias TragarAi.Repo
 
+  @grains ~w(enterprise client lane contractor)
+  @pie_colors ~w(#22c55e #3b82f6 #f59e0b #ef4444 #a855f7 #14b8a6 #eab308 #ec4899 #94a3b8)
+
   @impl true
-  def mount(_params, _session, socket) do
-    rows =
-      Repo.all(
-        from r in Rollup,
-          where: r.grain == "enterprise",
-          order_by: [asc: r.period_month]
-      )
+  def mount(_params, _session, socket), do: {:ok, assign(socket, :active, :margin)}
 
-    totals = totals(rows)
-    max_margin = rows |> Enum.map(&to_f(&1.margin)) |> Enum.max(fn -> 0.0 end)
-
-    {:ok,
-     socket
-     |> assign(:active, :margin)
-     |> assign(:rows, Enum.reverse(rows))
-     |> assign(:totals, totals)
-     |> assign(:chart, build_chart(rows))
-     |> assign(:max_margin, max(max_margin, 1.0))}
+  @impl true
+  def handle_params(params, _uri, socket) do
+    grain = if params["grain"] in @grains, do: params["grain"], else: "enterprise"
+    {:noreply, load(socket, grain)}
   end
 
-  # ── Server-rendered SVG chart: sell (green) and buy (red) lines over the months;
-  # the shaded gap between them is the margin. No JS/chart deps.
+  defp load(socket, "enterprise") do
+    rows =
+      Repo.all(from r in Rollup, where: r.grain == "enterprise", order_by: [asc: r.period_month])
+
+    max_margin = rows |> Enum.map(&to_f(&1.margin)) |> Enum.max(fn -> 1.0 end) |> max(1.0)
+    sell = sum(rows, & &1.sell)
+    buy = sum(rows, & &1.buy)
+
+    socket
+    |> assign(:grain, "enterprise")
+    |> assign(:rows, Enum.reverse(rows))
+    |> assign(:totals, totals(length(rows), "Months", sell, buy))
+    |> assign(:chart, build_chart(rows))
+    |> assign(:max_val, max_margin)
+    |> assign(:ranked, [])
+    |> assign(:pie, [])
+  end
+
+  defp load(socket, grain) do
+    dims =
+      Repo.all(
+        from r in Rollup,
+          where: r.grain == ^grain,
+          group_by: r.dim_key,
+          select: %{dim: r.dim_key, sell: sum(r.sell), buy: sum(r.buy), waybills: sum(r.waybills)}
+      )
+      |> Enum.map(&dim_metrics/1)
+
+    ranked = Enum.sort_by(dims, & &1.margin, :desc)
+    max_abs = ranked |> Enum.map(&abs(&1.margin)) |> Enum.max(fn -> 1.0 end) |> max(1.0)
+    sell = Enum.reduce(dims, 0.0, &(&2 + &1.sell))
+    buy = Enum.reduce(dims, 0.0, &(&2 + &1.buy))
+
+    socket
+    |> assign(:grain, grain)
+    |> assign(:rows, [])
+    |> assign(:totals, totals(length(dims), "Dimensions", sell, buy))
+    |> assign(:chart, nil)
+    |> assign(:max_val, max_abs)
+    |> assign(:ranked, Enum.take(ranked, 60))
+    |> assign(:pie, build_pie(dims))
+  end
+
+  defp totals(count, label, sell, buy) do
+    %{
+      count: count,
+      label: label,
+      sell: sell,
+      buy: buy,
+      margin: sell - buy,
+      margin_pct: pct(sell - buy, sell)
+    }
+  end
+
+  defp dim_metrics(%{dim: dim, sell: sell, buy: buy, waybills: wb}) do
+    s = to_f(sell)
+    b = to_f(buy)
+
+    %{
+      dim: dim || "(unknown)",
+      sell: s,
+      buy: b,
+      margin: s - b,
+      margin_pct: pct(s - b, s),
+      waybills: wb || 0
+    }
+  end
+
+  # ── revenue-share pie (top 8 dimensions by sell + others) ──────────────────
+  defp build_pie(dims) do
+    sorted = dims |> Enum.map(&{&1.dim, &1.sell}) |> Enum.sort_by(&elem(&1, 1), :desc)
+    {top, rest} = Enum.split(sorted, 8)
+    others = rest |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+    items = if others > 0, do: top ++ [{"(others)", others}], else: top
+    total = items |> Enum.map(&elem(&1, 1)) |> Enum.sum() |> max(1.0)
+
+    {slices, _} =
+      items
+      |> Enum.with_index()
+      |> Enum.map_reduce(0.0, fn {{label, v}, i}, acc ->
+        slice = %{
+          label: label,
+          pct: Float.round(v / total * 100, 1),
+          path: arc_path(acc / total, (acc + v) / total),
+          color: Enum.at(@pie_colors, rem(i, length(@pie_colors)))
+        }
+
+        {slice, acc + v}
+      end)
+
+    slices
+  end
+
+  defp arc_path(f0, f1) do
+    a0 = f0 * 2 * :math.pi()
+    a1 = min(f1, 0.9999) * 2 * :math.pi()
+    {cx, cy, r} = {90, 90, 82}
+    x0 = cx + r * :math.sin(a0)
+    y0 = cy - r * :math.cos(a0)
+    x1 = cx + r * :math.sin(a1)
+    y1 = cy - r * :math.cos(a1)
+    large = if a1 - a0 > :math.pi(), do: 1, else: 0
+    "M #{cx} #{cy} L #{ff(x0)} #{ff(y0)} A #{r} #{r} 0 #{large} 1 #{ff(x1)} #{ff(y1)} Z"
+  end
+
+  defp ff(x), do: :erlang.float_to_binary(x * 1.0, decimals: 1)
+
+  # ── enterprise sell/buy line chart ─────────────────────────────────────────
   @chart_w 960
   @chart_h 240
   @chart_pad_x 8
@@ -81,21 +176,7 @@ defmodule TragarAiWeb.MarginLive do
 
   defp polyline(points), do: points |> Enum.map(fn {x, y} -> "#{x},#{y}" end) |> Enum.join(" ")
 
-  defp totals(rows) do
-    sell = sum(rows, & &1.sell)
-    buy = sum(rows, & &1.buy)
-    margin = sell - buy
-
-    %{
-      months: length(rows),
-      waybills: Enum.reduce(rows, 0, fn r, a -> a + (r.waybills || 0) end),
-      sell: sell,
-      buy: buy,
-      margin: margin,
-      margin_pct: pct(margin, sell)
-    }
-  end
-
+  # ── formatting ─────────────────────────────────────────────────────────────
   defp sum(rows, fun), do: Enum.reduce(rows, 0.0, fn r, a -> a + to_f(fun.(r)) end)
 
   defp to_f(nil), do: 0.0
@@ -107,11 +188,11 @@ defmodule TragarAiWeb.MarginLive do
 
   defp money(v) do
     f = to_f(v)
-    abs_f = abs(f)
+    a = abs(f)
 
     cond do
-      abs_f >= 1_000_000 -> "R#{Float.round(f / 1_000_000, 2)}M"
-      abs_f >= 1_000 -> "R#{Float.round(f / 1_000, 1)}k"
+      a >= 1_000_000 -> "R#{Float.round(f / 1_000_000, 2)}M"
+      a >= 1_000 -> "R#{Float.round(f / 1_000, 1)}k"
       true -> "R#{Float.round(f, 0)}"
     end
   end
@@ -119,20 +200,37 @@ defmodule TragarAiWeb.MarginLive do
   defp month_label(%Date{} = d), do: Calendar.strftime(d, "%Y-%m")
   defp month_label(_), do: "—"
 
+  defp bar(v, max) when max > 0, do: Float.round(abs(v) / max * 100, 1)
+  defp bar(_v, _max), do: 0.0
+
+  defp grain_btn(active, g) do
+    ["btn btn-sm", (active == g && "btn-primary") || "btn-ghost"]
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
     <div class="mx-auto max-w-6xl p-4">
-      <h1 class="mb-1 text-lg font-semibold">Margin — enterprise</h1>
-      <p class="mb-4 text-sm opacity-60">
-        Monthly sell vs contractor buy across the history. Margin = sell − buy
-        (buy is contractor cost only; own-fleet deliveries carry no buy).
+      <h1 class="mb-1 text-lg font-semibold">Margin</h1>
+      <p class="mb-3 text-sm opacity-60">
+        Sell vs contractor buy; margin = sell − buy. Drill down by dimension.
       </p>
+
+      <div class="mb-4 flex flex-wrap gap-2">
+        <.link patch={~p"/margin?grain=enterprise"} class={grain_btn(@grain, "enterprise")}>
+          Enterprise
+        </.link>
+        <.link patch={~p"/margin?grain=client"} class={grain_btn(@grain, "client")}>Client</.link>
+        <.link patch={~p"/margin?grain=lane"} class={grain_btn(@grain, "lane")}>Lane</.link>
+        <.link patch={~p"/margin?grain=contractor"} class={grain_btn(@grain, "contractor")}>
+          Contractor
+        </.link>
+      </div>
 
       <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-5">
         <div class="rounded border p-3">
-          <div class="text-xs opacity-60">Months</div>
-          <div class="text-lg font-semibold">{@totals.months}</div>
+          <div class="text-xs opacity-60">{@totals.label}</div>
+          <div class="text-lg font-semibold">{@totals.count}</div>
         </div>
         <div class="rounded border p-3">
           <div class="text-xs opacity-60">Sell</div>
@@ -180,7 +278,60 @@ defmodule TragarAiWeb.MarginLive do
         </svg>
       </div>
 
-      <div class="overflow-x-auto">
+      <div :if={@pie != []} class="mb-5 flex flex-col gap-4 rounded border p-3 sm:flex-row">
+        <svg viewBox="0 0 180 180" class="w-44 shrink-0">
+          <path :for={s <- @pie} d={s.path} fill={s.color} stroke="white" stroke-width="0.5" />
+        </svg>
+        <div class="flex-1">
+          <div class="mb-1 text-xs font-medium opacity-70">Revenue share</div>
+          <div class="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
+            <div :for={s <- @pie} class="flex items-center gap-2">
+              <span
+                class="inline-block h-2 w-3 shrink-0 rounded"
+                style={"background: #{s.color}"}
+              >
+              </span>
+              <span class="truncate">{s.label}</span>
+              <span class="ml-auto opacity-60">{s.pct}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div :if={@grain != "enterprise"} class="overflow-x-auto">
+        <table class="table table-sm w-full">
+          <thead>
+            <tr>
+              <th>{@grain}</th>
+              <th class="text-right">Waybills</th>
+              <th class="text-right">Sell</th>
+              <th class="text-right">Buy</th>
+              <th class="text-right">Margin</th>
+              <th class="text-right">Margin %</th>
+              <th class="w-32">Margin</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={d <- @ranked}>
+              <td class="max-w-xs truncate">{d.dim}</td>
+              <td class="text-right">{d.waybills}</td>
+              <td class="text-right">{money(d.sell)}</td>
+              <td class="text-right">{money(d.buy)}</td>
+              <td class="text-right">{money(d.margin)}</td>
+              <td class="text-right">{d.margin_pct}%</td>
+              <td>
+                <div
+                  class={"h-2 rounded #{(d.margin < 0 && "bg-error") || "bg-primary"}"}
+                  style={"width: #{bar(d.margin, @max_val)}%"}
+                >
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div :if={@grain == "enterprise"} class="overflow-x-auto">
         <table class="table table-sm w-full">
           <thead>
             <tr>
@@ -204,7 +355,7 @@ defmodule TragarAiWeb.MarginLive do
               <td>
                 <div
                   class="h-2 rounded bg-primary"
-                  style={"width: #{bar(to_f(r.margin), @max_margin)}%"}
+                  style={"width: #{bar(to_f(r.margin), @max_val)}%"}
                 >
                 </div>
               </td>
@@ -212,14 +363,7 @@ defmodule TragarAiWeb.MarginLive do
           </tbody>
         </table>
       </div>
-
-      <p :if={@rows == []} class="mt-4 text-sm opacity-60">
-        No rollups yet — run the backfill.
-      </p>
     </div>
     """
   end
-
-  defp bar(v, max) when max > 0, do: Float.round(max(v, 0.0) / max * 100, 1)
-  defp bar(_v, _max), do: 0.0
 end
