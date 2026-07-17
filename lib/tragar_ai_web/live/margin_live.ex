@@ -70,6 +70,7 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:unattributed, nil)
     |> assign(:forecast, Predict.trend("enterprise"))
     |> assign(:at_risk, [])
+    |> assign(:exceptions, [])
   end
 
   defp load(socket, grain, year) do
@@ -111,12 +112,16 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:unattributed, unattributed(unknown))
     |> assign(:forecast, nil)
     |> assign(:at_risk, at_risk_for(grain))
+    |> assign(:exceptions, exceptions_for(grain))
   end
 
-  # Margin-% erosion prediction only makes sense where sell is attributed
+  # Margin-% erosion / rate-quality flags only make sense where sell is attributed
   # (client/lane); the contractor grain is a pure cost view.
   defp at_risk_for(grain) when grain in ["client", "lane"], do: Predict.at_risk(grain)
   defp at_risk_for(_grain), do: []
+
+  defp exceptions_for(grain) when grain in ["client", "lane"], do: Predict.exceptions(grain)
+  defp exceptions_for(_grain), do: []
 
   defp unattributed([]), do: nil
 
@@ -404,6 +409,19 @@ defmodule TragarAiWeb.MarginLive do
             <span class="max-w-xs truncate">{a.dim}</span>
             <span class="ml-auto opacity-70">{a.latest_pct}% → {a.projected_pct}%</span>
             <span class="w-16 text-right text-error">{a.slope}/mo</span>
+          </div>
+        </div>
+      </div>
+
+      <div :if={@exceptions != []} class="mb-4 rounded border border-warning p-3">
+        <div class="mb-2 text-sm font-medium">
+          Rate flags (Nx) — loss-making & margin outliers ({@grain})
+        </div>
+        <div class="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
+          <div :for={e <- @exceptions} class="flex items-center gap-2">
+            <span class="max-w-xs truncate">{e.dim}</span>
+            <span class="ml-auto opacity-70">{Float.round(e.margin_pct, 1)}%</span>
+            <span class="w-28 text-right text-warning">{e.reason}</span>
           </div>
         </div>
       </div>
