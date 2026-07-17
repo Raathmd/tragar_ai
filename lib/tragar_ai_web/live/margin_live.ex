@@ -41,6 +41,11 @@ defmodule TragarAiWeb.MarginLive do
     {:noreply, start_ai(socket, prompt)}
   end
 
+  def handle_event("explain_row", %{"dim" => dim}, socket) do
+    row = Enum.find(socket.assigns.ranked, &(&1.dim == dim))
+    {:noreply, start_ai(socket, row_prompt(socket.assigns.grain, row))}
+  end
+
   @impl true
   def handle_info({:ai_chunk, chunk}, socket) do
     {:noreply, assign(socket, :ai_answer, socket.assigns.ai_answer <> chunk)}
@@ -63,6 +68,15 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:ai_prompt, prompt)
     |> assign(:ai_answer, "")
     |> assign(:ai_running, true)
+  end
+
+  defp row_prompt(_grain, nil), do: "No data for that row."
+
+  defp row_prompt(grain, row) do
+    "You are Tragar's freight margin analyst. Give a concise situational + predictive " <>
+      "outlook (2–3 sentences) for #{grain} \"#{row.dim}\": sell #{money(row.sell)}, " <>
+      "buy #{money(row.buy)}, margin #{money(row.margin)} (#{row.margin_pct}%), " <>
+      "#{row.waybills} waybills."
   end
 
   defp explain_prompt(assigns) do
@@ -367,7 +381,7 @@ defmodule TragarAiWeb.MarginLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="mx-auto max-w-6xl p-4">
+    <div class="mx-auto max-w-6xl p-4 lg:pr-80">
       <h1 class="mb-1 text-lg font-semibold">Margin</h1>
       <p class="mb-3 text-sm opacity-60">
         Sell vs contractor buy; margin = sell − buy. Drill down by dimension.
@@ -522,6 +536,7 @@ defmodule TragarAiWeb.MarginLive do
               <th class="text-right">Margin</th>
               <th class="text-right">Margin %</th>
               <th class="w-32">Margin</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -538,6 +553,16 @@ defmodule TragarAiWeb.MarginLive do
                   style={"width: #{bar(bar_value(d, @grain), @max_val)}%"}
                 >
                 </div>
+              </td>
+              <td>
+                <button
+                  phx-click="explain_row"
+                  phx-value-dim={d.dim}
+                  class="btn btn-ghost btn-xs"
+                  disabled={@ai_running}
+                >
+                  Explain
+                </button>
               </td>
             </tr>
           </tbody>
@@ -577,7 +602,7 @@ defmodule TragarAiWeb.MarginLive do
         </table>
       </div>
 
-      <div class="mt-6 rounded border p-3">
+      <div class="mt-6 rounded border bg-base-100 p-3 lg:fixed lg:right-0 lg:top-0 lg:bottom-0 lg:z-20 lg:mt-0 lg:w-80 lg:overflow-y-auto lg:rounded-none lg:border-l lg:pt-16">
         <div class="mb-2 text-sm font-medium">Ask the AI about these margins</div>
         <div class="mb-2">
           <button phx-click="explain" class="btn btn-primary btn-sm" disabled={@ai_running}>
