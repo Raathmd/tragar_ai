@@ -46,6 +46,11 @@ defmodule TragarAiWeb.MarginLive do
     {:noreply, start_ai(socket, row_prompt(socket.assigns.grain, row))}
   end
 
+  def handle_event("explain_month", %{"month" => month}, socket) do
+    row = Enum.find(socket.assigns.rows, &(month_label(&1.period_month) == month))
+    {:noreply, start_ai(socket, month_prompt(row))}
+  end
+
   @impl true
   def handle_info({:ai_chunk, chunk}, socket) do
     {:noreply, assign(socket, :ai_answer, socket.assigns.ai_answer <> chunk)}
@@ -68,6 +73,15 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:ai_prompt, prompt)
     |> assign(:ai_answer, "")
     |> assign(:ai_running, true)
+  end
+
+  defp month_prompt(nil), do: "No data for that month."
+
+  defp month_prompt(r) do
+    "You are Tragar's freight margin analyst. Give a concise situational outlook " <>
+      "(2–3 sentences) for #{month_label(r.period_month)}: sell #{money(r.sell)}, " <>
+      "buy #{money(r.buy)}, margin #{money(r.margin)} " <>
+      "(#{pct(to_f(r.margin), to_f(r.sell))}%), #{r.waybills} waybills."
   end
 
   defp row_prompt(_grain, nil), do: "No data for that row."
@@ -584,6 +598,7 @@ defmodule TragarAiWeb.MarginLive do
               <th class="text-right">Margin</th>
               <th class="text-right">Margin %</th>
               <th class="w-40">Trend</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -600,6 +615,16 @@ defmodule TragarAiWeb.MarginLive do
                   style={"width: #{bar(to_f(r.margin), @max_val)}%"}
                 >
                 </div>
+              </td>
+              <td>
+                <button
+                  phx-click="explain_month"
+                  phx-value-month={month_label(r.period_month)}
+                  class="btn btn-ghost btn-xs"
+                  disabled={@ai_running}
+                >
+                  Explain
+                </button>
               </td>
             </tr>
           </tbody>
