@@ -76,7 +76,15 @@ defmodule TragarAi.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      # Intelligence platform: numerical/stats compute (Nx on the pure Elixir
+      # BinaryBackend — no EXLA/Metal, so nothing contends with anything else) and
+      # a pgvector-backed semantic store for insights (RAG). Bumblebee (local
+      # embeddings) + EXLA are added later with the embedding phase.
+      {:nx, "~> 0.7"},
+      {:explorer, "~> 0.8"},
+      {:scholar, "~> 0.3"},
+      {:pgvector, "~> 0.3"}
     ]
   end
 
