@@ -43,7 +43,7 @@ defmodule TragarAiWeb.MarginLive do
 
   def handle_event("explain_row", %{"dim" => dim}, socket) do
     row = Enum.find(socket.assigns.ranked, &(&1.dim == dim))
-    {:noreply, start_ai(socket, row_prompt(socket.assigns.grain, row))}
+    {:noreply, start_ai(socket, row_prompt(socket.assigns.grain, socket.assigns.year, row))}
   end
 
   def handle_event("explain_month", %{"month" => month}, socket) do
@@ -84,14 +84,26 @@ defmodule TragarAiWeb.MarginLive do
       "(#{pct(to_f(r.margin), to_f(r.sell))}%), #{r.waybills} waybills."
   end
 
-  defp row_prompt(_grain, nil), do: "No data for that row."
+  defp row_prompt(_grain, _year, nil), do: "No data for that row."
 
-  defp row_prompt(grain, row) do
-    "You are Tragar's freight margin analyst. Give a concise situational + predictive " <>
-      "outlook (2–3 sentences) for #{grain} \"#{row.dim}\": sell #{money(row.sell)}, " <>
-      "buy #{money(row.buy)}, margin #{money(row.margin)} (#{row.margin_pct}%), " <>
-      "#{row.waybills} waybills."
+  defp row_prompt(grain, year, row) do
+    trend = Predict.dim_trend(grain, row.dim, year)
+
+    "You are Tragar's freight margin analyst. " <>
+      "For the #{grain} \"#{row.dim}\"#{year_scope(year)}: " <>
+      "sell #{money(row.sell)}, buy #{money(row.buy)}, margin #{money(row.margin)} " <>
+      "(#{row.margin_pct}%), #{row.waybills} waybills.#{trend_note(trend)} " <>
+      "Give a concise situational and predictive outlook (2–3 sentences)."
   end
+
+  defp trend_note(nil), do: ""
+
+  defp trend_note(t) do
+    " Its margin% trend is #{t.slope}/mo, projected #{t.projected_pct}% in 6 months."
+  end
+
+  defp year_scope(nil), do: " (all years)"
+  defp year_scope(y), do: " in #{y}"
 
   defp explain_prompt(assigns) do
     "You are Tragar's freight margin analyst. Based ONLY on this data, give a concise " <>

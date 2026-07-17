@@ -79,6 +79,14 @@ defmodule TragarAi.Insight.Predict do
     if rows == [], do: nil, else: analyze(grain, rows)
   end
 
+  @doc "Margin-% trend + projection for one dimension of a grain (year-scoped). On-demand."
+  @spec dim_trend(String.t(), String.t(), integer() | nil) :: map() | nil
+  def dim_trend(grain, dim, year \\ nil) do
+    {rows, _cutoff} = load_series(grain, year)
+    series = Enum.filter(rows, &(elem(&1, 0) == dim))
+    if series == [], do: nil, else: analyze(dim, series)
+  end
+
   # ── data + helpers ─────────────────────────────────────────────────────────
 
   # Returns {rows, recency_cutoff} where rows are {dim, month, sell, buy} sorted
