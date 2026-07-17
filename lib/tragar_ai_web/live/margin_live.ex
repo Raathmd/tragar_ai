@@ -155,12 +155,10 @@ defmodule TragarAiWeb.MarginLive do
       <div :if={@chart} class="mb-5 rounded border p-3">
         <div class="mb-2 flex flex-wrap items-center gap-4 text-xs">
           <span class="flex items-center gap-1">
-            <span class="inline-block h-2 w-3 rounded" style="background: rgb(34,197,94)"></span>
-            Sell
+            <span class="inline-block h-2 w-3 rounded" style="background: rgb(34,197,94)"></span> Sell
           </span>
           <span class="flex items-center gap-1">
-            <span class="inline-block h-2 w-3 rounded" style="background: rgb(239,68,68)"></span>
-            Buy
+            <span class="inline-block h-2 w-3 rounded" style="background: rgb(239,68,68)"></span> Buy
           </span>
           <span class="opacity-60">shaded gap = margin · peak {@chart.peak}/mo</span>
         </div>
@@ -176,7 +174,9 @@ defmodule TragarAiWeb.MarginLive do
             text-anchor="middle"
             fill="currentColor"
             opacity="0.5"
-          >{yr}</text>
+          >
+            {yr}
+          </text>
         </svg>
       </div>
 
