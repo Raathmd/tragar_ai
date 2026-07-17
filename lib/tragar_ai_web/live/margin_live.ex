@@ -20,12 +20,39 @@ defmodule TragarAiWeb.MarginLive do
   @impl true
   def handle_params(params, _uri, socket) do
     grain = if params["grain"] in @grains, do: params["grain"], else: "enterprise"
-    {:noreply, load(socket, grain)}
+    year = parse_year(params["year"])
+    {:noreply, socket |> assign(:year, year) |> load(grain, year)}
   end
 
-  defp load(socket, "enterprise") do
+  @years 2016..2026
+
+  defp parse_year(y) do
+    case Integer.parse(to_string(y || "")) do
+      {n, _} -> if n in @years, do: n, else: nil
+      :error -> nil
+    end
+  end
+
+  defp year_where(query, nil), do: query
+
+  defp year_where(query, year) do
+    from r in query,
+      where:
+        r.period_month >= ^Date.new!(year, 1, 1) and
+          r.period_month <= ^Date.new!(year, 12, 31)
+  end
+
+  defp margin_path(grain, year) do
+    q = if year, do: [grain: grain, year: year], else: [grain: grain]
+    "/margin?" <> URI.encode_query(q)
+  end
+
+  defp load(socket, "enterprise", year) do
     rows =
-      Repo.all(from r in Rollup, where: r.grain == "enterprise", order_by: [asc: r.period_month])
+      from(r in Rollup, where: r.grain == "enterprise")
+      |> year_where(year)
+      |> order_by([r], asc: r.period_month)
+      |> Repo.all()
 
     max_margin = rows |> Enum.map(&to_f(&1.margin)) |> Enum.max(fn -> 1.0 end) |> max(1.0)
     sell = sum(rows, & &1.sell)
@@ -42,14 +69,18 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:unattributed, nil)
   end
 
-  defp load(socket, grain) do
+  defp load(socket, grain, year) do
     all_dims =
-      Repo.all(
-        from r in Rollup,
-          where: r.grain == ^grain,
-          group_by: r.dim_key,
-          select: %{dim: r.dim_key, sell: sum(r.sell), buy: sum(r.buy), waybills: sum(r.waybills)}
-      )
+      from(r in Rollup, where: r.grain == ^grain)
+      |> year_where(year)
+      |> group_by([r], r.dim_key)
+      |> select([r], %{
+        dim: r.dim_key,
+        sell: sum(r.sell),
+        buy: sum(r.buy),
+        waybills: sum(r.waybills)
+      })
+      |> Repo.all()
       |> Enum.map(&dim_metrics/1)
 
     # "(unknown)" = waybills with a blank dimension column; keep it out of the pie
@@ -222,6 +253,10 @@ defmodule TragarAiWeb.MarginLive do
     ["tab text-sm font-medium", (active == g && "tab-active") || ""]
   end
 
+  defp year_cls(active, y) do
+    ["btn btn-xs", (active == y && "btn-primary") || "btn-ghost"]
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -232,26 +267,34 @@ defmodule TragarAiWeb.MarginLive do
       </p>
 
       <div class="mb-4 text-xs opacity-60">Drill down by</div>
-      <div role="tablist" class="tabs tabs-lg tabs-boxed mb-5 w-fit bg-base-200">
+      <div role="tablist" class="tabs tabs-lg tabs-boxed mb-4 w-fit bg-base-200">
         <.link
-          patch={~p"/margin?grain=enterprise"}
+          patch={margin_path("enterprise", @year)}
           role="tab"
           class={tab_cls(@grain, "enterprise")}
         >
           Enterprise
         </.link>
-        <.link patch={~p"/margin?grain=client"} role="tab" class={tab_cls(@grain, "client")}>
+        <.link patch={margin_path("client", @year)} role="tab" class={tab_cls(@grain, "client")}>
           Client
         </.link>
-        <.link patch={~p"/margin?grain=lane"} role="tab" class={tab_cls(@grain, "lane")}>
+        <.link patch={margin_path("lane", @year)} role="tab" class={tab_cls(@grain, "lane")}>
           Lane
         </.link>
         <.link
-          patch={~p"/margin?grain=contractor"}
+          patch={margin_path("contractor", @year)}
           role="tab"
           class={tab_cls(@grain, "contractor")}
         >
           Contractor
+        </.link>
+      </div>
+
+      <div class="mb-5 flex flex-wrap items-center gap-1 text-xs">
+        <span class="mr-1 opacity-60">Year:</span>
+        <.link patch={margin_path(@grain, nil)} class={year_cls(@year, nil)}>All</.link>
+        <.link :for={y <- 2016..2026} patch={margin_path(@grain, y)} class={year_cls(@year, y)}>
+          {y}
         </.link>
       </div>
 
