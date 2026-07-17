@@ -87,8 +87,13 @@ defmodule TragarAiWeb.MarginLive do
     # and ranked table (it's a data-quality bucket, not a real dimension) but show
     # its size so it's not silently hidden.
     {unknown, dims} = Enum.split_with(all_dims, &(&1.dim == "(unknown)"))
-    ranked = Enum.sort_by(dims, & &1.margin, :desc)
-    max_abs = ranked |> Enum.map(&abs(&1.margin)) |> Enum.max(fn -> 1.0 end) |> max(1.0)
+
+    # Contractor is a cost view (sell = 0) → rank & pie by buy; others by margin/sell.
+    {sort_fun, pie_fun} =
+      if grain == "contractor", do: {& &1.buy, & &1.buy}, else: {& &1.margin, & &1.sell}
+
+    ranked = Enum.sort_by(dims, sort_fun, :desc)
+    max_abs = ranked |> Enum.map(&abs(sort_fun.(&1))) |> Enum.max(fn -> 1.0 end) |> max(1.0)
     sell = Enum.reduce(all_dims, 0.0, &(&2 + &1.sell))
     buy = Enum.reduce(all_dims, 0.0, &(&2 + &1.buy))
 
@@ -99,7 +104,7 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:chart, nil)
     |> assign(:max_val, max_abs)
     |> assign(:ranked, Enum.take(ranked, 60))
-    |> assign(:pie, build_pie(dims))
+    |> assign(:pie, build_pie(dims, pie_fun))
     |> assign(:unattributed, unattributed(unknown))
   end
 
@@ -138,8 +143,8 @@ defmodule TragarAiWeb.MarginLive do
   end
 
   # ── revenue-share pie (top 8 dimensions by sell + others) ──────────────────
-  defp build_pie(dims) do
-    sorted = dims |> Enum.map(&{&1.dim, &1.sell}) |> Enum.sort_by(&elem(&1, 1), :desc)
+  defp build_pie(dims, value_fun) do
+    sorted = dims |> Enum.map(&{&1.dim, value_fun.(&1)}) |> Enum.sort_by(&elem(&1, 1), :desc)
     {top, rest} = Enum.split(sorted, 8)
     others = rest |> Enum.map(&elem(&1, 1)) |> Enum.sum()
     items = if others > 0, do: top ++ [{"(others)", others}], else: top
@@ -248,6 +253,12 @@ defmodule TragarAiWeb.MarginLive do
 
   defp bar(v, max) when max > 0, do: Float.round(abs(v) / max * 100, 1)
   defp bar(_v, _max), do: 0.0
+
+  defp bar_value(d, "contractor"), do: d.buy
+  defp bar_value(d, _), do: d.margin
+
+  defp bar_color(_d, "contractor"), do: "bg-primary"
+  defp bar_color(d, _), do: (d.margin < 0 && "bg-error") || "bg-primary"
 
   defp tab_cls(active, g) do
     ["tab text-sm font-medium", (active == g && "tab-active") || ""]
@@ -396,8 +407,8 @@ defmodule TragarAiWeb.MarginLive do
               <td class="text-right">{d.margin_pct}%</td>
               <td>
                 <div
-                  class={"h-2 rounded #{(d.margin < 0 && "bg-error") || "bg-primary"}"}
-                  style={"width: #{bar(d.margin, @max_val)}%"}
+                  class={"h-2 rounded #{bar_color(d, @grain)}"}
+                  style={"width: #{bar(bar_value(d, @grain), @max_val)}%"}
                 >
                 </div>
               </td>
