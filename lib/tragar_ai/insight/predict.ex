@@ -3,11 +3,12 @@ defmodule TragarAi.Insight.Predict do
   Nx-powered predictions over the margin rollups — the intelligence layer on top
   of the SQL warehouse.
 
-  For each dimension of a grain it fits a least-squares **trend** on the monthly
-  margin-% series (via Nx tensors) and projects it forward, then ranks the
-  dimensions whose margin is **eroding** (negative slope) among those with
-  material revenue — the "margin at risk" list. Runs in-app on the aggregated
-  rollups; no raw data leaves the box.
+  Fits a least-squares **trend** on each dimension's monthly margin-% series (via
+  Nx tensors) and projects it forward, then ranks dimensions whose margin is
+  eroding (at-risk) or that look mis-rated (exceptions). Respects the selected
+  `year` (nil = all years) and excludes **inactive** dimensions — those with no
+  data in the recent window (so churned customers/suppliers don't show up). Runs
+  in-app on the aggregated rollups; no raw data leaves the box.
   """
   import Ecto.Query
 
@@ -15,65 +16,41 @@ defmodule TragarAi.Insight.Predict do
   alias TragarAi.Repo
 
   @horizon 6
+  @recency_days 185
 
-  @doc """
-  Top dimensions of `grain` whose margin-% is trending down. Options:
-  `:top` (default 10), `:min_sell` total revenue floor (default 250k),
-  `:min_points` months of history (default 4).
-  """
-  @spec at_risk(String.t(), keyword()) :: [map()]
-  def at_risk(grain, opts \\ []) do
+  @doc "Client/lane dimensions with the steepest declining margin, still active."
+  @spec at_risk(String.t(), integer() | nil, keyword()) :: [map()]
+  def at_risk(grain, year \\ nil, opts \\ []) do
     top = Keyword.get(opts, :top, 10)
     min_sell = Keyword.get(opts, :min_sell, 100_000.0)
     min_points = Keyword.get(opts, :min_points, 4)
+    {rows, cutoff} = load_series(grain, year)
 
-    Repo.all(
-      from r in Rollup,
-        where: r.grain == ^grain,
-        order_by: [asc: r.period_month],
-        select: {r.dim_key, r.sell, r.margin}
-    )
+    rows
     |> Enum.group_by(&elem(&1, 0))
     |> Enum.map(fn {dim, series} -> analyze(dim, series) end)
     |> Enum.filter(fn a ->
       a.dim != "(unknown)" and a.points >= min_points and a.total_sell >= min_sell and
-        a.slope < 0
+        a.slope < 0 and active?(a.latest_month, cutoff)
     end)
     |> Enum.sort_by(& &1.slope)
     |> Enum.take(top)
   end
 
-  @doc """
-  Dimensions of `grain` flagged for rate attention — the rate-quality signal:
-  loss-making (margin < 0, i.e. we charge the client less than the contractor
-  costs → a mis-captured rate) or a statistical low-margin outlier (Nx z-score
-  ≤ -2 vs peers). Among dimensions with material revenue. Worst first.
-  """
-  @spec exceptions(String.t(), keyword()) :: [map()]
-  def exceptions(grain, opts \\ []) do
+  @doc "Active dimensions flagged for rate attention: loss-making or low-margin outliers."
+  @spec exceptions(String.t(), integer() | nil, keyword()) :: [map()]
+  def exceptions(grain, year \\ nil, opts \\ []) do
     top = Keyword.get(opts, :top, 15)
     min_sell = Keyword.get(opts, :min_sell, 100_000.0)
+    {rows, cutoff} = load_series(grain, year)
 
     dims =
-      Repo.all(
-        from r in Rollup,
-          where: r.grain == ^grain,
-          group_by: r.dim_key,
-          select: {r.dim_key, sum(r.sell), sum(r.buy)}
-      )
-      |> Enum.map(fn {dim, sell, buy} ->
-        s = to_f(sell)
-        b = to_f(buy)
-
-        %{
-          dim: dim,
-          sell: s,
-          buy: b,
-          margin: s - b,
-          margin_pct: if(s > 0, do: (s - b) / s * 100, else: 0.0)
-        }
+      rows
+      |> Enum.group_by(&elem(&1, 0))
+      |> Enum.map(&aggregate/1)
+      |> Enum.filter(fn d ->
+        d.dim != "(unknown)" and d.sell >= min_sell and active?(d.latest_month, cutoff)
       end)
-      |> Enum.filter(&(&1.dim != "(unknown)" and &1.sell >= min_sell))
 
     {mean, std} = mean_std(Enum.map(dims, & &1.margin_pct))
 
@@ -95,41 +72,73 @@ defmodule TragarAi.Insight.Predict do
     |> Enum.take(top)
   end
 
-  defp mean_std([]), do: {0.0, 0.0}
-
-  defp mean_std(vals) do
-    t = Nx.tensor(vals)
-    mean = t |> Nx.mean() |> Nx.to_number()
-    var = t |> Nx.subtract(mean) |> then(&Nx.multiply(&1, &1)) |> Nx.mean() |> Nx.to_number()
-    {mean, :math.sqrt(var)}
+  @doc "Overall margin-% trend + projection for a grain's single series (e.g. enterprise)."
+  @spec trend(String.t(), integer() | nil) :: map() | nil
+  def trend(grain, year \\ nil) do
+    {rows, _cutoff} = load_series(grain, year)
+    if rows == [], do: nil, else: analyze(grain, rows)
   end
 
-  @doc "Overall margin-% trend + projection for a grain's single series (e.g. enterprise)."
-  @spec trend(String.t()) :: map() | nil
-  def trend(grain) do
-    series =
-      Repo.all(
-        from r in Rollup,
-          where: r.grain == ^grain,
-          order_by: [asc: r.period_month],
-          select: {r.dim_key, r.sell, r.margin}
-      )
+  # ── data + helpers ─────────────────────────────────────────────────────────
 
-    if series == [], do: nil, else: analyze(grain, series)
+  # Returns {rows, recency_cutoff} where rows are {dim, month, sell, buy} sorted
+  # by month, and cutoff is (latest month − ~6mo) so callers can drop inactive
+  # dimensions.
+  defp load_series(grain, year) do
+    base =
+      from r in Rollup,
+        where: r.grain == ^grain,
+        order_by: [asc: r.period_month],
+        select: {r.dim_key, r.period_month, r.sell, r.buy}
+
+    query =
+      if year do
+        from r in base,
+          where:
+            r.period_month >= ^Date.new!(year, 1, 1) and
+              r.period_month <= ^Date.new!(year, 12, 31)
+      else
+        base
+      end
+
+    rows = Repo.all(query)
+    latest = rows |> Enum.map(&elem(&1, 1)) |> Enum.max(Date, fn -> nil end)
+    cutoff = if latest, do: Date.add(latest, -@recency_days), else: nil
+    {rows, cutoff}
+  end
+
+  defp active?(nil, _cutoff), do: false
+  defp active?(_month, nil), do: true
+  defp active?(month, cutoff), do: Date.compare(month, cutoff) != :lt
+
+  defp aggregate({dim, series}) do
+    sell = series |> Enum.map(fn {_, _, s, _} -> to_f(s) end) |> Enum.sum()
+    buy = series |> Enum.map(fn {_, _, _, b} -> to_f(b) end) |> Enum.sum()
+    {_, latest_month, _, _} = List.last(series)
+
+    %{
+      dim: dim,
+      sell: sell,
+      buy: buy,
+      margin: sell - buy,
+      margin_pct: if(sell > 0, do: (sell - buy) / sell * 100, else: 0.0),
+      latest_month: latest_month
+    }
   end
 
   defp analyze(dim, series) do
     mpcts =
-      Enum.map(series, fn {_dim, sell, margin} ->
+      Enum.map(series, fn {_, _, sell, buy} ->
         s = to_f(sell)
-        if s > 0, do: to_f(margin) / s * 100.0, else: 0.0
+        if s > 0, do: (s - to_f(buy)) / s * 100.0, else: 0.0
       end)
 
     n = length(mpcts)
     xs = Enum.map(0..(n - 1), &(&1 * 1.0))
     slope = if n >= 2, do: fit_slope(xs, mpcts), else: 0.0
     latest = List.last(mpcts) || 0.0
-    total_sell = series |> Enum.map(fn {_, sell, _} -> to_f(sell) end) |> Enum.sum()
+    total_sell = series |> Enum.map(fn {_, _, sell, _} -> to_f(sell) end) |> Enum.sum()
+    {_, latest_month, _, _} = List.last(series)
 
     %{
       dim: dim,
@@ -137,7 +146,8 @@ defmodule TragarAi.Insight.Predict do
       slope: Float.round(slope, 3),
       latest_pct: Float.round(latest, 1),
       projected_pct: Float.round(latest + slope * @horizon, 1),
-      total_sell: total_sell
+      total_sell: total_sell,
+      latest_month: latest_month
     }
   end
 
@@ -150,6 +160,15 @@ defmodule TragarAi.Insight.Predict do
     num = dx |> Nx.multiply(dy) |> Nx.sum() |> Nx.to_number()
     den = dx |> Nx.multiply(dx) |> Nx.sum() |> Nx.to_number()
     if den == 0.0, do: 0.0, else: num / den
+  end
+
+  defp mean_std([]), do: {0.0, 0.0}
+
+  defp mean_std(vals) do
+    t = Nx.tensor(vals)
+    mean = t |> Nx.mean() |> Nx.to_number()
+    var = t |> Nx.subtract(mean) |> then(&Nx.multiply(&1, &1)) |> Nx.mean() |> Nx.to_number()
+    {mean, :math.sqrt(var)}
   end
 
   defp to_f(nil), do: 0.0

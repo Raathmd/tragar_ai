@@ -163,7 +163,7 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:ranked, [])
     |> assign(:pie, [])
     |> assign(:unattributed, nil)
-    |> assign(:forecast, Predict.trend("enterprise"))
+    |> assign(:forecast, Predict.trend("enterprise", year))
     |> assign(:at_risk, [])
     |> assign(:exceptions, [])
   end
@@ -206,17 +206,21 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:pie, build_pie(dims, pie_fun))
     |> assign(:unattributed, unattributed(unknown))
     |> assign(:forecast, nil)
-    |> assign(:at_risk, at_risk_for(grain))
-    |> assign(:exceptions, exceptions_for(grain))
+    |> assign(:at_risk, at_risk_for(grain, year))
+    |> assign(:exceptions, exceptions_for(grain, year))
   end
 
   # Margin-% erosion / rate-quality flags only make sense where sell is attributed
-  # (client/lane); the contractor grain is a pure cost view.
-  defp at_risk_for(grain) when grain in ["client", "lane"], do: Predict.at_risk(grain)
-  defp at_risk_for(_grain), do: []
+  # (client/lane); the contractor grain is a pure cost view. Both respect the
+  # selected year and exclude inactive (churned) dimensions.
+  defp at_risk_for(grain, year) when grain in ["client", "lane"], do: Predict.at_risk(grain, year)
+  defp at_risk_for(_grain, _year), do: []
 
-  defp exceptions_for(grain) when grain in ["client", "lane"], do: Predict.exceptions(grain)
-  defp exceptions_for(_grain), do: []
+  defp exceptions_for(grain, year) when grain in ["client", "lane"] do
+    Predict.exceptions(grain, year)
+  end
+
+  defp exceptions_for(_grain, _year), do: []
 
   defp unattributed([]), do: nil
 
