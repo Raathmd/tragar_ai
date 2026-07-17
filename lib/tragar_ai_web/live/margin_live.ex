@@ -8,6 +8,7 @@ defmodule TragarAiWeb.MarginLive do
 
   import Ecto.Query
 
+  alias TragarAi.Insight.Predict
   alias TragarAi.Insight.Rollup
   alias TragarAi.Repo
 
@@ -67,6 +68,8 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:ranked, [])
     |> assign(:pie, [])
     |> assign(:unattributed, nil)
+    |> assign(:forecast, Predict.trend("enterprise"))
+    |> assign(:at_risk, [])
   end
 
   defp load(socket, grain, year) do
@@ -106,7 +109,14 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:ranked, Enum.take(ranked, 60))
     |> assign(:pie, build_pie(dims, pie_fun))
     |> assign(:unattributed, unattributed(unknown))
+    |> assign(:forecast, nil)
+    |> assign(:at_risk, at_risk_for(grain))
   end
+
+  # Margin-% erosion prediction only makes sense where sell is attributed
+  # (client/lane); the contractor grain is a pure cost view.
+  defp at_risk_for(grain) when grain in ["client", "lane"], do: Predict.at_risk(grain)
+  defp at_risk_for(_grain), do: []
 
   defp unattributed([]), do: nil
 
@@ -332,6 +342,11 @@ defmodule TragarAiWeb.MarginLive do
         </div>
       </div>
 
+      <div :if={@forecast} class="mb-5 rounded border p-3 text-sm">
+        <span class="font-medium">Forecast (Nx):</span>
+        margin % trend {@forecast.slope} pts/mo · latest {@forecast.latest_pct}% · projected {@forecast.projected_pct}% in 6 months.
+      </div>
+
       <div :if={@chart} class="mb-5 rounded border p-3">
         <div class="mb-2 flex flex-wrap items-center gap-4 text-xs">
           <span class="flex items-center gap-1">
@@ -376,6 +391,19 @@ defmodule TragarAiWeb.MarginLive do
               <span class="truncate">{s.label}</span>
               <span class="ml-auto opacity-60">{s.pct}%</span>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div :if={@at_risk != []} class="mb-4 rounded border border-error p-3">
+        <div class="mb-2 text-sm font-medium">
+          Margin at risk (Nx) — steepest {@grain} declines
+        </div>
+        <div class="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
+          <div :for={a <- @at_risk} class="flex items-center gap-2">
+            <span class="max-w-xs truncate">{a.dim}</span>
+            <span class="ml-auto opacity-70">{a.latest_pct}% → {a.projected_pct}%</span>
+            <span class="w-16 text-right text-error">{a.slope}/mo</span>
           </div>
         </div>
       </div>
