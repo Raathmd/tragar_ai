@@ -34,7 +34,9 @@ defmodule TragarAi.Insight.Predict do
         a.slope < 0 and active?(a.latest_month, cutoff)
     end)
     |> Enum.sort_by(& &1.slope)
-    |> Enum.map(&Map.put(&1, :detail, "#{&1.latest_pct}% -> #{&1.projected_pct}% (#{&1.slope}/mo)"))
+    |> Enum.map(
+      &Map.put(&1, :detail, "#{&1.latest_pct}% -> #{&1.projected_pct}% (#{&1.slope}/mo)")
+    )
     |> Enum.take(top)
   end
 
