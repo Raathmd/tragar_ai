@@ -39,10 +39,11 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:max_val, max_margin)
     |> assign(:ranked, [])
     |> assign(:pie, [])
+    |> assign(:unattributed, nil)
   end
 
   defp load(socket, grain) do
-    dims =
+    all_dims =
       Repo.all(
         from r in Rollup,
           where: r.grain == ^grain,
@@ -51,10 +52,14 @@ defmodule TragarAiWeb.MarginLive do
       )
       |> Enum.map(&dim_metrics/1)
 
+    # "(unknown)" = waybills with a blank dimension column; keep it out of the pie
+    # and ranked table (it's a data-quality bucket, not a real dimension) but show
+    # its size so it's not silently hidden.
+    {unknown, dims} = Enum.split_with(all_dims, &(&1.dim == "(unknown)"))
     ranked = Enum.sort_by(dims, & &1.margin, :desc)
     max_abs = ranked |> Enum.map(&abs(&1.margin)) |> Enum.max(fn -> 1.0 end) |> max(1.0)
-    sell = Enum.reduce(dims, 0.0, &(&2 + &1.sell))
-    buy = Enum.reduce(dims, 0.0, &(&2 + &1.buy))
+    sell = Enum.reduce(all_dims, 0.0, &(&2 + &1.sell))
+    buy = Enum.reduce(all_dims, 0.0, &(&2 + &1.buy))
 
     socket
     |> assign(:grain, grain)
@@ -64,6 +69,16 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:max_val, max_abs)
     |> assign(:ranked, Enum.take(ranked, 60))
     |> assign(:pie, build_pie(dims))
+    |> assign(:unattributed, unattributed(unknown))
+  end
+
+  defp unattributed([]), do: nil
+
+  defp unattributed(unknown) do
+    %{
+      sell: Enum.reduce(unknown, 0.0, &(&2 + &1.sell)),
+      margin: Enum.reduce(unknown, 0.0, &(&2 + &1.margin))
+    }
   end
 
   defp totals(count, label, sell, buy) do
@@ -297,6 +312,10 @@ defmodule TragarAiWeb.MarginLive do
           </div>
         </div>
       </div>
+
+      <p :if={@unattributed} class="mb-2 text-xs opacity-60">
+        Unattributed (blank {@grain}): {money(@unattributed.sell)} sell, {money(@unattributed.margin)} margin — excluded from the pie & table above.
+      </p>
 
       <div :if={@grain != "enterprise"} class="overflow-x-auto">
         <table class="table table-sm w-full">
