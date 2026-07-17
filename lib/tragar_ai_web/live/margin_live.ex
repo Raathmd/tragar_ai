@@ -17,12 +17,12 @@ defmodule TragarAiWeb.MarginLive do
   @pie_colors ~w(#22c55e #3b82f6 #f59e0b #ef4444 #a855f7 #14b8a6 #eab308 #ec4899 #94a3b8)
 
   @impl true
-  def mount(params, _session, socket) do
+  def mount(_params, _session, socket) do
+    # Gating (signed-in, reset-complete) is enforced by UserAuth :require_authenticated
+    # in the router live_session, which also assigns :current_user.
     {:ok,
      socket
      |> assign(:active, :margin)
-     |> assign(:authorized, authorized?(params))
-     |> assign(:token, params["token"])
      |> assign(:drill, nil)
      |> assign(:ai_answer, "")
      |> assign(:ai_running, false)
@@ -30,10 +30,6 @@ defmodule TragarAiWeb.MarginLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, %{assigns: %{authorized: false}} = socket) do
-    {:noreply, socket}
-  end
-
   def handle_params(params, _uri, socket) do
     grain = if params["grain"] in @grains, do: params["grain"], else: "enterprise"
     year = parse_year(params["year"])
@@ -47,25 +43,11 @@ defmodule TragarAiWeb.MarginLive do
      |> assign(:drill, nil)}
   end
 
-  # Reach /margin only with ?token=… — reuses the SAME :inspect_token as /_inspect
-  # (one token for both hidden surfaces). Unset → open (dev). Not in the menu.
-  defp authorized?(params) do
-    case Application.get_env(:tragar_ai, :inspect_token) do
-      nil -> true
-      "" -> true
-      token -> params["token"] == token
-    end
-  end
-
   defp parse_compare(nil), do: nil
   defp parse_compare("prev"), do: "prev"
   defp parse_compare(s), do: parse_year(s)
 
   @impl true
-  def handle_event(_event, _params, %{assigns: %{authorized: false}} = socket) do
-    {:noreply, socket}
-  end
-
   def handle_event("explain", _params, socket) do
     {:noreply, start_ai(socket, explain_prompt(socket.assigns))}
   end
@@ -363,13 +345,10 @@ defmodule TragarAiWeb.MarginLive do
           r.period_month <= ^Date.new!(year, 12, 31)
   end
 
-  # Token is threaded through every patch so reconnects/refreshes keep the gate
-  # satisfied (LiveView re-mounts from the current URL).
-  defp margin_path(grain, year, compare, token) do
+  defp margin_path(grain, year, compare) do
     q = [grain: grain]
     q = if year, do: q ++ [year: year], else: q
     q = if compare, do: q ++ [compare: compare], else: q
-    q = if token, do: q ++ [token: token], else: q
     "/margin?" <> URI.encode_query(q)
   end
 
@@ -786,19 +765,23 @@ defmodule TragarAiWeb.MarginLive do
   end
 
   @impl true
-  def render(%{authorized: false} = assigns) do
-    ~H"""
-    <div class="mx-auto max-w-6xl p-4">
-      <h1 class="mb-1 text-lg font-semibold">Margin</h1>
-      <p class="text-sm opacity-70">Not authorized.</p>
-    </div>
-    """
-  end
-
   def render(assigns) do
     ~H"""
     <div class="mx-auto max-w-6xl p-4 lg:pr-80">
-      <h1 class="mb-1 text-lg font-semibold">Margin</h1>
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <h1 class="text-lg font-semibold">Margin</h1>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="opacity-60">{@current_user.email}</span>
+          <.link
+            :if={@current_user.type == "admin"}
+            navigate={~p"/margin/users"}
+            class="btn btn-ghost btn-xs"
+          >
+            Users
+          </.link>
+          <a href="/logout" class="btn btn-ghost btn-xs">Log out</a>
+        </div>
+      </div>
       <p class="mb-3 text-sm opacity-60">
         Sell vs contractor buy; margin = sell − buy. Drill down by dimension.
       </p>
@@ -806,28 +789,28 @@ defmodule TragarAiWeb.MarginLive do
       <div class="mb-4 text-xs opacity-60">Drill down by</div>
       <div role="tablist" class="tabs tabs-lg tabs-boxed mb-4 w-fit bg-base-200">
         <.link
-          patch={margin_path("enterprise", @year, @compare, @token)}
+          patch={margin_path("enterprise", @year, @compare)}
           role="tab"
           class={tab_cls(@grain, "enterprise")}
         >
           Enterprise
         </.link>
         <.link
-          patch={margin_path("client", @year, @compare, @token)}
+          patch={margin_path("client", @year, @compare)}
           role="tab"
           class={tab_cls(@grain, "client")}
         >
           Client
         </.link>
         <.link
-          patch={margin_path("lane", @year, @compare, @token)}
+          patch={margin_path("lane", @year, @compare)}
           role="tab"
           class={tab_cls(@grain, "lane")}
         >
           Lane
         </.link>
         <.link
-          patch={margin_path("contractor", @year, @compare, @token)}
+          patch={margin_path("contractor", @year, @compare)}
           role="tab"
           class={tab_cls(@grain, "contractor")}
         >
@@ -837,12 +820,12 @@ defmodule TragarAiWeb.MarginLive do
 
       <div class="mb-2 flex flex-wrap items-center gap-1 text-xs">
         <span class="mr-1 opacity-60">Year:</span>
-        <.link patch={margin_path(@grain, nil, @compare, @token)} class={year_cls(@year, nil)}>
+        <.link patch={margin_path(@grain, nil, @compare)} class={year_cls(@year, nil)}>
           All
         </.link>
         <.link
           :for={y <- 2016..2026}
-          patch={margin_path(@grain, y, @compare, @token)}
+          patch={margin_path(@grain, y, @compare)}
           class={year_cls(@year, y)}
         >
           {y}
@@ -851,11 +834,11 @@ defmodule TragarAiWeb.MarginLive do
 
       <div :if={is_integer(@year)} class="mb-5 flex flex-wrap items-center gap-1 text-xs">
         <span class="mr-1 opacity-60">Compare vs:</span>
-        <.link patch={margin_path(@grain, @year, nil, @token)} class={compare_cls(@compare, nil)}>
+        <.link patch={margin_path(@grain, @year, nil)} class={compare_cls(@compare, nil)}>
           Off
         </.link>
         <.link
-          patch={margin_path(@grain, @year, "prev", @token)}
+          patch={margin_path(@grain, @year, "prev")}
           class={compare_cls(@compare, "prev")}
         >
           Prev years
@@ -863,7 +846,7 @@ defmodule TragarAiWeb.MarginLive do
         <.link
           :for={y <- 2016..2026}
           :if={y < @year}
-          patch={margin_path(@grain, @year, y, @token)}
+          patch={margin_path(@grain, @year, y)}
           class={compare_cls(@compare, y)}
         >
           {y}
