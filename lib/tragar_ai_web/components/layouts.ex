@@ -62,12 +62,6 @@ defmodule TragarAiWeb.Layouts do
         Collections
       </.link>
       <.link
-        navigate={~p"/margin"}
-        class={["btn btn-sm", (@active == :margin && "btn-primary") || "btn-ghost"]}
-      >
-        Margin
-      </.link>
-      <.link
         navigate={~p"/architecture"}
         class={["btn btn-sm", (@active == :architecture && "btn-primary") || "btn-ghost"]}
       >
