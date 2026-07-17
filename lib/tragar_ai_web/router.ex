@@ -35,6 +35,9 @@ defmodule TragarAiWeb.Router do
     # Staff view of FreightWare collections (unauthorised + outstanding).
     live "/collections", CollectionsLive
 
+    # Management margin dashboard — the intelligence platform's first surface.
+    live "/margin", MarginLive
+
     # Read-only tour of the application's design (systems, surfaces, flows).
     live "/architecture", ArchitectureLive
 
