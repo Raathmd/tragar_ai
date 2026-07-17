@@ -24,7 +24,7 @@ defmodule TragarAi.Insight.Predict do
   @spec at_risk(String.t(), keyword()) :: [map()]
   def at_risk(grain, opts \\ []) do
     top = Keyword.get(opts, :top, 10)
-    min_sell = Keyword.get(opts, :min_sell, 250_000.0)
+    min_sell = Keyword.get(opts, :min_sell, 100_000.0)
     min_points = Keyword.get(opts, :min_points, 4)
 
     Repo.all(
@@ -52,7 +52,7 @@ defmodule TragarAi.Insight.Predict do
   @spec exceptions(String.t(), keyword()) :: [map()]
   def exceptions(grain, opts \\ []) do
     top = Keyword.get(opts, :top, 15)
-    min_sell = Keyword.get(opts, :min_sell, 250_000.0)
+    min_sell = Keyword.get(opts, :min_sell, 100_000.0)
 
     dims =
       Repo.all(
@@ -64,6 +64,7 @@ defmodule TragarAi.Insight.Predict do
       |> Enum.map(fn {dim, sell, buy} ->
         s = to_f(sell)
         b = to_f(buy)
+
         %{
           dim: dim,
           sell: s,
