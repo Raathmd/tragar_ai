@@ -92,6 +92,7 @@ defmodule TragarAiWeb.MarginLive do
             loading: false,
             error: nil,
             token: nil,
+            detail: nil,
             rows: Drill.months(socket.assigns.grain, dim, socket.assigns.year)
           }
       end
@@ -121,6 +122,11 @@ defmodule TragarAiWeb.MarginLive do
     {:noreply, start_drill_load(socket, base, fn -> Drill.waybills(grain, drill.dim, day) end)}
   end
 
+  def handle_event("waybill_detail", %{"v" => obj}, socket) do
+    base = %{socket.assigns.drill | level: :detail}
+    {:noreply, start_drill_load(socket, base, fn -> Drill.detail(obj) end)}
+  end
+
   def handle_event("drill_close", _params, socket), do: {:noreply, assign(socket, :drill, nil)}
 
   defp start_drill_load(socket, base, fun) do
@@ -131,7 +137,11 @@ defmodule TragarAiWeb.MarginLive do
       send(lv, {:drill_result, token, fun.()})
     end)
 
-    assign(socket, :drill, Map.merge(base, %{loading: true, rows: [], error: nil, token: token}))
+    assign(
+      socket,
+      :drill,
+      Map.merge(base, %{loading: true, rows: [], detail: nil, error: nil, token: token})
+    )
   end
 
   @impl true
@@ -148,8 +158,14 @@ defmodule TragarAiWeb.MarginLive do
       %{token: ^token} = drill ->
         drill =
           case result do
-            {:ok, rows} -> %{drill | loading: false, rows: rows, error: nil}
-            {:error, reason} -> %{drill | loading: false, rows: [], error: drill_error(reason)}
+            {:ok, payload} when drill.level == :detail ->
+              %{drill | loading: false, detail: payload, error: nil}
+
+            {:ok, rows} ->
+              %{drill | loading: false, rows: rows, error: nil}
+
+            {:error, reason} ->
+              %{drill | loading: false, rows: [], detail: nil, error: drill_error(reason)}
           end
 
         {:noreply, assign(socket, :drill, drill)}
@@ -596,6 +612,7 @@ defmodule TragarAiWeb.MarginLive do
   defp drill_col(:months), do: "Month"
   defp drill_col(:days), do: "Day"
   defp drill_col(:waybills), do: "Waybill"
+  defp drill_col(:detail), do: "Waybill"
 
   # The expandable panel shared by the dimension table and the enterprise month
   # table: a breadcrumb of the drill path plus the current level's rows.
@@ -619,7 +636,7 @@ defmodule TragarAiWeb.MarginLive do
         </button>
         <span :if={@drill.month} class="opacity-40">›</span>
         <button
-          :if={@drill.month && @drill.level == :waybills}
+          :if={@drill.month && @drill.level != :days}
           phx-click="drill_month"
           phx-value-v={Date.to_iso8601(@drill.month)}
           class="link link-hover"
@@ -630,14 +647,31 @@ defmodule TragarAiWeb.MarginLive do
           {Calendar.strftime(@drill.month, "%b %Y")}
         </span>
         <span :if={@drill.day} class="opacity-40">›</span>
-        <span :if={@drill.day} class="font-medium">{Calendar.strftime(@drill.day, "%d %b %Y")}</span>
+        <button
+          :if={@drill.day && @drill.level == :detail}
+          phx-click="drill_day"
+          phx-value-v={Date.to_iso8601(@drill.day)}
+          class="link link-hover"
+        >
+          {Calendar.strftime(@drill.day, "%d %b %Y")}
+        </button>
+        <span :if={@drill.day && @drill.level == :waybills} class="font-medium">
+          {Calendar.strftime(@drill.day, "%d %b %Y")}
+        </span>
+        <span :if={@drill.level == :detail} class="opacity-40">›</span>
+        <span :if={@drill.level == :detail} class="font-medium">
+          WB {@drill.detail && @drill.detail.number}
+        </span>
         <button phx-click="drill_close" class="btn btn-ghost btn-xs ml-auto">Close</button>
       </div>
 
       <div :if={@drill.loading} class="py-2 text-xs opacity-60">Loading from FreightWare…</div>
       <div :if={@drill.error} class="py-2 text-xs text-error">Couldn't load: {@drill.error}</div>
 
-      <table :if={!@drill.loading && !@drill.error} class="table table-xs w-full">
+      <table
+        :if={!@drill.loading && !@drill.error && @drill.level != :detail}
+        class="table table-xs w-full"
+      >
         <thead>
           <tr>
             <th>{drill_col(@drill.level)}</th>
@@ -675,6 +709,50 @@ defmodule TragarAiWeb.MarginLive do
           </tr>
         </tbody>
       </table>
+
+      <div
+        :if={!@drill.loading && !@drill.error && @drill.level == :detail && @drill.detail}
+        class="text-xs"
+      >
+        <div class="mb-3 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+          <div><span class="opacity-60">Waybill</span> {@drill.detail.number}</div>
+          <div><span class="opacity-60">Date</span> {@drill.detail.date}</div>
+          <div><span class="opacity-60">Account</span> {@drill.detail.account}</div>
+          <div><span class="opacity-60">Shipper</span> {@drill.detail.shipper}</div>
+          <div><span class="opacity-60">Lane</span> {@drill.detail.from} → {@drill.detail.to}</div>
+          <div><span class="opacity-60">Weight</span> {@drill.detail.weight}</div>
+          <div><span class="opacity-60">Items</span> {@drill.detail.items}</div>
+          <div><span class="opacity-60">Sell</span> {money(@drill.detail.sell)}</div>
+          <div><span class="opacity-60">Buy</span> {money(@drill.detail.buy)}</div>
+          <div>
+            <span class="opacity-60">Margin</span>
+            <span class={@drill.detail.margin < 0 && "text-error"}>
+              {money(@drill.detail.margin)} ({@drill.detail.margin_pct}%)
+            </span>
+          </div>
+        </div>
+
+        <div class="mb-1 font-medium opacity-70">Contractor charges (buy breakdown)</div>
+        <table class="table table-xs w-full">
+          <thead>
+            <tr>
+              <th>Supplier</th>
+              <th>Type</th>
+              <th class="text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={c <- @drill.detail.charges}>
+              <td>{c.supplier}</td>
+              <td>{c.type}</td>
+              <td class="text-right">{money(c.amount)}</td>
+            </tr>
+            <tr :if={@drill.detail.charges == []}>
+              <td colspan="3" class="opacity-60">No contractor charges.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
     """
   end
