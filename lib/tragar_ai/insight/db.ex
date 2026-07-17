@@ -27,11 +27,11 @@ defmodule TragarAi.Insight.Db do
   `ref` used to tag every message, or `{:error, :not_select}` if `sql` isn't a
   read-only single SELECT.
   """
-  @spec stream(String.t(), pid()) :: reference() | {:error, :not_select}
-  def stream(sql, subscriber \\ self()) when is_binary(sql) and is_pid(subscriber) do
+  @spec stream(String.t(), pid(), keyword()) :: reference() | {:error, :not_select}
+  def stream(sql, subscriber \\ self(), opts \\ []) when is_binary(sql) and is_pid(subscriber) do
     if select_only?(sql) do
       ref = make_ref()
-      spawn(fn -> run(ref, subscriber, sql) end)
+      spawn(fn -> run(ref, subscriber, sql, opts) end)
       ref
     else
       {:error, :not_select}
@@ -58,9 +58,12 @@ defmodule TragarAi.Insight.Db do
   lowercased column name => string value, or `{:error, reason}`. Keep result sets
   small (aggregations); this buffers the whole result.
   """
-  @spec query_rows(String.t(), timeout()) :: {:ok, [map()]} | {:error, term()}
-  def query_rows(sql, timeout \\ 120_000) do
-    case stream(sql, self()) do
+  @spec query_rows(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def query_rows(sql, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 300_000)
+    limit = Keyword.get(opts, :limit, 5_000_000)
+
+    case stream(sql, self(), limit: limit) do
       ref when is_reference(ref) -> collect(ref, [], timeout)
       {:error, _} = err -> err
     end
@@ -94,8 +97,9 @@ defmodule TragarAi.Insight.Db do
 
   defp split(line), do: line |> String.split(" | ") |> Enum.map(&String.trim/1)
 
-  defp run(ref, subscriber, sql) do
+  defp run(ref, subscriber, sql, opts) do
     cfg = config()
+    limit = Keyword.get(opts, :limit, cfg.limit)
 
     port =
       Port.open({:spawn_executable, cfg.java}, [
@@ -104,7 +108,7 @@ defmodule TragarAi.Insight.Db do
         :stderr_to_stdout,
         {:line, @max_line},
         args: ["-cp", cfg.classpath, "Query"],
-        env: env(cfg, sql)
+        env: env(cfg, sql, limit)
       ])
 
     forward(ref, subscriber, port, "")
@@ -132,14 +136,14 @@ defmodule TragarAi.Insight.Db do
     end
   end
 
-  defp env(cfg, sql) do
+  defp env(cfg, sql, limit) do
     [
       {~c"FWDB_HOST", to_charlist(cfg.host)},
       {~c"FWDB_PORT", to_charlist(cfg.port)},
       {~c"FWDB_NAME", to_charlist(cfg.name)},
       {~c"FWDB_USER", to_charlist(cfg.user)},
       {~c"FWDB_PW", to_charlist(cfg.password || "")},
-      {~c"FWDB_LIMIT", to_charlist(Integer.to_string(cfg.limit))},
+      {~c"FWDB_LIMIT", to_charlist(Integer.to_string(limit))},
       {~c"FWDB_SQL", to_charlist(sql)}
     ]
   end
