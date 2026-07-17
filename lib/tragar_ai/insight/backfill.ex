@@ -7,7 +7,7 @@ defmodule TragarAi.Insight.Backfill do
   into margin. The time axis is `waybill_date` (invoice_date is dirty). Runs
   in-app — the data stays on-box; the functions return only counts, never rows.
 
-  `sell = SUM(fwt_waybill.charged_amount)`,
+  `sell = SUM(fwt_waybill.total_cost)` (the customer charge; the API's chargedAmount),
   `buy  = SUM(fwt_contractor_charge.total_charge_amount)` joined to its waybill and
   bucketed by that waybill's date, `margin = sell − buy`.
   """
@@ -20,7 +20,7 @@ defmodule TragarAi.Insight.Backfill do
   @from_year 2016
   @to_year 2026
 
-  @sell_sql "SELECT YEAR(waybill_date) AS yr, MONTH(waybill_date) AS mo, COUNT(*) AS n, SUM(charged_amount) AS sell FROM PUB.fwt_waybill WHERE YEAR(waybill_date) >= 2016 AND YEAR(waybill_date) <= 2026 GROUP BY YEAR(waybill_date), MONTH(waybill_date)"
+  @sell_sql "SELECT YEAR(waybill_date) AS yr, MONTH(waybill_date) AS mo, COUNT(*) AS n, SUM(total_cost) AS sell FROM PUB.fwt_waybill WHERE YEAR(waybill_date) >= 2016 AND YEAR(waybill_date) <= 2026 GROUP BY YEAR(waybill_date), MONTH(waybill_date)"
 
   @buy_sql "SELECT YEAR(w.waybill_date) AS yr, MONTH(w.waybill_date) AS mo, SUM(cc.total_charge_amount) AS buy FROM PUB.fwt_contractor_charge cc JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj WHERE YEAR(w.waybill_date) >= 2016 AND YEAR(w.waybill_date) <= 2026 GROUP BY YEAR(w.waybill_date), MONTH(w.waybill_date)"
 
