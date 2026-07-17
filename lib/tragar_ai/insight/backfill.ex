@@ -17,6 +17,8 @@ defmodule TragarAi.Insight.Backfill do
   alias TragarAi.Insight.Rollup
   alias TragarAi.Repo
 
+  import Ecto.Query, only: [from: 2]
+
   @from_year 2016
   @to_year 2026
 
@@ -67,9 +69,11 @@ defmodule TragarAi.Insight.Backfill do
 
   # Dimension column on fwt_waybill for each drill-down grain (all denormalised
   # on the waybill, so sell and buy both key on it).
+  # Denormalised dimension columns for the waybill-keyed grains. Contractor is
+  # NOT here — it's rebuilt from CHARGES (multi-supplier per waybill), see
+  # run_contractor/0.
   @grain_cols %{
     "client" => "account_name",
-    "contractor" => "contractor_name",
     "lane" => "rate_area_to_code"
   }
 
@@ -82,7 +86,58 @@ defmodule TragarAi.Insight.Backfill do
           {grain, run_grain(grain, col)}
         end
 
-      {:ok, Map.put(grains, "enterprise", {:ok, ent})}
+      grains =
+        grains
+        |> Map.put("enterprise", {:ok, ent})
+        |> Map.put("contractor", run_contractor())
+
+      {:ok, grains}
+    end
+  end
+
+  @doc """
+  Rebuild the contractor (supplier) grain from CHARGES — the only source that
+  captures every supplier on a waybill (collection / line-haul / delivery legs
+  each raise their own charge). Cost-view: `buy` = supplier cost, `sell` = 0,
+  `margin` = −buy. Bucketed by waybill_date; supplier keyed by contractor_reference.
+  """
+  @spec run_contractor() :: {:ok, non_neg_integer()} | {:error, term()}
+  def run_contractor do
+    sql =
+      "SELECT YEAR(w.waybill_date) AS yr, MONTH(w.waybill_date) AS mo, sc.contractor_reference AS k, COUNT(*) AS n, SUM(cc.total_charge_amount) AS buy FROM PUB.fwt_contractor_charge cc JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj WHERE YEAR(w.waybill_date) >= 2016 AND YEAR(w.waybill_date) <= 2026 GROUP BY YEAR(w.waybill_date), MONTH(w.waybill_date), sc.contractor_reference"
+
+    with {:ok, rows} <- Db.query_rows(sql) do
+      # Replace the whole grain — the dimension source changed.
+      Repo.delete_all(from r in Rollup, where: r.grain == "contractor")
+
+      count =
+        Enum.reduce(rows, 0, fn r, acc ->
+          y = integer(r["yr"])
+          m = integer(r["mo"])
+
+          if valid_month?(y, m) do
+            buy = decimal(r["buy"])
+
+            upsert(%{
+              period_month: Date.new!(y, m, 1),
+              grain: "contractor",
+              dim_key: dim_key(r["k"]),
+              dim_label: dim_key(r["k"]),
+              waybills: integer(r["n"]),
+              sell: Decimal.new(0),
+              buy: buy,
+              surcharges: Decimal.new(0),
+              margin: Decimal.sub(Decimal.new(0), buy)
+            })
+
+            acc + 1
+          else
+            acc
+          end
+        end)
+
+      Logger.info("[insight.backfill] contractor (from charges) rollups upserted: #{count}")
+      {:ok, count}
     end
   end
 
