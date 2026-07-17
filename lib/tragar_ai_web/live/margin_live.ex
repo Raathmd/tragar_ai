@@ -314,8 +314,7 @@ defmodule TragarAiWeb.MarginLive do
       </div>
 
       <p :if={@unattributed} class="mb-2 text-xs opacity-60">
-        Unattributed (blank {@grain}): {money(@unattributed.sell)} sell,
-        {money(@unattributed.margin)} margin — excluded from the pie & table above.
+        Unattributed (blank {@grain}): {money(@unattributed.sell)} sell, {money(@unattributed.margin)} margin — excluded from the pie & table above.
       </p>
 
       <div :if={@grain != "enterprise"} class="overflow-x-auto">
