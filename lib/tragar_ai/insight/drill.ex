@@ -1,12 +1,13 @@
 defmodule TragarAi.Insight.Drill do
   @moduledoc """
   Row-level drill-down for the margin dashboard: from a dimension's monthly
-  rollups down through days and individual waybills.
+  rollups down through days, individual waybills, and a single waybill's detail.
 
-  Months come from the `insight_rollups` warehouse (fast, offline). Days and
-  waybills are **not** in the warehouse — it only stores monthly grain — so they
-  are aggregated live from the FreightWare replica (`PUB.fwt_waybill` /
-  `fwt_contractor_charge`) through [`TragarAi.Insight.Db`], one query per drill.
+  Months come from the `insight_rollups` warehouse (fast, offline). Days,
+  waybills, and waybill detail are **not** in the warehouse — it only stores
+  monthly grain — so they are read live from the FreightWare replica
+  (`PUB.fwt_waybill` / `fwt_contractor_charge`) through [`TragarAi.Insight.Db`],
+  one query per drill.
 
   Margin follows the dashboard convention `sell − buy` (surcharges fold into
   buy), so every level sums into the one above it. Waybill-keyed grains
@@ -14,14 +15,17 @@ defmodule TragarAi.Insight.Drill do
   a cost view (sell = 0, margin = −buy) keyed on the charge side via
   `fwm_station_contractor.contractor_reference`.
 
-  Each function returns a list of **uniform** rows the LiveView renders without
-  caring about the level:
+  OpenEdge SQL has **no `DAY()` scalar** (only `YEAR()`/`MONTH()`), so the day
+  grain is derived by grouping on the raw `waybill_date` and a single day is
+  selected with a `waybill_date = 'YYYY-MM-DD'` equality.
 
-      %{label, n, sell, buy, margin, margin_pct, next}
+  Each level function returns **uniform** rows the LiveView renders without caring
+  about the level:
 
-  where `next` is `%{ev, v}` for a drillable row (the phx event + iso value to
-  drill into) or `nil` for a leaf waybill. Live functions return `{:ok, rows}` or
-  `{:error, reason}`.
+      %{label, obj, n, sell, buy, margin, margin_pct, next}
+
+  where `next` is `%{ev, v}` (the phx event + value to drill deeper) or `nil`.
+  Live functions return `{:ok, ...}` or `{:error, reason}`.
   """
   import Ecto.Query
 
@@ -49,31 +53,29 @@ defmodule TragarAi.Insight.Drill do
   @spec days(String.t(), String.t(), Date.t()) :: {:ok, [map()]} | {:error, term()}
   def days(grain, dim, %Date{year: y, month: m}) when grain in @wb_grains do
     sell =
-      "SELECT DAY(waybill_date) AS d, COUNT(*) AS n, SUM(total_cost) AS sell " <>
+      "SELECT waybill_date AS d, COUNT(*) AS n, SUM(total_cost) AS sell " <>
         "FROM PUB.fwt_waybill " <>
         "WHERE YEAR(waybill_date) = #{y} AND MONTH(waybill_date) = #{m}" <>
         dim_filter(grain, dim, "") <>
-        " GROUP BY DAY(waybill_date)"
+        " GROUP BY waybill_date"
 
     buy =
-      "SELECT DAY(w.waybill_date) AS d, SUM(cc.total_charge_amount) AS buy " <>
+      "SELECT w.waybill_date AS d, SUM(cc.total_charge_amount) AS buy " <>
         "FROM PUB.fwt_contractor_charge cc " <>
         "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
         "WHERE YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m}" <>
         dim_filter(grain, dim, "w.") <>
-        " GROUP BY DAY(w.waybill_date)"
+        " GROUP BY w.waybill_date"
 
     with {:ok, sell_rows} <- Db.query_rows(sell),
          {:ok, buy_rows} <- Db.query_rows(buy) do
-      buys = Map.new(buy_rows, &{int(&1["d"]), f(&1["buy"])})
+      buys = Map.new(buy_rows, &{&1["d"], f(&1["buy"])})
 
       rows =
         sell_rows
-        |> Enum.map(&{int(&1["d"]), int(&1["n"]), f(&1["sell"])})
+        |> Enum.map(&{&1["d"], int(&1["n"]), f(&1["sell"])})
         |> Enum.sort_by(&elem(&1, 0))
-        |> Enum.map(fn {d, n, s} ->
-          day_row(%Date{year: y, month: m, day: 1}, d, n, s, Map.get(buys, d, 0.0))
-        end)
+        |> Enum.map(fn {d, n, s} -> day_row(d, n, s, Map.get(buys, d, 0.0)) end)
 
       {:ok, rows}
     end
@@ -81,39 +83,38 @@ defmodule TragarAi.Insight.Drill do
 
   def days("contractor", dim, %Date{year: y, month: m}) do
     sql =
-      "SELECT DAY(w.waybill_date) AS d, COUNT(*) AS n, SUM(cc.total_charge_amount) AS buy " <>
+      "SELECT w.waybill_date AS d, COUNT(*) AS n, SUM(cc.total_charge_amount) AS buy " <>
         "FROM PUB.fwt_contractor_charge cc " <>
         "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
         "JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj " <>
         "WHERE sc.contractor_reference = '#{escape(dim)}' " <>
         "AND YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m} " <>
-        "GROUP BY DAY(w.waybill_date)"
+        "GROUP BY w.waybill_date"
 
     with {:ok, rows} <- Db.query_rows(sql) do
       {:ok,
        rows
-       |> Enum.map(&{int(&1["d"]), int(&1["n"]), f(&1["buy"])})
+       |> Enum.map(&{&1["d"], int(&1["n"]), f(&1["buy"])})
        |> Enum.sort_by(&elem(&1, 0))
-       |> Enum.map(fn {d, n, buy} ->
-         day_row(%Date{year: y, month: m, day: 1}, d, n, 0.0, buy)
-       end)}
+       |> Enum.map(fn {d, n, buy} -> day_row(d, n, 0.0, buy) end)}
     end
   end
 
-  # ── Waybill level (live FreightWare, leaf) ─────────────────────────────────
-  @doc "Individual waybills for a dimension on one day (live, leaf rows)."
+  # ── Waybill level (live FreightWare) ───────────────────────────────────────
+  @doc "Individual waybills for a dimension on one day (live)."
   @spec waybills(String.t(), String.t(), Date.t()) :: {:ok, [map()]} | {:error, term()}
-  def waybills(grain, dim, %Date{year: y, month: m, day: dd}) when grain in @wb_grains do
+  def waybills(grain, dim, %Date{} = day) when grain in @wb_grains do
+    iso = Date.to_iso8601(day)
+
     sell =
-      "SELECT waybill_obj, total_cost AS sell FROM PUB.fwt_waybill " <>
-        "WHERE YEAR(waybill_date) = #{y} AND MONTH(waybill_date) = #{m} AND DAY(waybill_date) = #{dd}" <>
-        dim_filter(grain, dim, "")
+      "SELECT waybill_number, waybill_obj, total_cost AS sell FROM PUB.fwt_waybill " <>
+        "WHERE waybill_date = '#{iso}'" <> dim_filter(grain, dim, "")
 
     buy =
       "SELECT cc.waybill_obj AS waybill_obj, SUM(cc.total_charge_amount) AS buy " <>
         "FROM PUB.fwt_contractor_charge cc " <>
         "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
-        "WHERE YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m} AND DAY(w.waybill_date) = #{dd}" <>
+        "WHERE w.waybill_date = '#{iso}'" <>
         dim_filter(grain, dim, "w.") <>
         " GROUP BY cc.waybill_obj"
 
@@ -124,7 +125,13 @@ defmodule TragarAi.Insight.Drill do
       rows =
         sell_rows
         |> Enum.map(fn r ->
-          wb_row(r["waybill_obj"], nil, f(r["sell"]), Map.get(buys, r["waybill_obj"], 0.0))
+          wb_row(
+            r["waybill_number"],
+            r["waybill_obj"],
+            nil,
+            f(r["sell"]),
+            Map.get(buys, r["waybill_obj"], 0.0)
+          )
         end)
         |> Enum.sort_by(& &1.margin)
 
@@ -132,21 +139,75 @@ defmodule TragarAi.Insight.Drill do
     end
   end
 
-  def waybills("contractor", dim, %Date{year: y, month: m, day: dd}) do
+  def waybills("contractor", dim, %Date{} = day) do
+    iso = Date.to_iso8601(day)
+
     sql =
-      "SELECT w.waybill_obj AS waybill_obj, COUNT(*) AS charges, SUM(cc.total_charge_amount) AS buy " <>
+      "SELECT w.waybill_number AS waybill_number, w.waybill_obj AS waybill_obj, " <>
+        "COUNT(*) AS charges, SUM(cc.total_charge_amount) AS buy " <>
         "FROM PUB.fwt_contractor_charge cc " <>
         "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
         "JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj " <>
-        "WHERE sc.contractor_reference = '#{escape(dim)}' " <>
-        "AND YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m} AND DAY(w.waybill_date) = #{dd} " <>
-        "GROUP BY w.waybill_obj"
+        "WHERE sc.contractor_reference = '#{escape(dim)}' AND w.waybill_date = '#{iso}' " <>
+        "GROUP BY w.waybill_number, w.waybill_obj"
 
     with {:ok, rows} <- Db.query_rows(sql) do
       {:ok,
        rows
-       |> Enum.map(fn r -> wb_row(r["waybill_obj"], int(r["charges"]), 0.0, f(r["buy"])) end)
+       |> Enum.map(fn r ->
+         wb_row(r["waybill_number"], r["waybill_obj"], int(r["charges"]), 0.0, f(r["buy"]))
+       end)
        |> Enum.sort_by(& &1.buy, :desc)}
+    end
+  end
+
+  # ── Waybill detail (live FreightWare, leaf) ────────────────────────────────
+  @doc "One waybill's header fields plus its contractor-charge (buy) breakdown."
+  @spec detail(String.t()) :: {:ok, map()} | {:error, term()}
+  def detail(obj) do
+    header =
+      "SELECT waybill_number, waybill_date, account_name, shipper_reference, " <>
+        "contractor_reference, rate_area_from_code, rate_area_to_code, " <>
+        "waybill_weight, number_of_items, total_cost AS sell " <>
+        "FROM PUB.fwt_waybill WHERE waybill_obj = '#{escape(obj)}'"
+
+    charges =
+      "SELECT sc.contractor_reference AS supplier, cc.charge_type_tla AS type, " <>
+        "cc.total_charge_amount AS amount " <>
+        "FROM PUB.fwt_contractor_charge cc " <>
+        "JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj " <>
+        "WHERE cc.waybill_obj = '#{escape(obj)}'"
+
+    with {:ok, [h | _]} <- Db.query_rows(header),
+         {:ok, charge_rows} <- Db.query_rows(charges) do
+      lines =
+        Enum.map(charge_rows, fn c ->
+          %{supplier: c["supplier"], type: c["type"], amount: f(c["amount"])}
+        end)
+
+      sell = f(h["sell"])
+      buy = lines |> Enum.map(& &1.amount) |> Enum.sum()
+
+      {:ok,
+       %{
+         number: h["waybill_number"],
+         date: h["waybill_date"],
+         account: h["account_name"],
+         shipper: h["shipper_reference"],
+         contractor: h["contractor_reference"],
+         from: h["rate_area_from_code"],
+         to: h["rate_area_to_code"],
+         weight: h["waybill_weight"],
+         items: h["number_of_items"],
+         sell: sell,
+         buy: buy,
+         margin: sell - buy,
+         margin_pct: pct(sell - buy, sell),
+         charges: lines
+       }}
+    else
+      {:ok, []} -> {:error, :not_found}
+      other -> other
     end
   end
 
@@ -157,6 +218,7 @@ defmodule TragarAi.Insight.Drill do
 
     %{
       label: Calendar.strftime(r.period_month, "%b %Y"),
+      obj: nil,
       n: r.waybills || 0,
       sell: s,
       buy: b,
@@ -166,29 +228,31 @@ defmodule TragarAi.Insight.Drill do
     }
   end
 
-  defp day_row(month, day, n, sell, buy) do
-    date = Date.new!(month.year, month.month, day)
+  defp day_row(iso, n, sell, buy) do
+    date = Date.from_iso8601!(iso)
 
     %{
       label: Calendar.strftime(date, "%d %a"),
+      obj: nil,
       n: n,
       sell: sell,
       buy: buy,
       margin: sell - buy,
       margin_pct: pct(sell - buy, sell),
-      next: %{ev: "drill_day", v: Date.to_iso8601(date)}
+      next: %{ev: "drill_day", v: iso}
     }
   end
 
-  defp wb_row(obj, n, sell, buy) do
+  defp wb_row(number, obj, n, sell, buy) do
     %{
-      label: "WB #{obj}",
+      label: "WB #{number}",
+      obj: obj,
       n: n,
       sell: sell,
       buy: buy,
       margin: sell - buy,
       margin_pct: pct(sell - buy, sell),
-      next: nil
+      next: %{ev: "waybill_detail", v: obj}
     }
   end
 
