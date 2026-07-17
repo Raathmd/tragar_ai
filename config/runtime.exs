@@ -138,13 +138,10 @@ if config_env() != :test do
     password: System.get_env("fwsqllive") || System.get_env("FWDB_PASSWORD"),
     limit: String.to_integer(System.get_env("FWDB_LIMIT") || "500")
 
-  # Token gating the hidden /_inspect DB console. Unset → open (dev only); set it
-  # in prod so the route can't be reached without ?token=…
+  # Token gating the hidden /_inspect DB console AND the /margin dashboard (both
+  # Leigh-only, not in the menu, same token). Unset → open (dev only); set it in
+  # prod so neither route can be reached without ?token=…
   config :tragar_ai, :inspect_token, System.get_env("INSPECT_TOKEN")
-
-  # Token gating the /margin management dashboard (not linked in the menu; Leigh
-  # only). Unset → open (dev only); set it in prod so it needs ?token=…
-  config :tragar_ai, :margin_token, System.get_env("MARGIN_TOKEN")
 
   # Inbound API auth — the bearer token the Freshdesk automation must send to
   # call /api/* . We mint this; the admin stores it on the automation's webhook.
