@@ -47,10 +47,10 @@ defmodule TragarAiWeb.MarginLive do
      |> assign(:drill, nil)}
   end
 
-  # Reach /margin only with ?token=… matching :margin_token (unset → open, dev).
-  # Not linked in the menu — same gate as /_inspect.
+  # Reach /margin only with ?token=… — reuses the SAME :inspect_token as /_inspect
+  # (one token for both hidden surfaces). Unset → open (dev). Not in the menu.
   defp authorized?(params) do
-    case Application.get_env(:tragar_ai, :margin_token) do
+    case Application.get_env(:tragar_ai, :inspect_token) do
       nil -> true
       "" -> true
       token -> params["token"] == token
