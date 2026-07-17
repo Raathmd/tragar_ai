@@ -233,14 +233,24 @@ defmodule TragarAiWeb.MarginLive do
 
       <div class="mb-4 text-xs opacity-60">Drill down by</div>
       <div role="tablist" class="tabs tabs-lg tabs-boxed mb-5 w-fit bg-base-200">
-        <.link patch={~p"/margin?grain=enterprise"} role="tab" class={tab_cls(@grain, "enterprise")}>
+        <.link
+          patch={~p"/margin?grain=enterprise"}
+          role="tab"
+          class={tab_cls(@grain, "enterprise")}
+        >
           Enterprise
         </.link>
         <.link patch={~p"/margin?grain=client"} role="tab" class={tab_cls(@grain, "client")}>
           Client
         </.link>
-        <.link patch={~p"/margin?grain=lane"} role="tab" class={tab_cls(@grain, "lane")}>Lane</.link>
-        <.link patch={~p"/margin?grain=contractor"} role="tab" class={tab_cls(@grain, "contractor")}>
+        <.link patch={~p"/margin?grain=lane"} role="tab" class={tab_cls(@grain, "lane")}>
+          Lane
+        </.link>
+        <.link
+          patch={~p"/margin?grain=contractor"}
+          role="tab"
+          class={tab_cls(@grain, "contractor")}
+        >
           Contractor
         </.link>
       </div>
