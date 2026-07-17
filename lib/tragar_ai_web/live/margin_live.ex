@@ -126,7 +126,10 @@ defmodule TragarAiWeb.MarginLive do
               <td class="text-right">{money(r.margin)}</td>
               <td class="text-right">{pct(to_f(r.margin), to_f(r.sell))}%</td>
               <td>
-                <div class="h-2 rounded bg-primary" style={"width: #{bar(to_f(r.margin), @max_margin)}%"}>
+                <div
+                  class="h-2 rounded bg-primary"
+                  style={"width: #{bar(to_f(r.margin), @max_margin)}%"}
+                >
                 </div>
               </td>
             </tr>
