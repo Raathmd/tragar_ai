@@ -29,8 +29,18 @@ defmodule TragarAiWeb.MarginLive do
   def handle_params(params, _uri, socket) do
     grain = if params["grain"] in @grains, do: params["grain"], else: "enterprise"
     year = parse_year(params["year"])
-    {:noreply, socket |> assign(:year, year) |> load(grain, year)}
+    compare = parse_compare(params["compare"])
+
+    {:noreply,
+     socket
+     |> assign(:year, year)
+     |> assign(:compare, compare)
+     |> load(grain, year, compare)}
   end
+
+  defp parse_compare(nil), do: nil
+  defp parse_compare("prev"), do: "prev"
+  defp parse_compare(s), do: parse_year(s)
 
   @impl true
   def handle_event("explain", _params, socket) do
@@ -196,7 +206,7 @@ defmodule TragarAiWeb.MarginLive do
 
   defp risk_note(_), do: ""
 
-  defp risk_item(r), do: "#{r.dim} #{r.latest_pct}%->#{r.projected_pct}%"
+  defp risk_item(r), do: "#{r.dim} #{r.detail}"
 
   defp flags_note(%{exceptions: [_ | _] = ex}) do
     " Rate flags: " <> Enum.map_join(Enum.take(ex, 5), "; ", &flag_item/1)
@@ -204,7 +214,7 @@ defmodule TragarAiWeb.MarginLive do
 
   defp flags_note(_), do: ""
 
-  defp flag_item(e), do: "#{e.dim} #{Float.round(e.margin_pct, 1)}% (#{e.reason})"
+  defp flag_item(e), do: "#{e.dim} #{e.detail}"
 
   @years 2016..2026
 
@@ -224,12 +234,14 @@ defmodule TragarAiWeb.MarginLive do
           r.period_month <= ^Date.new!(year, 12, 31)
   end
 
-  defp margin_path(grain, year) do
-    q = if year, do: [grain: grain, year: year], else: [grain: grain]
+  defp margin_path(grain, year, compare) do
+    q = [grain: grain]
+    q = if year, do: q ++ [year: year], else: q
+    q = if compare, do: q ++ [compare: compare], else: q
     "/margin?" <> URI.encode_query(q)
   end
 
-  defp load(socket, "enterprise", year) do
+  defp load(socket, "enterprise", year, _compare) do
     rows =
       from(r in Rollup, where: r.grain == "enterprise")
       |> year_where(year)
@@ -254,7 +266,7 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:exceptions, [])
   end
 
-  defp load(socket, grain, year) do
+  defp load(socket, grain, year, compare) do
     all_dims =
       from(r in Rollup, where: r.grain == ^grain)
       |> year_where(year)
@@ -292,21 +304,33 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:pie, build_pie(dims, pie_fun))
     |> assign(:unattributed, unattributed(unknown))
     |> assign(:forecast, nil)
-    |> assign(:at_risk, at_risk_for(grain, year))
-    |> assign(:exceptions, exceptions_for(grain, year))
+    |> assign(:at_risk, at_risk_for(grain, year, compare))
+    |> assign(:exceptions, exceptions_for(grain, year, compare))
   end
 
   # Margin-% erosion / rate-quality flags only make sense where sell is attributed
-  # (client/lane); the contractor grain is a pure cost view. Both respect the
-  # selected year and exclude inactive (churned) dimensions.
-  defp at_risk_for(grain, year) when grain in ["client", "lane"], do: Predict.at_risk(grain, year)
-  defp at_risk_for(_grain, _year), do: []
-
-  defp exceptions_for(grain, year) when grain in ["client", "lane"] do
-    Predict.exceptions(grain, year)
+  # (client/lane); the contractor grain is a pure cost view. When a year AND a
+  # comparison baseline are chosen, switch to year-over-year (current vs baseline);
+  # otherwise use the within-period trend. Both exclude inactive dimensions.
+  defp at_risk_for(grain, year, compare) when grain in ["client", "lane"] do
+    if is_integer(year) and not is_nil(compare) do
+      Predict.compare_risk(grain, year, compare)
+    else
+      Predict.at_risk(grain, year)
+    end
   end
 
-  defp exceptions_for(_grain, _year), do: []
+  defp at_risk_for(_grain, _year, _compare), do: []
+
+  defp exceptions_for(grain, year, compare) when grain in ["client", "lane"] do
+    if is_integer(year) and not is_nil(compare) do
+      Predict.compare_flags(grain, year, compare)
+    else
+      Predict.exceptions(grain, year)
+    end
+  end
+
+  defp exceptions_for(_grain, _year, _compare), do: []
 
   defp unattributed([]), do: nil
 
@@ -468,6 +492,10 @@ defmodule TragarAiWeb.MarginLive do
     ["btn btn-xs", (active == y && "btn-primary") || "btn-ghost"]
   end
 
+  defp compare_cls(active, c) do
+    ["btn btn-xs", (active == c && "btn-primary") || "btn-ghost"]
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -480,20 +508,28 @@ defmodule TragarAiWeb.MarginLive do
       <div class="mb-4 text-xs opacity-60">Drill down by</div>
       <div role="tablist" class="tabs tabs-lg tabs-boxed mb-4 w-fit bg-base-200">
         <.link
-          patch={margin_path("enterprise", @year)}
+          patch={margin_path("enterprise", @year, @compare)}
           role="tab"
           class={tab_cls(@grain, "enterprise")}
         >
           Enterprise
         </.link>
-        <.link patch={margin_path("client", @year)} role="tab" class={tab_cls(@grain, "client")}>
+        <.link
+          patch={margin_path("client", @year, @compare)}
+          role="tab"
+          class={tab_cls(@grain, "client")}
+        >
           Client
         </.link>
-        <.link patch={margin_path("lane", @year)} role="tab" class={tab_cls(@grain, "lane")}>
+        <.link
+          patch={margin_path("lane", @year, @compare)}
+          role="tab"
+          class={tab_cls(@grain, "lane")}
+        >
           Lane
         </.link>
         <.link
-          patch={margin_path("contractor", @year)}
+          patch={margin_path("contractor", @year, @compare)}
           role="tab"
           class={tab_cls(@grain, "contractor")}
         >
@@ -501,10 +537,32 @@ defmodule TragarAiWeb.MarginLive do
         </.link>
       </div>
 
-      <div class="mb-5 flex flex-wrap items-center gap-1 text-xs">
+      <div class="mb-2 flex flex-wrap items-center gap-1 text-xs">
         <span class="mr-1 opacity-60">Year:</span>
-        <.link patch={margin_path(@grain, nil)} class={year_cls(@year, nil)}>All</.link>
-        <.link :for={y <- 2016..2026} patch={margin_path(@grain, y)} class={year_cls(@year, y)}>
+        <.link patch={margin_path(@grain, nil, @compare)} class={year_cls(@year, nil)}>All</.link>
+        <.link
+          :for={y <- 2016..2026}
+          patch={margin_path(@grain, y, @compare)}
+          class={year_cls(@year, y)}
+        >
+          {y}
+        </.link>
+      </div>
+
+      <div :if={is_integer(@year)} class="mb-5 flex flex-wrap items-center gap-1 text-xs">
+        <span class="mr-1 opacity-60">Compare vs:</span>
+        <.link patch={margin_path(@grain, @year, nil)} class={compare_cls(@compare, nil)}>
+          Off
+        </.link>
+        <.link patch={margin_path(@grain, @year, "prev")} class={compare_cls(@compare, "prev")}>
+          Prev years
+        </.link>
+        <.link
+          :for={y <- 2016..2026}
+          :if={y < @year}
+          patch={margin_path(@grain, @year, y)}
+          class={compare_cls(@compare, y)}
+        >
           {y}
         </.link>
       </div>
@@ -586,27 +644,21 @@ defmodule TragarAiWeb.MarginLive do
       </div>
 
       <div :if={@at_risk != []} class="mb-4 rounded border border-error p-3">
-        <div class="mb-2 text-sm font-medium">
-          Margin at risk (Nx) — steepest {@grain} declines
-        </div>
+        <div class="mb-2 text-sm font-medium">Margin at risk (Nx) — {@grain}</div>
         <div class="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
           <div :for={a <- @at_risk} class="flex items-center gap-2">
             <span class="max-w-xs truncate">{a.dim}</span>
-            <span class="ml-auto opacity-70">{a.latest_pct}% → {a.projected_pct}%</span>
-            <span class="w-16 text-right text-error">{a.slope}/mo</span>
+            <span class="ml-auto text-right text-error">{a.detail}</span>
           </div>
         </div>
       </div>
 
       <div :if={@exceptions != []} class="mb-4 rounded border border-warning p-3">
-        <div class="mb-2 text-sm font-medium">
-          Rate flags (Nx) — loss-making & margin outliers ({@grain})
-        </div>
+        <div class="mb-2 text-sm font-medium">Rate flags (Nx) — {@grain}</div>
         <div class="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
           <div :for={e <- @exceptions} class="flex items-center gap-2">
             <span class="max-w-xs truncate">{e.dim}</span>
-            <span class="ml-auto opacity-70">{Float.round(e.margin_pct, 1)}%</span>
-            <span class="w-28 text-right text-warning">{e.reason}</span>
+            <span class="ml-auto text-right text-warning">{e.detail}</span>
           </div>
         </div>
       </div>
