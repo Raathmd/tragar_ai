@@ -24,7 +24,7 @@ defmodule TragarAi.Insight.Predict do
   @spec at_risk(String.t(), keyword()) :: [map()]
   def at_risk(grain, opts \\ []) do
     top = Keyword.get(opts, :top, 10)
-    min_sell = Keyword.get(opts, :min_sell, 250_000.0)
+    min_sell = Keyword.get(opts, :min_sell, 100_000.0)
     min_points = Keyword.get(opts, :min_points, 4)
 
     Repo.all(
@@ -41,6 +41,67 @@ defmodule TragarAi.Insight.Predict do
     end)
     |> Enum.sort_by(& &1.slope)
     |> Enum.take(top)
+  end
+
+  @doc """
+  Dimensions of `grain` flagged for rate attention — the rate-quality signal:
+  loss-making (margin < 0, i.e. we charge the client less than the contractor
+  costs → a mis-captured rate) or a statistical low-margin outlier (Nx z-score
+  ≤ -2 vs peers). Among dimensions with material revenue. Worst first.
+  """
+  @spec exceptions(String.t(), keyword()) :: [map()]
+  def exceptions(grain, opts \\ []) do
+    top = Keyword.get(opts, :top, 15)
+    min_sell = Keyword.get(opts, :min_sell, 100_000.0)
+
+    dims =
+      Repo.all(
+        from r in Rollup,
+          where: r.grain == ^grain,
+          group_by: r.dim_key,
+          select: {r.dim_key, sum(r.sell), sum(r.buy)}
+      )
+      |> Enum.map(fn {dim, sell, buy} ->
+        s = to_f(sell)
+        b = to_f(buy)
+
+        %{
+          dim: dim,
+          sell: s,
+          buy: b,
+          margin: s - b,
+          margin_pct: if(s > 0, do: (s - b) / s * 100, else: 0.0)
+        }
+      end)
+      |> Enum.filter(&(&1.dim != "(unknown)" and &1.sell >= min_sell))
+
+    {mean, std} = mean_std(Enum.map(dims, & &1.margin_pct))
+
+    dims
+    |> Enum.map(fn d ->
+      z = if std > 0, do: (d.margin_pct - mean) / std, else: 0.0
+
+      reason =
+        cond do
+          d.margin < 0 -> "loss-making"
+          z <= -2.0 -> "low-margin outlier"
+          true -> nil
+        end
+
+      d |> Map.put(:reason, reason) |> Map.put(:z, Float.round(z, 1))
+    end)
+    |> Enum.filter(& &1.reason)
+    |> Enum.sort_by(& &1.margin_pct)
+    |> Enum.take(top)
+  end
+
+  defp mean_std([]), do: {0.0, 0.0}
+
+  defp mean_std(vals) do
+    t = Nx.tensor(vals)
+    mean = t |> Nx.mean() |> Nx.to_number()
+    var = t |> Nx.subtract(mean) |> then(&Nx.multiply(&1, &1)) |> Nx.mean() |> Nx.to_number()
+    {mean, :math.sqrt(var)}
   end
 
   @doc "Overall margin-% trend + projection for a grain's single series (e.g. enterprise)."
