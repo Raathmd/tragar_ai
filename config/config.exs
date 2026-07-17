@@ -14,6 +14,7 @@ config :tragar_ai,
 # Ash domains exposed by the application.
 config :tragar_ai,
   ash_domains: [
+    TragarAi.Accounts,
     TragarAi.Assist,
     TragarAi.Logistics,
     TragarAi.Customers,

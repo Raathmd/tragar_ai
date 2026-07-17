@@ -35,10 +35,27 @@ defmodule TragarAiWeb.Router do
     # Staff view of FreightWare collections (unauthorised + outstanding).
     live "/collections", CollectionsLive
 
-    # Management margin dashboard — the intelligence platform's first surface.
-    # NOT linked in the app menu; gated by :inspect_token (reach it at
-    # /margin?token=…), the same token as /_inspect. Leigh-only.
-    live "/margin", MarginLive
+    # Sign-in for the margin dashboards (not linked in the menu). Login posts to
+    # the controller so it can set the session cookie; gating is in UserAuth.
+    live "/login", LoginLive
+    post "/login", SessionController, :create
+    get "/logout", SessionController, :delete
+
+    # First-login / self-service password reset (needs a session, reset pending OK).
+    live_session :margin_reset, on_mount: [{TragarAiWeb.UserAuth, :require_reset}] do
+      live "/reset-password", ResetPasswordLive
+    end
+
+    # The margin dashboard — requires a signed-in, reset-complete user.
+    live_session :margin_authenticated,
+      on_mount: [{TragarAiWeb.UserAuth, :require_authenticated}] do
+      live "/margin", MarginLive
+    end
+
+    # Admin-only: manage who can access the margin data.
+    live_session :margin_admin, on_mount: [{TragarAiWeb.UserAuth, :require_admin}] do
+      live "/margin/users", MarginUsersLive
+    end
 
     # Read-only tour of the application's design (systems, surfaces, flows).
     live "/architecture", ArchitectureLive
