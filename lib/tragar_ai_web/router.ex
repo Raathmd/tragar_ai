@@ -36,6 +36,8 @@ defmodule TragarAiWeb.Router do
     live "/collections", CollectionsLive
 
     # Management margin dashboard — the intelligence platform's first surface.
+    # NOT linked in the app menu; gated by :margin_token (reach it at
+    # /margin?token=…), same pattern as /_inspect. Leigh-only.
     live "/margin", MarginLive
 
     # Read-only tour of the application's design (systems, surfaces, flows).

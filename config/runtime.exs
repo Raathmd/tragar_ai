@@ -142,6 +142,10 @@ if config_env() != :test do
   # in prod so the route can't be reached without ?token=…
   config :tragar_ai, :inspect_token, System.get_env("INSPECT_TOKEN")
 
+  # Token gating the /margin management dashboard (not linked in the menu; Leigh
+  # only). Unset → open (dev only); set it in prod so it needs ?token=…
+  config :tragar_ai, :margin_token, System.get_env("MARGIN_TOKEN")
+
   # Inbound API auth — the bearer token the Freshdesk automation must send to
   # call /api/* . We mint this; the admin stores it on the automation's webhook.
   # When unset, /api is open (local dev only); prod must set it.
