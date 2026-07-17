@@ -145,7 +145,7 @@ defmodule TragarAiWeb.InspectLive do
             wrap="soft"
             spellcheck="false"
             class="w-full rounded border p-2 font-mono text-sm leading-snug"
-            style="resize: vertical; min-height: 8rem; white-space: pre-wrap; word-break: break-word;"
+            style="resize: vertical; min-height: 8rem;"
             placeholder="SELECT … (read-only ad-hoc query)"
           >{@sql}</textarea>
           <div class="mt-2 flex items-center gap-3">
