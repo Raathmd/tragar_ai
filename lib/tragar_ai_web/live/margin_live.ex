@@ -16,7 +16,14 @@ defmodule TragarAiWeb.MarginLive do
   @pie_colors ~w(#22c55e #3b82f6 #f59e0b #ef4444 #a855f7 #14b8a6 #eab308 #ec4899 #94a3b8)
 
   @impl true
-  def mount(_params, _session, socket), do: {:ok, assign(socket, :active, :margin)}
+  def mount(_params, _session, socket) do
+    {:ok,
+     socket
+     |> assign(:active, :margin)
+     |> assign(:ai_answer, "")
+     |> assign(:ai_running, false)
+     |> assign(:ai_prompt, "")}
+  end
 
   @impl true
   def handle_params(params, _uri, socket) do
@@ -24,6 +31,80 @@ defmodule TragarAiWeb.MarginLive do
     year = parse_year(params["year"])
     {:noreply, socket |> assign(:year, year) |> load(grain, year)}
   end
+
+  @impl true
+  def handle_event("explain", _params, socket) do
+    {:noreply, start_ai(socket, explain_prompt(socket.assigns))}
+  end
+
+  def handle_event("ai_send", %{"prompt" => prompt}, socket) do
+    {:noreply, start_ai(socket, prompt)}
+  end
+
+  @impl true
+  def handle_info({:ai_chunk, chunk}, socket) do
+    {:noreply, update(socket, :ai_answer, &(&1 <> chunk))}
+  end
+
+  def handle_info(:ai_done, socket), do: {:noreply, assign(socket, :ai_running, false)}
+
+  # Streams an explanation from the in-app model (Claude on the Tragar account, or
+  # the local model) grounded in the current view's numbers. The answer renders in
+  # this LiveView — the data reaches the app's model, never the dev session.
+  defp start_ai(socket, prompt) do
+    lv = self()
+
+    Task.Supervisor.start_child(TragarAi.TaskSupervisor, fn ->
+      TragarAi.CoreAI.reason(prompt, %{}, fn chunk -> send(lv, {:ai_chunk, chunk}) end)
+      send(lv, :ai_done)
+    end)
+
+    socket
+    |> assign(:ai_prompt, prompt)
+    |> assign(:ai_answer, "")
+    |> assign(:ai_running, true)
+  end
+
+  defp explain_prompt(assigns) do
+    "You are Tragar's freight margin analyst. Based ONLY on this data, give a concise " <>
+      "situational and predictive outlook in 3–5 sentences:\n\n" <> view_context(assigns)
+  end
+
+  defp view_context(a) do
+    t = a.totals
+
+    base =
+      "Grain #{a.grain}#{year_note(a)}. #{t.label}: #{t.count}. " <>
+        "Sell #{money(t.sell)}, Buy #{money(t.buy)}. " <>
+        "Margin #{money(t.margin)} (#{t.margin_pct}%)."
+
+    base <> forecast_note(a) <> risk_note(a) <> flags_note(a)
+  end
+
+  defp year_note(%{year: y}) when is_integer(y), do: " (year #{y})"
+  defp year_note(_), do: ""
+
+  defp forecast_note(%{forecast: %{} = f}) do
+    " Forecast: margin% trend #{f.slope}/mo, projected #{f.projected_pct}% in 6 months."
+  end
+
+  defp forecast_note(_), do: ""
+
+  defp risk_note(%{at_risk: [_ | _] = risks}) do
+    " At risk: " <> Enum.map_join(Enum.take(risks, 5), "; ", &risk_item/1)
+  end
+
+  defp risk_note(_), do: ""
+
+  defp risk_item(r), do: "#{r.dim} #{r.latest_pct}%->#{r.projected_pct}%"
+
+  defp flags_note(%{exceptions: [_ | _] = ex}) do
+    " Rate flags: " <> Enum.map_join(Enum.take(ex, 5), "; ", &flag_item/1)
+  end
+
+  defp flags_note(_), do: ""
+
+  defp flag_item(e), do: "#{e.dim} #{Float.round(e.margin_pct, 1)}% (#{e.reason})"
 
   @years 2016..2026
 
@@ -494,6 +575,29 @@ defmodule TragarAiWeb.MarginLive do
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div class="mt-6 rounded border p-3">
+        <div class="mb-2 text-sm font-medium">Ask the AI about these margins</div>
+        <div class="mb-2">
+          <button phx-click="explain" class="btn btn-primary btn-sm" disabled={@ai_running}>
+            Explain this view
+          </button>
+        </div>
+        <form phx-submit="ai_send" class="mb-2 flex gap-2">
+          <input
+            type="text"
+            name="prompt"
+            value={@ai_prompt}
+            placeholder="Ask about the margins…"
+            class="input input-sm input-bordered flex-1"
+          />
+          <button type="submit" class="btn btn-sm" disabled={@ai_running}>Send</button>
+        </form>
+        <div :if={@ai_running} class="mb-1 text-xs opacity-60">thinking…</div>
+        <div :if={@ai_answer != ""} class="whitespace-pre-wrap rounded bg-base-200 p-3 text-sm">
+          {@ai_answer}
+        </div>
       </div>
     </div>
     """
