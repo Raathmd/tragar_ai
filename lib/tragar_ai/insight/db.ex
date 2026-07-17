@@ -52,6 +52,48 @@ defmodule TragarAi.Insight.Db do
       )
   end
 
+  @doc """
+  Run `sql` and return the parsed result synchronously — for the in-app ETL, not
+  the streaming console. Returns `{:ok, [row_map]}` where each row is a map of
+  lowercased column name => string value, or `{:error, reason}`. Keep result sets
+  small (aggregations); this buffers the whole result.
+  """
+  @spec query_rows(String.t(), timeout()) :: {:ok, [map()]} | {:error, term()}
+  def query_rows(sql, timeout \\ 120_000) do
+    case stream(sql, self()) do
+      ref when is_reference(ref) -> collect(ref, [], timeout)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp collect(ref, acc, timeout) do
+    receive do
+      {:db_row, ^ref, line} -> collect(ref, [line | acc], timeout)
+      {:db_done, ^ref, :ok} -> {:ok, parse(Enum.reverse(acc))}
+      {:db_done, ^ref, {:error, reason}} -> {:error, reason}
+    after
+      timeout -> {:error, :timeout}
+    end
+  end
+
+  # The Java Query tool prints `col | col`, a `---` rule, ` val | val` rows, then a
+  # `(N rows)` footer. Turn that into a list of column=>value maps.
+  defp parse([]), do: []
+
+  defp parse([header | rest]) do
+    keys = header |> split() |> Enum.map(&String.downcase/1)
+
+    rest
+    |> Enum.reject(&separator_or_footer?/1)
+    |> Enum.map(fn line -> keys |> Enum.zip(split(line)) |> Map.new() end)
+  end
+
+  defp separator_or_footer?(line) do
+    String.match?(line, ~r/^-+$/) or String.match?(line, ~r/^\(\d+ rows?\)$/)
+  end
+
+  defp split(line), do: line |> String.split(" | ") |> Enum.map(&String.trim/1)
+
   defp run(ref, subscriber, sql) do
     cfg = config()
 
