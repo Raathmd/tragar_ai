@@ -43,7 +43,17 @@ defmodule TragarAiWeb.MarginLive do
 
   def handle_event("explain_row", %{"dim" => dim}, socket) do
     row = Enum.find(socket.assigns.ranked, &(&1.dim == dim))
-    {:noreply, start_ai(socket, row_prompt(socket.assigns.grain, socket.assigns.year, row))}
+    grain = socket.assigns.grain
+    year = socket.assigns.year
+
+    prompt =
+      if grain == "contractor" do
+        contractor_row_prompt(year, row)
+      else
+        row_prompt(grain, year, row)
+      end
+
+    {:noreply, start_ai(socket, prompt)}
   end
 
   def handle_event("explain_month", %{"month" => month}, socket) do
@@ -84,6 +94,32 @@ defmodule TragarAiWeb.MarginLive do
       "(#{pct(to_f(r.margin), to_f(r.sell))}%), #{r.waybills} waybills."
   end
 
+  defp contractor_row_prompt(_year, nil), do: "No data for that supplier."
+
+  defp contractor_row_prompt(year, row) do
+    t = Predict.cost_trend("contractor", row.dim, year)
+
+    "You are Tragar's freight procurement analyst. Contractor \"#{row.dim}\" is a SERVICE " <>
+      "PROVIDER we pay (not a revenue line).#{year_scope(year)}: cost of service " <>
+      "#{money(row.buy)} across #{row.waybills} charges.#{cost_trend_note(t)} " <>
+      "Evaluate their cost of service and how it is trending — treat this as supplier " <>
+      "cost, not margin. Ideally compare to other suppliers on the same routes " <>
+      "(route-level comparison is a planned follow-up)."
+  end
+
+  defp cost_trend_note(nil), do: ""
+
+  defp cost_trend_note(t) do
+    dir =
+      cond do
+        t.slope > 0 -> "rising"
+        t.slope < 0 -> "falling"
+        true -> "flat"
+      end
+
+    " Monthly cost is #{dir} (#{money(abs(t.slope))}/mo), latest #{money(t.latest)}."
+  end
+
   defp row_prompt(_grain, _year, nil), do: "No data for that row."
 
   defp row_prompt(grain, year, row) do
@@ -105,6 +141,13 @@ defmodule TragarAiWeb.MarginLive do
   defp year_scope(nil), do: " (all years)"
   defp year_scope(y), do: " in #{y}"
 
+  defp explain_prompt(%{grain: "contractor"} = assigns) do
+    "You are Tragar's freight procurement analyst. These are SERVICE PROVIDERS (suppliers " <>
+      "we pay), not revenue. Based ONLY on this data, evaluate supplier cost of service and " <>
+      "how it is trending in 3–5 sentences (treat as cost, not margin):\n\n" <>
+      view_context(assigns)
+  end
+
   defp explain_prompt(assigns) do
     "You are Tragar's freight margin analyst. Based ONLY on this data, give a concise " <>
       "situational and predictive outlook in 3–5 sentences:\n\n" <> view_context(assigns)
@@ -118,8 +161,25 @@ defmodule TragarAiWeb.MarginLive do
         "Sell #{money(t.sell)}, Buy #{money(t.buy)}. " <>
         "Margin #{money(t.margin)} (#{t.margin_pct}%)."
 
-    base <> forecast_note(a) <> risk_note(a) <> flags_note(a)
+    base <> top_note(a) <> forecast_note(a) <> risk_note(a) <> flags_note(a)
   end
+
+  # The tab's dimensions (year-scoped) so "Explain this view" reasons across all
+  # clients / lanes / contractors, not just the totals.
+  defp top_note(%{grain: "enterprise"}), do: ""
+
+  defp top_note(%{ranked: [_ | _] = ranked, grain: "contractor"}) do
+    " Top suppliers by cost: " <> Enum.map_join(Enum.take(ranked, 8), "; ", &cost_item/1)
+  end
+
+  defp top_note(%{ranked: [_ | _] = ranked, grain: grain}) do
+    " Top #{grain}s: " <> Enum.map_join(Enum.take(ranked, 8), "; ", &top_item/1)
+  end
+
+  defp top_note(_), do: ""
+
+  defp top_item(d), do: "#{d.dim} margin #{money(d.margin)} (#{d.margin_pct}%)"
+  defp cost_item(d), do: "#{d.dim} #{money(d.buy)}"
 
   defp year_note(%{year: y}) when is_integer(y), do: " (year #{y})"
   defp year_note(_), do: ""

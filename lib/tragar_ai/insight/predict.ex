@@ -87,6 +87,30 @@ defmodule TragarAi.Insight.Predict do
     if series == [], do: nil, else: analyze(dim, series)
   end
 
+  @doc "Cost (buy) trend + projection for one contractor/supplier (year-scoped). On-demand."
+  @spec cost_trend(String.t(), String.t(), integer() | nil) :: map() | nil
+  def cost_trend(grain, dim, year \\ nil) do
+    {rows, _cutoff} = load_series(grain, year)
+    series = Enum.filter(rows, &(elem(&1, 0) == dim))
+    if series == [], do: nil, else: analyze_cost(dim, series)
+  end
+
+  defp analyze_cost(dim, series) do
+    buys = Enum.map(series, fn {_, _, _, buy} -> to_f(buy) end)
+    n = length(buys)
+    xs = Enum.map(0..(n - 1), &(&1 * 1.0))
+    slope = if n >= 2, do: fit_slope(xs, buys), else: 0.0
+    latest = List.last(buys) || 0.0
+
+    %{
+      dim: dim,
+      points: n,
+      slope: Float.round(slope, 1),
+      latest: latest,
+      projected: latest + slope * @horizon
+    }
+  end
+
   # ── data + helpers ─────────────────────────────────────────────────────────
 
   # Returns {rows, recency_cutoff} where rows are {dim, month, sell, buy} sorted
