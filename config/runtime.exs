@@ -125,6 +125,23 @@ if config_env() != :test do
     cloud_model: System.get_env("CORE_AI_CLOUD_MODEL") || "claude-haiku-4-5",
     cloud_url: System.get_env("CORE_AI_CLOUD_URL") || "https://api.anthropic.com/v1/messages"
 
+  # FreightWare OpenEdge replica (read-only), reached in-beam via the Java JDBC
+  # helper in priv/db_inspect. Powers the hidden inspection console and (later)
+  # the intelligence pipeline. The password lives in .env.prod under the
+  # `fwsqllive` key; FWDB_PASSWORD is an alternative name.
+  config :tragar_ai, TragarAi.Insight.Db,
+    java: System.get_env("FWDB_JAVA") || "/opt/homebrew/opt/openjdk/bin/java",
+    host: System.get_env("FWDB_HOST") || "tragar-db.dovetail.co.za",
+    port: System.get_env("FWDB_PORT") || "9007",
+    name: System.get_env("FWDB_NAME") || "fwdb",
+    user: System.get_env("FWDB_USER") || "fwsqllive",
+    password: System.get_env("fwsqllive") || System.get_env("FWDB_PASSWORD"),
+    limit: String.to_integer(System.get_env("FWDB_LIMIT") || "500")
+
+  # Token gating the hidden /_inspect DB console. Unset → open (dev only); set it
+  # in prod so the route can't be reached without ?token=…
+  config :tragar_ai, :inspect_token, System.get_env("INSPECT_TOKEN")
+
   # Inbound API auth — the bearer token the Freshdesk automation must send to
   # call /api/* . We mint this; the admin stores it on the automation's webhook.
   # When unset, /api is open (local dev only); prod must set it.
