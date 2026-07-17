@@ -231,11 +231,14 @@ defmodule TragarAiWeb.MarginLive do
     t = Predict.cost_trend("contractor", row.dim, year)
 
     "You are Tragar's freight procurement analyst. Contractor \"#{row.dim}\" is a SERVICE " <>
-      "PROVIDER we pay (not a revenue line).#{year_scope(year)}: cost of service " <>
-      "#{money(row.buy)} across #{row.waybills} charges.#{cost_trend_note(t)} " <>
-      "Evaluate their cost of service and how it is trending — treat this as supplier " <>
-      "cost, not margin. Ideally compare to other suppliers on the same routes " <>
-      "(route-level comparison is a planned follow-up)."
+      "PROVIDER we pay.#{year_scope(year)}: we paid them #{money(row.buy)} to move " <>
+      "#{row.waybills} waybills whose customer revenue (sell) was #{money(row.sell)}, " <>
+      "so the margin on the freight they carried is #{money(row.margin)} " <>
+      "(#{row.margin_pct}%).#{cost_trend_note(t)} Evaluate their cost of service and the " <>
+      "margin we make on their freight, and how both are trending. NOTE: a waybill can " <>
+      "involve several suppliers, so this sell is the full revenue of the waybills they " <>
+      "touched (not additive across suppliers). Ideally compare to other suppliers on the " <>
+      "same routes (route-level comparison is a planned follow-up)."
   end
 
   defp cost_trend_note(nil), do: ""
@@ -274,8 +277,10 @@ defmodule TragarAiWeb.MarginLive do
 
   defp explain_prompt(%{grain: "contractor"} = assigns) do
     "You are Tragar's freight procurement analyst. These are SERVICE PROVIDERS (suppliers " <>
-      "we pay), not revenue. Based ONLY on this data, evaluate supplier cost of service and " <>
-      "how it is trending in 3–5 sentences (treat as cost, not margin):\n\n" <>
+      "we pay). For each, sell = revenue of the waybills they moved and margin = sell − their " <>
+      "cost (a waybill with several suppliers counts its sell under each, so sell is not " <>
+      "additive across suppliers). Based ONLY on this data, evaluate supplier cost and the " <>
+      "margin on their freight, and how both are trending, in 3–5 sentences:\n\n" <>
       view_context(assigns)
   end
 
@@ -310,7 +315,10 @@ defmodule TragarAiWeb.MarginLive do
   defp top_note(_), do: ""
 
   defp top_item(d), do: "#{d.dim} margin #{money(d.margin)} (#{d.margin_pct}%)"
-  defp cost_item(d), do: "#{d.dim} #{money(d.buy)}"
+
+  defp cost_item(d),
+    do:
+      "#{d.dim} cost #{money(d.buy)}, sell #{money(d.sell)}, margin #{money(d.margin)} (#{d.margin_pct}%)"
 
   defp year_note(%{year: y}) when is_integer(y), do: " (year #{y})"
   defp year_note(_), do: ""
@@ -884,6 +892,12 @@ defmodule TragarAiWeb.MarginLive do
           <div class="text-lg font-semibold">{@totals.margin_pct}%</div>
         </div>
       </div>
+
+      <p :if={@grain == "contractor"} class="mb-5 text-xs opacity-60">
+        Supplier sell = revenue of the waybills each supplier moved; margin = sell − their cost.
+        A waybill carried by several suppliers counts under each, so these per-supplier figures
+        don't sum to enterprise revenue (the totals above over-count sell for the same reason).
+      </p>
 
       <div :if={@forecast} class="mb-5 rounded border p-3 text-sm">
         <span class="font-medium">Forecast (Nx):</span>
