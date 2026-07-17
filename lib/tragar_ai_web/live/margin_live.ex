@@ -43,7 +43,7 @@ defmodule TragarAiWeb.MarginLive do
 
   @impl true
   def handle_info({:ai_chunk, chunk}, socket) do
-    {:noreply, update(socket, :ai_answer, &(&1 <> chunk))}
+    {:noreply, assign(socket, :ai_answer, socket.assigns.ai_answer <> chunk)}
   end
 
   def handle_info(:ai_done, socket), do: {:noreply, assign(socket, :ai_running, false)}
