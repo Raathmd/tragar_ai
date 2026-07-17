@@ -98,36 +98,53 @@ defmodule TragarAi.Insight.Backfill do
   @doc """
   Rebuild the contractor (supplier) grain from CHARGES — the only source that
   captures every supplier on a waybill (collection / line-haul / delivery legs
-  each raise their own charge). Cost-view: `buy` = supplier cost, `sell` = 0,
-  `margin` = −buy. Bucketed by waybill_date; supplier keyed by contractor_reference.
+  each raise their own charge). `buy` = supplier cost. `sell` = the revenue of
+  the waybills that supplier moved (each waybill's total_cost counted ONCE via a
+  distinct (waybill, contractor) derived table, so multiple legs don't inflate
+  it), `margin` = sell − buy. Bucketed by waybill_date; supplier keyed by
+  contractor_reference.
+
+  NOTE: contractor sell is NOT additive across suppliers — a waybill carried by
+  several suppliers counts its sell under each — so per-supplier figures don't
+  sum to enterprise revenue. Correct per-row (what the dashboard shows).
   """
   @spec run_contractor() :: {:ok, non_neg_integer()} | {:error, term()}
   def run_contractor do
-    sql =
-      "SELECT YEAR(w.waybill_date) AS yr, MONTH(w.waybill_date) AS mo, sc.contractor_reference AS k, COUNT(*) AS n, SUM(cc.total_charge_amount) AS buy FROM PUB.fwt_contractor_charge cc JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj WHERE YEAR(w.waybill_date) >= 2016 AND YEAR(w.waybill_date) <= 2026 GROUP BY YEAR(w.waybill_date), MONTH(w.waybill_date), sc.contractor_reference"
+    buy_sql =
+      "SELECT YEAR(w.waybill_date) AS yr, MONTH(w.waybill_date) AS mo, sc.contractor_reference AS k, SUM(cc.total_charge_amount) AS buy FROM PUB.fwt_contractor_charge cc JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj WHERE YEAR(w.waybill_date) >= 2016 AND YEAR(w.waybill_date) <= 2026 GROUP BY YEAR(w.waybill_date), MONTH(w.waybill_date), sc.contractor_reference"
 
-    with {:ok, rows} <- Db.query_rows(sql) do
+    # Distinct (waybill, contractor) so a multi-leg waybill's total_cost is summed
+    # once per supplier; count = distinct waybills that supplier moved.
+    sell_sql =
+      "SELECT YEAR(w.waybill_date) AS yr, MONTH(w.waybill_date) AS mo, p.k AS k, SUM(w.total_cost) AS sell, COUNT(*) AS n FROM (SELECT DISTINCT cc.waybill_obj AS wobj, sc.contractor_reference AS k FROM PUB.fwt_contractor_charge cc JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj) p JOIN PUB.fwt_waybill w ON w.waybill_obj = p.wobj WHERE YEAR(w.waybill_date) >= 2016 AND YEAR(w.waybill_date) <= 2026 GROUP BY YEAR(w.waybill_date), MONTH(w.waybill_date), p.k"
+
+    with {:ok, buy_rows} <- Db.query_rows(buy_sql),
+         {:ok, sell_rows} <- Db.query_rows(sell_sql) do
       # Replace the whole grain — the dimension source changed.
       Repo.delete_all(from r in Rollup, where: r.grain == "contractor")
 
-      count =
-        Enum.reduce(rows, 0, fn r, acc ->
-          y = integer(r["yr"])
-          m = integer(r["mo"])
+      buy = index_by_month_key(buy_rows)
+      sell = index_by_month_key(sell_rows)
+      keys = MapSet.union(MapSet.new(Map.keys(buy)), MapSet.new(Map.keys(sell)))
 
+      count =
+        Enum.reduce(keys, 0, fn {y, m, k} = key, acc ->
           if valid_month?(y, m) do
-            buy = decimal(r["buy"])
+            b = Map.get(buy, key, %{})
+            s = Map.get(sell, key, %{})
+            sell_amt = decimal(s["sell"])
+            buy_amt = decimal(b["buy"])
 
             upsert(%{
               period_month: Date.new!(y, m, 1),
               grain: "contractor",
-              dim_key: dim_key(r["k"]),
-              dim_label: dim_key(r["k"]),
-              waybills: integer(r["n"]),
-              sell: Decimal.new(0),
-              buy: buy,
+              dim_key: dim_key(k),
+              dim_label: dim_key(k),
+              waybills: integer(s["n"]),
+              sell: sell_amt,
+              buy: buy_amt,
               surcharges: Decimal.new(0),
-              margin: Decimal.sub(Decimal.new(0), buy)
+              margin: Decimal.sub(sell_amt, buy_amt)
             })
 
             acc + 1
@@ -136,7 +153,7 @@ defmodule TragarAi.Insight.Backfill do
           end
         end)
 
-      Logger.info("[insight.backfill] contractor (from charges) rollups upserted: #{count}")
+      Logger.info("[insight.backfill] contractor (charges + sell) rollups upserted: #{count}")
       {:ok, count}
     end
   end
