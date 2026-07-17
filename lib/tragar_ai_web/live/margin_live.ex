@@ -218,8 +218,8 @@ defmodule TragarAiWeb.MarginLive do
   defp bar(v, max) when max > 0, do: Float.round(abs(v) / max * 100, 1)
   defp bar(_v, _max), do: 0.0
 
-  defp grain_btn(active, g) do
-    ["btn btn-sm", (active == g && "btn-primary") || "btn-ghost"]
+  defp tab_cls(active, g) do
+    ["tab text-sm font-medium", (active == g && "tab-active") || ""]
   end
 
   @impl true
@@ -231,13 +231,26 @@ defmodule TragarAiWeb.MarginLive do
         Sell vs contractor buy; margin = sell − buy. Drill down by dimension.
       </p>
 
-      <div class="mb-4 flex flex-wrap gap-2">
-        <.link patch={~p"/margin?grain=enterprise"} class={grain_btn(@grain, "enterprise")}>
+      <div class="mb-4 text-xs opacity-60">Drill down by</div>
+      <div role="tablist" class="tabs tabs-lg tabs-boxed mb-5 w-fit bg-base-200">
+        <.link
+          patch={~p"/margin?grain=enterprise"}
+          role="tab"
+          class={tab_cls(@grain, "enterprise")}
+        >
           Enterprise
         </.link>
-        <.link patch={~p"/margin?grain=client"} class={grain_btn(@grain, "client")}>Client</.link>
-        <.link patch={~p"/margin?grain=lane"} class={grain_btn(@grain, "lane")}>Lane</.link>
-        <.link patch={~p"/margin?grain=contractor"} class={grain_btn(@grain, "contractor")}>
+        <.link patch={~p"/margin?grain=client"} role="tab" class={tab_cls(@grain, "client")}>
+          Client
+        </.link>
+        <.link patch={~p"/margin?grain=lane"} role="tab" class={tab_cls(@grain, "lane")}>
+          Lane
+        </.link>
+        <.link
+          patch={~p"/margin?grain=contractor"}
+          role="tab"
+          class={tab_cls(@grain, "contractor")}
+        >
           Contractor
         </.link>
       </div>
