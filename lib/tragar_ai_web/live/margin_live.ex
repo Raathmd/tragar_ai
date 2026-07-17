@@ -8,6 +8,7 @@ defmodule TragarAiWeb.MarginLive do
 
   import Ecto.Query
 
+  alias TragarAi.Insight.Drill
   alias TragarAi.Insight.Predict
   alias TragarAi.Insight.Rollup
   alias TragarAi.Repo
@@ -20,6 +21,7 @@ defmodule TragarAiWeb.MarginLive do
     {:ok,
      socket
      |> assign(:active, :margin)
+     |> assign(:drill, nil)
      |> assign(:ai_answer, "")
      |> assign(:ai_running, false)
      |> assign(:ai_prompt, "")}
@@ -35,7 +37,8 @@ defmodule TragarAiWeb.MarginLive do
      socket
      |> assign(:year, year)
      |> assign(:compare, compare)
-     |> load(grain, year, compare)}
+     |> load(grain, year, compare)
+     |> assign(:drill, nil)}
   end
 
   defp parse_compare(nil), do: nil
@@ -71,12 +74,94 @@ defmodule TragarAiWeb.MarginLive do
     {:noreply, start_ai(socket, month_prompt(row))}
   end
 
+  # ── drill-down: dimension → month → day → waybill ──────────────────────────
+  # Months come from the warehouse (synchronous); days & waybills are live reads
+  # of the FreightWare replica, run in a task so the LiveView stays responsive.
+  def handle_event("drill_dim", %{"dim" => dim}, socket) do
+    drill =
+      case socket.assigns.drill do
+        %{dim: ^dim, level: :months} ->
+          nil
+
+        _ ->
+          %{
+            dim: dim,
+            level: :months,
+            month: nil,
+            day: nil,
+            loading: false,
+            error: nil,
+            token: nil,
+            rows: Drill.months(socket.assigns.grain, dim, socket.assigns.year)
+          }
+      end
+
+    {:noreply, assign(socket, :drill, drill)}
+  end
+
+  def handle_event("drill_month", %{"v" => iso}, socket) do
+    month = Date.from_iso8601!(iso)
+    grain = socket.assigns.grain
+    # Enterprise has no dimension row to open from; its dim_key is "all".
+    dim =
+      case socket.assigns.drill do
+        %{dim: d} -> d
+        _ -> "all"
+      end
+
+    base = %{dim: dim, level: :days, month: month, day: nil}
+    {:noreply, start_drill_load(socket, base, fn -> Drill.days(grain, dim, month) end)}
+  end
+
+  def handle_event("drill_day", %{"v" => iso}, socket) do
+    drill = socket.assigns.drill
+    day = Date.from_iso8601!(iso)
+    grain = socket.assigns.grain
+    base = %{drill | level: :waybills, day: day}
+    {:noreply, start_drill_load(socket, base, fn -> Drill.waybills(grain, drill.dim, day) end)}
+  end
+
+  def handle_event("drill_close", _params, socket), do: {:noreply, assign(socket, :drill, nil)}
+
+  defp start_drill_load(socket, base, fun) do
+    token = make_ref()
+    lv = self()
+
+    Task.Supervisor.start_child(TragarAi.TaskSupervisor, fn ->
+      send(lv, {:drill_result, token, fun.()})
+    end)
+
+    assign(socket, :drill, Map.merge(base, %{loading: true, rows: [], error: nil, token: token}))
+  end
+
   @impl true
   def handle_info({:ai_chunk, chunk}, socket) do
     {:noreply, assign(socket, :ai_answer, socket.assigns.ai_answer <> chunk)}
   end
 
   def handle_info(:ai_done, socket), do: {:noreply, assign(socket, :ai_running, false)}
+
+  # Apply a live drill result only if it's for the drill still on screen (the user
+  # may have navigated on/closed while the FreightWare query was in flight).
+  def handle_info({:drill_result, token, result}, socket) do
+    case socket.assigns.drill do
+      %{token: ^token} = drill ->
+        drill =
+          case result do
+            {:ok, rows} -> %{drill | loading: false, rows: rows, error: nil}
+            {:error, reason} -> %{drill | loading: false, rows: [], error: drill_error(reason)}
+          end
+
+        {:noreply, assign(socket, :drill, drill)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  defp drill_error(:not_select), do: "query refused"
+  defp drill_error(:timeout), do: "timed out"
+  defp drill_error(reason), do: inspect(reason)
 
   # Streams an explanation from the in-app model (Claude on the Tragar account, or
   # the local model) grounded in the current view's numbers. The answer renders in
@@ -496,6 +581,104 @@ defmodule TragarAiWeb.MarginLive do
     ["btn btn-xs", (active == c && "btn-primary") || "btn-ghost"]
   end
 
+  # ── drill-down view helpers ──────────────────────────────────────────────────
+  defp drill_dim_open?(%{dim: dim}, dim), do: true
+  defp drill_dim_open?(_, _), do: false
+
+  defp drill_month_open?(%{month: %Date{} = mo}, %Date{} = period),
+    do: Date.compare(mo, period) == :eq
+
+  defp drill_month_open?(_, _), do: false
+
+  defp drill_caret(%{dim: dim}, dim), do: "▾"
+  defp drill_caret(_, _), do: "▸"
+
+  defp drill_col(:months), do: "Month"
+  defp drill_col(:days), do: "Day"
+  defp drill_col(:waybills), do: "Waybill"
+
+  # The expandable panel shared by the dimension table and the enterprise month
+  # table: a breadcrumb of the drill path plus the current level's rows.
+  attr :drill, :map, required: true
+  attr :grain, :string, required: true
+
+  defp drill_panel(assigns) do
+    ~H"""
+    <div class="p-3">
+      <div class="mb-2 flex flex-wrap items-center gap-1 text-xs">
+        <button :if={@grain == "enterprise"} phx-click="drill_close" class="link link-hover">
+          All months
+        </button>
+        <button
+          :if={@grain != "enterprise"}
+          phx-click="drill_dim"
+          phx-value-dim={@drill.dim}
+          class="link link-hover font-medium"
+        >
+          {@drill.dim}
+        </button>
+        <span :if={@drill.month} class="opacity-40">›</span>
+        <button
+          :if={@drill.month && @drill.level == :waybills}
+          phx-click="drill_month"
+          phx-value-v={Date.to_iso8601(@drill.month)}
+          class="link link-hover"
+        >
+          {Calendar.strftime(@drill.month, "%b %Y")}
+        </button>
+        <span :if={@drill.month && @drill.level == :days} class="font-medium">
+          {Calendar.strftime(@drill.month, "%b %Y")}
+        </span>
+        <span :if={@drill.day} class="opacity-40">›</span>
+        <span :if={@drill.day} class="font-medium">{Calendar.strftime(@drill.day, "%d %b %Y")}</span>
+        <button phx-click="drill_close" class="btn btn-ghost btn-xs ml-auto">Close</button>
+      </div>
+
+      <div :if={@drill.loading} class="py-2 text-xs opacity-60">Loading from FreightWare…</div>
+      <div :if={@drill.error} class="py-2 text-xs text-error">Couldn't load: {@drill.error}</div>
+
+      <table :if={!@drill.loading && !@drill.error} class="table table-xs w-full">
+        <thead>
+          <tr>
+            <th>{drill_col(@drill.level)}</th>
+            <th class="text-right">Waybills</th>
+            <th class="text-right">Sell</th>
+            <th class="text-right">Buy</th>
+            <th class="text-right">Margin</th>
+            <th class="text-right">Margin %</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={row <- @drill.rows}
+            class={@grain != "contractor" && row.margin < 0 && "text-error"}
+          >
+            <td class="whitespace-nowrap">
+              <button
+                :if={row.next}
+                phx-click={row.next.ev}
+                phx-value-v={row.next.v}
+                class="link link-hover"
+              >
+                {row.label}
+              </button>
+              <span :if={!row.next} class="font-mono text-xs">{row.label}</span>
+            </td>
+            <td class="text-right">{row.n}</td>
+            <td class="text-right">{money(row.sell)}</td>
+            <td class="text-right">{money(row.buy)}</td>
+            <td class="text-right">{money(row.margin)}</td>
+            <td class="text-right">{row.margin_pct}%</td>
+          </tr>
+          <tr :if={@drill.rows == []}>
+            <td colspan="6" class="text-xs opacity-60">No rows.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -668,6 +851,9 @@ defmodule TragarAiWeb.MarginLive do
       </p>
 
       <div :if={@grain != "enterprise"} class="overflow-x-auto">
+        <div class="mb-2 text-xs opacity-60">
+          Click a {@grain} to drill Year → Month → Day → Waybill (day & waybill read live from FreightWare).
+        </div>
         <table class="table table-sm w-full">
           <thead>
             <tr>
@@ -682,31 +868,47 @@ defmodule TragarAiWeb.MarginLive do
             </tr>
           </thead>
           <tbody>
-            <tr :for={d <- @ranked}>
-              <td class="max-w-xs truncate">{d.dim}</td>
-              <td class="text-right">{d.waybills}</td>
-              <td class="text-right">{money(d.sell)}</td>
-              <td class="text-right">{money(d.buy)}</td>
-              <td class="text-right">{money(d.margin)}</td>
-              <td class="text-right">{d.margin_pct}%</td>
-              <td>
-                <div
-                  class={"h-2 rounded #{bar_color(d, @grain)}"}
-                  style={"width: #{bar(bar_value(d, @grain), @max_val)}%"}
-                >
-                </div>
-              </td>
-              <td>
-                <button
-                  phx-click="explain_row"
-                  phx-value-dim={d.dim}
-                  class="btn btn-ghost btn-xs"
-                  disabled={@ai_running}
-                >
-                  Explain
-                </button>
-              </td>
-            </tr>
+            <%= for d <- @ranked do %>
+              <tr class={drill_dim_open?(@drill, d.dim) && "bg-base-200"}>
+                <td class="max-w-xs truncate">
+                  <button
+                    phx-click="drill_dim"
+                    phx-value-dim={d.dim}
+                    class="link link-hover flex items-center gap-1 text-left"
+                  >
+                    <span class="opacity-50">{drill_caret(@drill, d.dim)}</span>
+                    <span class="truncate">{d.dim}</span>
+                  </button>
+                </td>
+                <td class="text-right">{d.waybills}</td>
+                <td class="text-right">{money(d.sell)}</td>
+                <td class="text-right">{money(d.buy)}</td>
+                <td class="text-right">{money(d.margin)}</td>
+                <td class="text-right">{d.margin_pct}%</td>
+                <td>
+                  <div
+                    class={"h-2 rounded #{bar_color(d, @grain)}"}
+                    style={"width: #{bar(bar_value(d, @grain), @max_val)}%"}
+                  >
+                  </div>
+                </td>
+                <td>
+                  <button
+                    phx-click="explain_row"
+                    phx-value-dim={d.dim}
+                    class="btn btn-ghost btn-xs"
+                    disabled={@ai_running}
+                  >
+                    Explain
+                  </button>
+                </td>
+              </tr>
+              <tr :if={drill_dim_open?(@drill, d.dim)}>
+                <td colspan="8" class="bg-base-200/40 p-0">
+                  <.drill_panel drill={@drill} grain={@grain} />
+                </td>
+              </tr>
+            <% end %>
           </tbody>
         </table>
       </div>
@@ -726,31 +928,46 @@ defmodule TragarAiWeb.MarginLive do
             </tr>
           </thead>
           <tbody>
-            <tr :for={r <- @rows}>
-              <td class="whitespace-nowrap font-mono text-xs">{month_label(r.period_month)}</td>
-              <td class="text-right">{r.waybills}</td>
-              <td class="text-right">{money(r.sell)}</td>
-              <td class="text-right">{money(r.buy)}</td>
-              <td class="text-right">{money(r.margin)}</td>
-              <td class="text-right">{pct(to_f(r.margin), to_f(r.sell))}%</td>
-              <td>
-                <div
-                  class="h-2 rounded bg-primary"
-                  style={"width: #{bar(to_f(r.margin), @max_val)}%"}
-                >
-                </div>
-              </td>
-              <td>
-                <button
-                  phx-click="explain_month"
-                  phx-value-month={month_label(r.period_month)}
-                  class="btn btn-ghost btn-xs"
-                  disabled={@ai_running}
-                >
-                  Explain
-                </button>
-              </td>
-            </tr>
+            <%= for r <- @rows do %>
+              <tr class={drill_month_open?(@drill, r.period_month) && "bg-base-200"}>
+                <td class="whitespace-nowrap font-mono text-xs">
+                  <button
+                    phx-click="drill_month"
+                    phx-value-v={Date.to_iso8601(r.period_month)}
+                    class="link link-hover"
+                  >
+                    {month_label(r.period_month)}
+                  </button>
+                </td>
+                <td class="text-right">{r.waybills}</td>
+                <td class="text-right">{money(r.sell)}</td>
+                <td class="text-right">{money(r.buy)}</td>
+                <td class="text-right">{money(r.margin)}</td>
+                <td class="text-right">{pct(to_f(r.margin), to_f(r.sell))}%</td>
+                <td>
+                  <div
+                    class="h-2 rounded bg-primary"
+                    style={"width: #{bar(to_f(r.margin), @max_val)}%"}
+                  >
+                  </div>
+                </td>
+                <td>
+                  <button
+                    phx-click="explain_month"
+                    phx-value-month={month_label(r.period_month)}
+                    class="btn btn-ghost btn-xs"
+                    disabled={@ai_running}
+                  >
+                    Explain
+                  </button>
+                </td>
+              </tr>
+              <tr :if={drill_month_open?(@drill, r.period_month)}>
+                <td colspan="8" class="bg-base-200/40 p-0">
+                  <.drill_panel drill={@drill} grain={@grain} />
+                </td>
+              </tr>
+            <% end %>
           </tbody>
         </table>
       </div>
