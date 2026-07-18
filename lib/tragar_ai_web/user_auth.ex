@@ -29,7 +29,7 @@ defmodule TragarAiWeb.UserAuth do
       user.must_reset ->
         {:halt, redirect(socket, to: "/reset-password")}
 
-      Accounts.can?(user, page_key) ->
+      Accounts.can_view?(user, page_key) ->
         {:cont, socket}
 
       true ->

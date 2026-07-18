@@ -29,7 +29,7 @@ defmodule TragarAiWeb.InspectLive do
     # re-check here for defence in depth before any query can run.
     {:ok,
      socket
-     |> assign(:authorized, Accounts.can?(socket.assigns[:current_user], :inspect))
+     |> assign(:authorized, Accounts.can_view?(socket.assigns[:current_user], :inspect))
      |> assign(:catalog, Catalog.load())
      |> assign(:sql, "")
      |> assign(:current, nil)

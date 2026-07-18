@@ -114,11 +114,11 @@ defmodule TragarAi.Accounts do
 
   def permitted_pages(_), do: []
 
-  @doc "May this user view `page_key`?"
-  def can?(%User{} = user, page_key),
+  @doc "May this user view `page_key`? (named `can_view?` to avoid the Ash.Domain `can?`.)"
+  def can_view?(%User{} = user, page_key),
     do: admin?(user) or to_string(page_key) in permitted_pages(user)
 
-  def can?(_, _), do: false
+  def can_view?(_, _), do: false
 
   @doc "First page the user may land on after login (their path), or \"/login\" if none."
   def landing_path(%User{} = user) do

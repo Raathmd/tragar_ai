@@ -774,7 +774,7 @@ defmodule TragarAiWeb.MarginLive do
         <div class="flex items-center gap-2 text-xs">
           <span class="opacity-60">{@current_user.email}</span>
           <.link
-            :if={TragarAi.Accounts.can?(@current_user, :margin_users)}
+            :if={TragarAi.Accounts.can_view?(@current_user, :margin_users)}
             navigate={~p"/margin/users"}
             class="btn btn-ghost btn-xs"
           >

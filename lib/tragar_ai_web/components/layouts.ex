@@ -119,7 +119,7 @@ defmodule TragarAiWeb.Layouts do
 
   # A nav link shows only when the signed-in user may view that page (admins see
   # all). nil user → hidden. Keeps the CSD display's menu down to what it can open.
-  defp nav_can?(user, page_key), do: TragarAi.Accounts.can?(user, page_key)
+  defp nav_can?(user, page_key), do: TragarAi.Accounts.can_view?(user, page_key)
 
   # Admin (AshAdmin) is mounted only under `:dev_routes`; mirror that gate so the
   # menu link tracks the actual route rather than dangling in production.
