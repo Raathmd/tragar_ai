@@ -66,6 +66,18 @@ defmodule TragarAiWeb.MarginUsersLive do
     end
   end
 
+  def handle_event("reset_2fa", %{"id" => id}, socket) do
+    with user when not is_nil(user) <- Enum.find(socket.assigns.users, &(&1.id == id)),
+         {:ok, _u} <- Accounts.reset_totp(user) do
+      {:noreply,
+       socket
+       |> load_users()
+       |> put_flash(:info, "2FA reset for #{user.email}; they'll re-enroll on next login.")}
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Couldn't reset 2FA.")}
+    end
+  end
+
   def handle_event("dismiss_issued", _params, socket),
     do: {:noreply, assign(socket, :issued, nil)}
 
@@ -138,10 +150,22 @@ defmodule TragarAiWeb.MarginUsersLive do
                 {u.type}
               </span>
             </td>
-            <td class="text-xs opacity-70">{(u.must_reset && "reset pending") || "active"}</td>
+            <td class="text-xs opacity-70">
+              {(u.must_reset && "reset pending") || "active"}
+              · {(u.totp_confirmed_at && "2FA on") || "2FA off"}
+            </td>
             <td class="text-right">
               <button phx-click="reissue" phx-value-id={u.id} class="btn btn-ghost btn-xs">
                 Reset
+              </button>
+              <button
+                :if={u.totp_confirmed_at}
+                phx-click="reset_2fa"
+                phx-value-id={u.id}
+                data-confirm={"Reset 2FA for #{u.email}?"}
+                class="btn btn-ghost btn-xs"
+              >
+                Reset 2FA
               </button>
               <button
                 :if={u.id != @current_user.id}

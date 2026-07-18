@@ -41,6 +41,19 @@ defmodule TragarAiWeb.Router do
     post "/login", SessionController, :create
     get "/logout", SessionController, :delete
 
+    # Second factor (TOTP). The password step leaves :pending_user_id; these
+    # promote it to a full session once the code (or a backup code) checks out.
+    get "/mfa", MfaController, :index
+    post "/mfa/setup", MfaController, :confirm_setup
+    post "/mfa/verify", MfaController, :verify
+    post "/mfa/backup-codes", MfaController, :ack_backup_codes
+
+    live_session :margin_mfa, on_mount: [{TragarAiWeb.UserAuth, :require_pending}] do
+      live "/mfa/setup", MfaSetupLive
+      live "/mfa/verify", MfaVerifyLive
+      live "/mfa/backup-codes", MfaBackupCodesLive
+    end
+
     # First-login / self-service password reset (needs a session, reset pending OK).
     live_session :margin_reset, on_mount: [{TragarAiWeb.UserAuth, :require_reset}] do
       live "/reset-password", ResetPasswordLive

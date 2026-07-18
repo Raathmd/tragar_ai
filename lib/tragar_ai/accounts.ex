@@ -11,6 +11,7 @@ defmodule TragarAi.Accounts do
   require Ash.Query
 
   alias TragarAi.Accounts.Password
+  alias TragarAi.Accounts.Totp
   alias TragarAi.Accounts.User
 
   resources do
@@ -20,6 +21,10 @@ defmodule TragarAi.Accounts do
       define :set_password, action: :set_password
       define :reissue, action: :reissue_password
       define :delete_user, action: :destroy
+      define :apply_totp_secret, action: :begin_totp
+      define :store_backup_codes, action: :confirm_totp
+      define :store_remaining_backup, action: :consume_backup_code
+      define :clear_totp, action: :reset_totp
     end
   end
 
@@ -88,6 +93,60 @@ defmodule TragarAi.Accounts do
       end
     end
   end
+
+  # --- TOTP second factor -------------------------------------------------
+
+  @doc "Whether the user has completed TOTP enrollment (2FA active)."
+  def totp_enabled?(%User{totp_confirmed_at: nil}), do: false
+  def totp_enabled?(%User{}), do: true
+  def totp_enabled?(_), do: false
+
+  @doc """
+  Ensure the user has a (possibly unconfirmed) TOTP secret and return the user.
+  Reuses an existing unconfirmed secret so reloading the enrollment page keeps
+  the same QR; a fully-enrolled user gets a fresh secret (re-enrollment).
+  """
+  def begin_totp_enrollment(%User{totp_secret: secret, totp_confirmed_at: nil} = user)
+      when is_binary(secret),
+      do: {:ok, user}
+
+  def begin_totp_enrollment(%User{} = user),
+    do: apply_totp_secret(user, %{secret: Totp.new_secret()})
+
+  @doc "Verify a submitted TOTP `code` against the user's secret."
+  def verify_totp(%User{totp_secret: secret}, code), do: Totp.valid_code?(secret, code)
+  def verify_totp(_user, _code), do: false
+
+  @doc """
+  Confirm enrollment: generate one-time backup codes, persist their hashes, and
+  mark 2FA active. Returns `{:ok, user, plaintext_codes}` (show the plaintext
+  once).
+  """
+  def confirm_totp(%User{} = user) do
+    {plaintext, hashed} = Totp.generate_backup_codes()
+
+    case store_backup_codes(user, %{backup_codes: hashed}) do
+      {:ok, user} -> {:ok, user, plaintext}
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  @doc "Consume a backup recovery code; `{:ok, user}` on success, `:error` otherwise."
+  def use_backup_code(%User{} = user, input) do
+    case Totp.consume_backup_code(user.backup_codes, input) do
+      {:ok, remaining} ->
+        case store_remaining_backup(user, %{remaining: remaining}) do
+          {:ok, user} -> {:ok, user}
+          _ -> :error
+        end
+
+      :error ->
+        :error
+    end
+  end
+
+  @doc "Admin: clear a user's 2FA so they re-enroll on next login."
+  def reset_totp(%User{} = user), do: clear_totp(user)
 
   def normalize_email(email), do: email |> to_string() |> String.trim() |> String.downcase()
 

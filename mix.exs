@@ -75,6 +75,10 @@ defmodule TragarAi.MixProject do
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
+      # Two-factor auth (TOTP) for the margin login — RFC 6238 codes + a QR to
+      # scan into an authenticator app.
+      {:nimble_totp, "~> 1.0"},
+      {:eqrcode, "~> 0.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       # Intelligence platform: numerical/stats compute (Nx on the pure Elixir

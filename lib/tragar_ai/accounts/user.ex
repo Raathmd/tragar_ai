@@ -28,6 +28,13 @@ defmodule TragarAi.Accounts.User do
     attribute :hashed_password, :string, allow_nil?: true, sensitive?: true
     attribute :must_reset, :boolean, allow_nil?: false, default: true
 
+    # TOTP second factor (see TragarAi.Accounts.Totp). `totp_secret` is a base32
+    # shared secret; `totp_confirmed_at` is non-nil once enrollment is complete
+    # (2FA active); `backup_codes` are PBKDF2 hashes of one-time recovery codes.
+    attribute :totp_secret, :string, allow_nil?: true, sensitive?: true
+    attribute :totp_confirmed_at, :utc_datetime_usec, allow_nil?: true
+    attribute :backup_codes, {:array, :string}, allow_nil?: false, default: [], sensitive?: true
+
     timestamps()
   end
 
@@ -59,6 +66,64 @@ defmodule TragarAi.Accounts.User do
       argument :password, :string, allow_nil?: false, sensitive?: true
       change HashPassword
       change set_attribute(:must_reset, true)
+    end
+
+    # Begin (or restart) TOTP enrollment: store a fresh, unconfirmed secret and
+    # clear any prior 2FA state.
+    update :begin_totp do
+      require_atomic? false
+      argument :secret, :string, allow_nil?: false, sensitive?: true
+
+      change fn changeset, _context ->
+        changeset
+        |> Ash.Changeset.force_change_attribute(
+          :totp_secret,
+          Ash.Changeset.get_argument(changeset, :secret)
+        )
+        |> Ash.Changeset.force_change_attribute(:totp_confirmed_at, nil)
+        |> Ash.Changeset.force_change_attribute(:backup_codes, [])
+      end
+    end
+
+    # Finish enrollment: store the hashed backup codes and mark 2FA active.
+    update :confirm_totp do
+      require_atomic? false
+      argument :backup_codes, {:array, :string}, allow_nil?: false, sensitive?: true
+
+      change fn changeset, _context ->
+        changeset
+        |> Ash.Changeset.force_change_attribute(
+          :backup_codes,
+          Ash.Changeset.get_argument(changeset, :backup_codes)
+        )
+        |> Ash.Changeset.force_change_attribute(:totp_confirmed_at, DateTime.utc_now())
+      end
+    end
+
+    # Persist the remaining backup codes after one is spent.
+    update :consume_backup_code do
+      require_atomic? false
+      argument :remaining, {:array, :string}, allow_nil?: false, sensitive?: true
+
+      change fn changeset, _context ->
+        Ash.Changeset.force_change_attribute(
+          changeset,
+          :backup_codes,
+          Ash.Changeset.get_argument(changeset, :remaining)
+        )
+      end
+    end
+
+    # Admin clears 2FA so the user re-enrolls on next login (lost-device path).
+    update :reset_totp do
+      require_atomic? false
+
+      change fn changeset, _context ->
+        changeset
+        |> Ash.Changeset.force_change_attribute(:totp_secret, nil)
+        |> Ash.Changeset.force_change_attribute(:totp_confirmed_at, nil)
+        |> Ash.Changeset.force_change_attribute(:backup_codes, [])
+      end
     end
   end
 end
