@@ -9,6 +9,8 @@ defmodule TragarAiWeb.UserAuth do
     * `:require_reset` — a signed-in user (reset pending or not); used by the
       reset page itself so it doesn't redirect to itself.
     * `:require_admin` — a signed-in, reset-complete admin; used by /margin/users.
+    * `:require_pending` — a password-verified login awaiting its second factor
+      (`:pending_user_id` set, not yet `:user_id`); used by the /mfa pages.
   """
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView
@@ -50,6 +52,13 @@ defmodule TragarAiWeb.UserAuth do
       true ->
         {:cont, socket}
     end
+  end
+
+  def on_mount(:require_pending, _params, session, socket) do
+    user = Accounts.fetch_user(session["pending_user_id"])
+    socket = assign(socket, :pending_user, user)
+
+    if user, do: {:cont, socket}, else: {:halt, redirect(socket, to: "/login")}
   end
 
   defp current_user(session), do: Accounts.fetch_user(session["user_id"])

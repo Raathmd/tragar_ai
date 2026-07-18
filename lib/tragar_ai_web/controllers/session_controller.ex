@@ -11,10 +11,14 @@ defmodule TragarAiWeb.SessionController do
   def create(conn, %{"email" => email, "password" => password}) do
     case Accounts.authenticate(email, password) do
       {:ok, user} ->
+        # Password checked — hold the login as "pending" and require the second
+        # factor. MfaController promotes it to a full session (:user_id) only
+        # once the TOTP (or a backup) code checks out.
         conn
-        |> put_session(:user_id, user.id)
         |> configure_session(renew: true)
-        |> redirect(to: (user.must_reset && "/reset-password") || "/margin")
+        |> delete_session(:user_id)
+        |> put_session(:pending_user_id, user.id)
+        |> redirect(to: "/mfa")
 
       :error ->
         conn
