@@ -13,21 +13,39 @@ defmodule TragarAiWeb.SupplierOpsLive do
   """
   use TragarAiWeb, :live_view
 
+  alias TragarAi.Freight
   alias TragarAi.Insight.SupplierRanking
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok,
-     socket
-     |> assign(:active, :supplier)
-     |> assign(:from_areas, SupplierRanking.from_areas())
-     |> assign(:to_areas, SupplierRanking.to_areas())
-     |> assign(:from, nil)
-     |> assign(:to, nil)
-     |> assign(:rows, nil)}
+    socket =
+      socket
+      |> assign(:active, :supplier)
+      |> assign(:from_areas, SupplierRanking.from_areas())
+      |> assign(:to_areas, SupplierRanking.to_areas())
+      |> assign(:from, nil)
+      |> assign(:to, nil)
+      |> assign(:rows, nil)
+      |> assign(:manifests, nil)
+      |> assign(:manifest_error, nil)
+
+    # The open-manifest feed is a live FreightWare API call — only on the
+    # connected mount, so the first (static) render isn't blocked on it.
+    {:ok, if(connected?(socket), do: load_manifests(socket), else: socket)}
+  end
+
+  defp load_manifests(socket) do
+    case Freight.open_delivery_manifests() do
+      {:ok, manifests} -> assign(socket, manifests: manifests, manifest_error: nil)
+      {:error, reason} -> assign(socket, manifests: [], manifest_error: inspect(reason))
+    end
   end
 
   @impl true
+  def handle_event("refresh_manifests", _params, socket) do
+    {:noreply, load_manifests(socket)}
+  end
+
   def handle_event("rank", %{"from" => from, "to" => to}, socket)
       when from != "" and to != "" do
     {:noreply,
@@ -54,6 +72,42 @@ defmodule TragarAiWeb.SupplierOpsLive do
           (last 12 months). Live rate quotes and open-manifest auto-list are coming next.
         </p>
       </header>
+
+      <section class="rounded-lg border border-base-300">
+        <div class="flex items-center justify-between border-b border-base-300 px-4 py-2">
+          <h2 class="text-sm font-medium">Open delivery manifests</h2>
+          <button phx-click="refresh_manifests" class="btn btn-ghost btn-xs">Refresh</button>
+        </div>
+
+        <p :if={is_nil(@manifests) and is_nil(@manifest_error)} class="p-4 text-sm opacity-70">
+          Loading from FreightWare…
+        </p>
+        <p :if={@manifest_error} class="p-4 text-sm text-error">
+          Couldn't load open manifests: {@manifest_error}
+        </p>
+        <p :if={@manifests == []} class="p-4 text-sm opacity-70">No open delivery manifests.</p>
+
+        <table :if={@manifests not in [nil, []]} class="table table-sm w-full">
+          <thead>
+            <tr>
+              <th>Manifest</th>
+              <th>Date</th>
+              <th>Branch</th>
+              <th>Status</th>
+              <th>Subcontractor</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={m <- @manifests}>
+              <td class="font-mono text-xs">{m["manifest_number"]}</td>
+              <td class="text-xs">{m["manifest_date"]}</td>
+              <td class="text-xs">{m["station_code"]}</td>
+              <td><span class="badge badge-sm badge-ghost">{m["status_code"]}</span></td>
+              <td class="text-xs">{m["subcontractor_reference"]}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
 
       <form
         phx-submit="rank"

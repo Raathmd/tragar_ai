@@ -353,6 +353,30 @@ defmodule TragarAi.Freight.Normalize do
   def rates(%{"esRates" => es}), do: es |> array("Rate") |> Enum.map(&rate/1)
   def rates(_), do: []
 
+  @doc """
+  Open delivery manifests — the `/multiManifest` "can be closed" list. Returns
+  `[%{owning_obj, manifest_number, manifest_date, station_code, status_code,
+  subcontractor_reference}]`. Casing is lenient (FreightWare varies).
+  """
+  def open_manifests(%{"esOpenManifests" => es}) do
+    (array(es, "openManifests") ++ array(es, "OpenManifests"))
+    |> Enum.map(&open_manifest/1)
+  end
+
+  def open_manifests(_), do: []
+
+  defp open_manifest(m) do
+    %{
+      "owning_obj" => m["owning_obj"] || m["owningObj"],
+      "manifest_number" => m["owning_number"] || m["owningNumber"],
+      "manifest_date" => m["manifestDate"] || m["manifest_date"],
+      "station_code" => m["stationCode"] || m["station_code"],
+      "status_code" => m["statusCode"] || m["status_code"],
+      "subcontractor_reference" =>
+        m["subcontractorReference"] || m["subcontractor_reference"]
+    }
+  end
+
   # ── Collections ───────────────────────────────────────────────────────────────
 
   @doc "Unauthorised collections → `[%{...}]` (FreightWare casing varies; be lenient)."
