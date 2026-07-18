@@ -119,21 +119,21 @@ defmodule TragarAiWeb.InspectLive do
           <p :if={@catalog == []} class="text-sm opacity-60">No catalog queries yet.</p>
 
           <div class="grid gap-2">
-            <div :for={q <- @catalog} class="rounded border p-2">
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-sm font-medium">{q.title}</span>
+            <div :for={q <- @catalog} class="min-w-0 rounded border p-2">
+              <div class="flex items-start justify-between gap-2">
+                <span class="min-w-0 break-words text-sm font-medium">{q.title}</span>
                 <button
                   type="button"
                   phx-click="run_catalog"
                   phx-value-id={q.id}
-                  class="btn btn-primary btn-xs"
+                  class="btn btn-primary btn-xs shrink-0"
                   disabled={@running}
                 >
                   Run
                 </button>
               </div>
               <p :if={q.description != ""} class="text-xs opacity-70">{q.description}</p>
-              <pre class="mt-1 overflow-auto rounded bg-base-200 p-2 text-xs">{q.sql}</pre>
+              <pre class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs">{q.sql}</pre>
             </div>
           </div>
         </div>
