@@ -68,6 +68,11 @@ defmodule TragarAiWeb.Router do
       live "/collections", CollectionsLive
     end
 
+    live_session :page_supplier_ops,
+      on_mount: [{TragarAiWeb.UserAuth, {:require_page, :supplier_ops}}] do
+      live "/supplier", SupplierOpsLive
+    end
+
     live_session :page_margin, on_mount: [{TragarAiWeb.UserAuth, {:require_page, :margin}}] do
       live "/margin", MarginLive
     end

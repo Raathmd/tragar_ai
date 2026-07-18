@@ -69,6 +69,13 @@ defmodule TragarAiWeb.Layouts do
         Collections
       </.link>
       <.link
+        :if={nav_can?(@current_user, :supplier_ops)}
+        navigate={~p"/supplier"}
+        class={["btn btn-sm", (@active == :supplier && "btn-primary") || "btn-ghost"]}
+      >
+        Supplier
+      </.link>
+      <.link
         :if={nav_can?(@current_user, :architecture)}
         navigate={~p"/architecture"}
         class={["btn btn-sm", (@active == :architecture && "btn-primary") || "btn-ghost"]}
