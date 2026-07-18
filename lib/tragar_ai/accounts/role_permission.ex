@@ -14,10 +14,6 @@ defmodule TragarAi.Accounts.RolePermission do
   postgres do
     table "role_permissions"
     repo TragarAi.Repo
-
-    references do
-      reference :role, on_delete: :delete
-    end
   end
 
   attributes do

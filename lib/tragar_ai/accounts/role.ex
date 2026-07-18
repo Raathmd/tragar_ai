@@ -46,6 +46,11 @@ defmodule TragarAi.Accounts.Role do
   end
 
   actions do
-    defaults [:read, :destroy, create: [:name, :description, :is_admin], update: [:name, :description, :is_admin]]
+    defaults [
+      :read,
+      :destroy,
+      create: [:name, :description, :is_admin],
+      update: [:name, :description, :is_admin]
+    ]
   end
 end

@@ -54,7 +54,8 @@ defmodule TragarAiWeb.Router do
     # --- App pages — each gated on its role permission (see Accounts.pages/0).
     # Admin role is a wildcard (sees all); csd → collections; operations →
     # supplier selection. Nothing here is public.
-    live_session :page_dashboard, on_mount: [{TragarAiWeb.UserAuth, {:require_page, :dashboard}}] do
+    live_session :page_dashboard,
+      on_mount: [{TragarAiWeb.UserAuth, {:require_page, :dashboard}}] do
       live "/", DashboardLive
     end
 

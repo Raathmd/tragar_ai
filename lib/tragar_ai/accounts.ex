@@ -115,7 +115,9 @@ defmodule TragarAi.Accounts do
   def permitted_pages(_), do: []
 
   @doc "May this user view `page_key`?"
-  def can?(%User{} = user, page_key), do: admin?(user) or to_string(page_key) in permitted_pages(user)
+  def can?(%User{} = user, page_key),
+    do: admin?(user) or to_string(page_key) in permitted_pages(user)
+
   def can?(_, _), do: false
 
   @doc "First page the user may land on after login (their path), or \"/login\" if none."
@@ -180,7 +182,8 @@ defmodule TragarAi.Accounts do
   end
 
   @doc "Toggle a user's second-factor requirement."
-  def set_mfa_required(%User{} = user, required?), do: update_mfa_required(user, %{mfa_required: required?})
+  def set_mfa_required(%User{} = user, required?),
+    do: update_mfa_required(user, %{mfa_required: required?})
 
   @doc "Verify email+password. Returns `{:ok, user}` or `:error` (constant-time-ish)."
   def authenticate(email, password) do

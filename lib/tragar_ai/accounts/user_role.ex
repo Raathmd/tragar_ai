@@ -12,11 +12,6 @@ defmodule TragarAi.Accounts.UserRole do
   postgres do
     table "user_roles"
     repo TragarAi.Repo
-
-    references do
-      reference :user, on_delete: :delete
-      reference :role, on_delete: :delete
-    end
   end
 
   attributes do
