@@ -372,8 +372,7 @@ defmodule TragarAi.Freight.Normalize do
       "manifest_date" => m["manifestDate"] || m["manifest_date"],
       "station_code" => m["stationCode"] || m["station_code"],
       "status_code" => m["statusCode"] || m["status_code"],
-      "subcontractor_reference" =>
-        m["subcontractorReference"] || m["subcontractor_reference"]
+      "subcontractor_reference" => m["subcontractorReference"] || m["subcontractor_reference"]
     }
   end
 
