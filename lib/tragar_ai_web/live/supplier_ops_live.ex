@@ -34,12 +34,42 @@ defmodule TragarAiWeb.SupplierOpsLive do
     {:ok, if(connected?(socket), do: load_manifests(socket), else: socket)}
   end
 
+  # FreightWare's "can be closed" list includes ancient never-closed manifests —
+  # noise for a current-ops board. Keep the last @recent_days, newest first.
+  @recent_days 30
+
   defp load_manifests(socket) do
     case Freight.open_delivery_manifests() do
-      {:ok, manifests} -> assign(socket, manifests: manifests, manifest_error: nil)
-      {:error, reason} -> assign(socket, manifests: [], manifest_error: inspect(reason))
+      {:ok, manifests} ->
+        assign(socket, manifests: recent_first(manifests), manifest_error: nil)
+
+      {:error, reason} ->
+        assign(socket, manifests: [], manifest_error: inspect(reason))
     end
   end
+
+  defp recent_first(manifests) do
+    today = Date.utc_today()
+    low = Date.add(today, -@recent_days)
+    high = Date.add(today, 2)
+
+    manifests
+    |> Enum.map(fn m -> {parse_date(m["manifest_date"]), m} end)
+    |> Enum.filter(fn {d, _} ->
+      d && Date.compare(d, low) != :lt and Date.compare(d, high) != :gt
+    end)
+    |> Enum.sort_by(fn {d, _} -> d end, {:desc, Date})
+    |> Enum.map(fn {_d, m} -> m end)
+  end
+
+  defp parse_date(s) when is_binary(s) do
+    case Date.from_iso8601(s) do
+      {:ok, d} -> d
+      _ -> nil
+    end
+  end
+
+  defp parse_date(_), do: nil
 
   @impl true
   def handle_event("refresh_manifests", _params, socket) do
@@ -75,7 +105,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
 
       <section class="rounded-lg border border-base-300">
         <div class="flex items-center justify-between border-b border-base-300 px-4 py-2">
-          <h2 class="text-sm font-medium">Open delivery manifests</h2>
+          <h2 class="text-sm font-medium">Open delivery manifests <span class="opacity-50">· last 30 days</span></h2>
           <button phx-click="refresh_manifests" class="btn btn-ghost btn-xs">Refresh</button>
         </div>
 
