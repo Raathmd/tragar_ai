@@ -151,8 +151,8 @@ defmodule TragarAiWeb.MarginUsersLive do
               </span>
             </td>
             <td class="text-xs opacity-70">
-              {(u.must_reset && "reset pending") || "active"}
-              · {(u.totp_confirmed_at && "2FA on") || "2FA off"}
+              {(u.must_reset && "reset pending") || "active"} · {(u.totp_confirmed_at && "2FA on") ||
+                "2FA off"}
             </td>
             <td class="text-right">
               <button phx-click="reissue" phx-value-id={u.id} class="btn btn-ghost btn-xs">
