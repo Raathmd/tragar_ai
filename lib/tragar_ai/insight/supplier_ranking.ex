@@ -66,7 +66,7 @@ defmodule TragarAi.Insight.SupplierRanking do
   defp with_cost_per_kg(row) do
     kg = to_float(row.total_kg)
     cost = to_float(row.total_cost)
-    cpk = if kg && kg > 0.0 and cost, do: cost / kg, else: nil
+    cpk = if (kg && kg > 0.0) and cost, do: cost / kg, else: nil
     Map.put(row, :cost_per_kg, cpk)
   end
 

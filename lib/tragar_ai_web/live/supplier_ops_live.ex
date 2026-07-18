@@ -55,7 +55,10 @@ defmodule TragarAiWeb.SupplierOpsLive do
         </p>
       </header>
 
-      <form phx-submit="rank" class="flex flex-wrap items-end gap-2 rounded-lg border border-base-300 p-4">
+      <form
+        phx-submit="rank"
+        class="flex flex-wrap items-end gap-2 rounded-lg border border-base-300 p-4"
+      >
         <div>
           <label class="mb-1 block text-xs opacity-60">Origin rate area</label>
           <select name="from" class="select select-bordered select-sm">
@@ -74,8 +77,10 @@ defmodule TragarAiWeb.SupplierOpsLive do
       </form>
 
       <p :if={@from_areas == []} class="rounded bg-warning/10 p-3 text-sm">
-        No supplier-cost data yet — run the <span class="font-medium">Rebuild supplier-cost warehouse</span>
-        job in <.link navigate={~p"/_inspect"} class="link">/_inspect</.link> first.
+        No supplier-cost data yet — run the
+        <span class="font-medium">Rebuild supplier-cost warehouse</span>
+        job in <.link navigate={~p"/_inspect"} class="link">/_inspect</.link>
+        first.
       </p>
 
       <section :if={@rows} class="rounded-lg border border-base-300">
