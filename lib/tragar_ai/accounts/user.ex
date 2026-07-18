@@ -28,6 +28,11 @@ defmodule TragarAi.Accounts.User do
     attribute :hashed_password, :string, allow_nil?: true, sensitive?: true
     attribute :must_reset, :boolean, allow_nil?: false, default: true
 
+    # When false, this account skips the TOTP second factor at login — used for
+    # the shared-display CSD account (a wall monitor can't do per-view TOTP).
+    # Defaults to true so every normal account keeps 2FA.
+    attribute :mfa_required, :boolean, allow_nil?: false, default: true
+
     # TOTP second factor (see TragarAi.Accounts.Totp). `totp_secret` is a base32
     # shared secret; `totp_confirmed_at` is non-nil once enrollment is complete
     # (2FA active); `backup_codes` are PBKDF2 hashes of one-time recovery codes.
@@ -42,8 +47,21 @@ defmodule TragarAi.Accounts.User do
     identity :unique_email, [:email]
   end
 
+  relationships do
+    many_to_many :roles, TragarAi.Accounts.Role do
+      through TragarAi.Accounts.UserRole
+      source_attribute_on_join_resource :user_id
+      destination_attribute_on_join_resource :role_id
+    end
+  end
+
   actions do
     defaults [:read, :destroy]
+
+    # Toggle the second-factor requirement (admin action; e.g. the CSD account).
+    update :set_mfa_required do
+      accept [:mfa_required]
+    end
 
     create :register do
       accept [:email, :type]

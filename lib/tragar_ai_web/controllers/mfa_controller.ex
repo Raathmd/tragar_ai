@@ -96,7 +96,7 @@ defmodule TragarAiWeb.MfaController do
     |> delete_session(:pending_user_id)
     |> put_session(:user_id, user.id)
     |> configure_session(renew: true)
-    |> redirect(to: (user.must_reset && "/reset-password") || "/margin")
+    |> redirect(to: (user.must_reset && "/reset-password") || "/")
   end
 
   defp pending_user(conn), do: Accounts.fetch_user(get_session(conn, :pending_user_id))

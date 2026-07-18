@@ -1,18 +1,25 @@
 defmodule TragarAi.Accounts do
   @moduledoc """
-  Accounts domain — the `User` records allowed into the margin dashboards, plus
-  the auth helpers the web layer calls (authenticate, create, re-issue). Admins
-  (`type == "admin"`) can register/remove other users. No email is sent yet, so
+  Accounts domain — the `User` records allowed into the app, their `Role`s, and
+  the auth helpers the web layer calls (authenticate, create, re-issue, plus the
+  role-based `can?/2` / `landing_path/1` gate). A user's roles decide which pages
+  they may view (see `pages/0`); the `admin` role is a wildcard. Users with the
+  `margin_users` page (i.e. admins) manage everyone else. No email is sent yet, so
   `create_user`/`reissue_password` return the generated temp password for the
   admin to relay; a mailer can be dropped in later without touching callers.
+
+  The legacy `User.type` string is retained for backwards-compatibility but no
+  longer gates anything — authorization is entirely role-based.
   """
   use Ash.Domain, otp_app: :tragar_ai
 
   require Ash.Query
 
   alias TragarAi.Accounts.Password
+  alias TragarAi.Accounts.Role
   alias TragarAi.Accounts.Totp
   alias TragarAi.Accounts.User
+  alias TragarAi.Accounts.UserRole
 
   resources do
     resource User do
@@ -25,12 +32,53 @@ defmodule TragarAi.Accounts do
       define :store_backup_codes, action: :confirm_totp
       define :store_remaining_backup, action: :consume_backup_code
       define :clear_totp, action: :reset_totp
+      define :update_mfa_required, action: :set_mfa_required
     end
+
+    resource Role do
+      define :list_roles, action: :read
+    end
+
+    resource UserRole do
+      define :create_user_role, action: :create
+      define :list_user_roles, action: :read
+    end
+
+    resource TragarAi.Accounts.RolePermission
   end
 
-  @doc "Load a user by id for session lookups; nil on anything unexpected."
+  # --- Page registry ------------------------------------------------------
+  #
+  # The single source of truth for gated LiveViews. `key` is what
+  # `RolePermission.page_key` and the router's `{:require_page, key}` hook use;
+  # `path` is where a permitted user lands. Order matters: `landing_path/1`
+  # returns the first page a user may see, so keep the everyday surfaces first.
+  @pages [
+    %{key: "dashboard", label: "Dashboard", path: "/"},
+    %{key: "console", label: "Assist console", path: "/console"},
+    %{key: "collections", label: "Collections", path: "/collections"},
+    %{key: "supplier_ops", label: "Supplier selection (ops)", path: "/supplier"},
+    %{key: "supplier_mgmt", label: "Supplier selection (management)", path: "/supplier/history"},
+    %{key: "margin", label: "Margin", path: "/margin"},
+    %{key: "margin_users", label: "Access admin", path: "/margin/users"},
+    %{key: "settings", label: "Settings", path: "/settings"},
+    %{key: "architecture", label: "Architecture", path: "/architecture"},
+    %{key: "inspect", label: "DB inspect", path: "/_inspect"}
+  ]
+
+  @doc "All gated pages as `%{key, label, path}` in landing-preference order."
+  def pages, do: @pages
+
+  @doc "The route a page_key maps to, or nil."
+  def page_path(key), do: Enum.find_value(@pages, fn p -> p.key == to_string(key) && p.path end)
+
+  @doc """
+  Load a user by id for session lookups, with roles + their permissions
+  preloaded (so `can?/2`, `admin?/1`, `landing_path/1` work). nil on anything
+  unexpected.
+  """
   def fetch_user(id) when is_binary(id) do
-    case Ash.get(User, id) do
+    case Ash.get(User, id, load: [roles: [:permissions]]) do
       {:ok, user} -> user
       _ -> nil
     end
@@ -39,6 +87,100 @@ defmodule TragarAi.Accounts do
   end
 
   def fetch_user(_), do: nil
+
+  # --- Authorization ------------------------------------------------------
+
+  @doc "Does the user hold a wildcard (admin) role? Requires roles preloaded."
+  def admin?(%User{roles: roles}) when is_list(roles), do: Enum.any?(roles, & &1.is_admin)
+  def admin?(_), do: false
+
+  @doc "The set of page_keys a user may view (admins see all). Requires roles preloaded."
+  def permitted_pages(%User{} = user) do
+    if admin?(user) do
+      Enum.map(@pages, & &1.key)
+    else
+      case user.roles do
+        roles when is_list(roles) ->
+          roles
+          |> Enum.flat_map(fn r -> if(is_list(r.permissions), do: r.permissions, else: []) end)
+          |> Enum.map(& &1.page_key)
+          |> Enum.uniq()
+
+        _ ->
+          []
+      end
+    end
+  end
+
+  def permitted_pages(_), do: []
+
+  @doc "May this user view `page_key`?"
+  def can?(%User{} = user, page_key), do: admin?(user) or to_string(page_key) in permitted_pages(user)
+  def can?(_, _), do: false
+
+  @doc "First page the user may land on after login (their path), or \"/login\" if none."
+  def landing_path(%User{} = user) do
+    allowed = permitted_pages(user)
+
+    Enum.find_value(@pages, "/login", fn p -> p.key in allowed && p.path end)
+  end
+
+  def landing_path(_), do: "/login"
+
+  @doc "Assign a role to a user (idempotent — a duplicate is treated as success)."
+  def assign_role(user_id, role_id) do
+    case create_user_role(%{user_id: user_id, role_id: role_id}) do
+      {:ok, ur} -> {:ok, ur}
+      # Unique (user_id, role_id) violation → already assigned; fine.
+      {:error, _} -> {:ok, :exists}
+    end
+  end
+
+  @doc "Remove a role from a user."
+  def unassign_role(user_id, role_id) do
+    UserRole
+    |> Ash.Query.filter(user_id == ^user_id and role_id == ^role_id)
+    |> Ash.read!()
+    |> Enum.each(&Ash.destroy!/1)
+
+    :ok
+  end
+
+  @doc "Set (replace) a user's roles to exactly `role_ids`."
+  def set_user_roles(user_id, role_ids) do
+    current =
+      UserRole
+      |> Ash.Query.filter(user_id == ^user_id)
+      |> Ash.read!()
+
+    keep = MapSet.new(role_ids)
+    have = MapSet.new(current, & &1.role_id)
+
+    # Drop the ones no longer wanted.
+    current
+    |> Enum.reject(&MapSet.member?(keep, &1.role_id))
+    |> Enum.each(&Ash.destroy!/1)
+
+    # Add the newly-wanted ones.
+    keep
+    |> Enum.reject(&MapSet.member?(have, &1))
+    |> Enum.each(&assign_role(user_id, &1))
+
+    :ok
+  end
+
+  @doc "The role ids currently assigned to a user (loads if needed)."
+  def role_ids(%User{roles: roles}) when is_list(roles), do: Enum.map(roles, & &1.id)
+
+  def role_ids(%User{id: id}) do
+    UserRole
+    |> Ash.Query.filter(user_id == ^id)
+    |> Ash.read!()
+    |> Enum.map(& &1.role_id)
+  end
+
+  @doc "Toggle a user's second-factor requirement."
+  def set_mfa_required(%User{} = user, required?), do: update_mfa_required(user, %{mfa_required: required?})
 
   @doc "Verify email+password. Returns `{:ok, user}` or `:error` (constant-time-ish)."
   def authenticate(email, password) do

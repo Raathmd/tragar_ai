@@ -298,7 +298,7 @@ defmodule TragarAiWeb.CollectionsLive do
 
     ~H"""
     <div class="p-4 lg:p-6 space-y-4 max-w-7xl mx-auto">
-      <Layouts.app_nav active={:collections} flash={@flash} />
+      <Layouts.app_nav active={:collections} flash={@flash} current_user={@current_user} />
 
       <div id="column-prefs" phx-hook=".ColumnPrefs" class="hidden"></div>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ColumnPrefs">

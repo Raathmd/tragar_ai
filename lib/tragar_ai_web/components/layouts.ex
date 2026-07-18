@@ -33,6 +33,10 @@ defmodule TragarAiWeb.Layouts do
 
   attr :flash, :map, default: %{}, doc: "flash from the LiveView, rendered above the nav"
 
+  attr :current_user, :map,
+    default: nil,
+    doc: "signed-in user (roles preloaded) — links show only for pages they may view"
+
   def app_nav(assigns) do
     assigns = assign(assigns, :fw_online, fw_online?())
 
@@ -44,30 +48,35 @@ defmodule TragarAiWeb.Layouts do
       </span>
       <span class="mx-1 h-5 w-px bg-base-300"></span>
       <.link
+        :if={nav_can?(@current_user, :dashboard)}
         navigate={~p"/"}
         class={["btn btn-sm", (@active == :dashboard && "btn-primary") || "btn-ghost"]}
       >
         Dashboard
       </.link>
       <.link
+        :if={nav_can?(@current_user, :console)}
         navigate={~p"/console"}
         class={["btn btn-sm", (@active == :console && "btn-primary") || "btn-ghost"]}
       >
         Console
       </.link>
       <.link
+        :if={nav_can?(@current_user, :collections)}
         navigate={~p"/collections"}
         class={["btn btn-sm", (@active == :collections && "btn-primary") || "btn-ghost"]}
       >
         Collections
       </.link>
       <.link
+        :if={nav_can?(@current_user, :architecture)}
         navigate={~p"/architecture"}
         class={["btn btn-sm", (@active == :architecture && "btn-primary") || "btn-ghost"]}
       >
         Architecture
       </.link>
       <.link
+        :if={nav_can?(@current_user, :settings)}
         navigate={~p"/settings"}
         class={["btn btn-sm", (@active == :settings && "btn-primary") || "btn-ghost"]}
       >
@@ -107,6 +116,10 @@ defmodule TragarAiWeb.Layouts do
     </nav>
     """
   end
+
+  # A nav link shows only when the signed-in user may view that page (admins see
+  # all). nil user → hidden. Keeps the CSD display's menu down to what it can open.
+  defp nav_can?(user, page_key), do: TragarAi.Accounts.can?(user, page_key)
 
   # Admin (AshAdmin) is mounted only under `:dev_routes`; mirror that gate so the
   # menu link tracks the actual route rather than dangling in production.

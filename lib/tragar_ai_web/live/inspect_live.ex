@@ -10,11 +10,13 @@ defmodule TragarAiWeb.InspectLive do
       never sees results, only writes the catalog file); you click one to run it;
     * a **free-text** box for your own ad-hoc SELECTs.
 
-  Read-only: the bridge refuses anything that isn't a single SELECT. Gated by
-  `:inspect_token` when configured — reach it at `/_inspect?token=…`.
+  Read-only: the bridge refuses anything that isn't a single SELECT. Admin-only
+  — gated at the route by the `:inspect` page permission (the old `?token=` gate
+  is retired; role membership is the gate now).
   """
   use TragarAiWeb, :live_view
 
+  alias TragarAi.Accounts
   alias TragarAi.Insight.Catalog
   alias TragarAi.Insight.Db
 
@@ -22,10 +24,12 @@ defmodule TragarAiWeb.InspectLive do
   @max_lines 2000
 
   @impl true
-  def mount(params, _session, socket) do
+  def mount(_params, _session, socket) do
+    # The route gate (require_page :inspect) already ensures only admins mount;
+    # re-check here for defence in depth before any query can run.
     {:ok,
      socket
-     |> assign(:authorized, authorized?(params))
+     |> assign(:authorized, Accounts.can?(socket.assigns[:current_user], :inspect))
      |> assign(:catalog, Catalog.load())
      |> assign(:sql, "")
      |> assign(:current, nil)
@@ -98,14 +102,6 @@ defmodule TragarAiWeb.InspectLive do
 
       {:error, :not_select} ->
         assign(socket, :status, "refused — read-only SELECT queries only")
-    end
-  end
-
-  defp authorized?(params) do
-    case Application.get_env(:tragar_ai, :inspect_token) do
-      nil -> true
-      "" -> true
-      token -> params["token"] == token
     end
   end
 
