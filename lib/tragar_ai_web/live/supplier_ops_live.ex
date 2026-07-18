@@ -56,7 +56,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
     manifests
     |> Enum.map(fn m -> {parse_date(m["manifest_date"]), m} end)
     |> Enum.filter(fn {d, _} ->
-      d && Date.compare(d, low) != :lt and Date.compare(d, high) != :gt
+      (d && Date.compare(d, low) != :lt) and Date.compare(d, high) != :gt
     end)
     |> Enum.sort_by(fn {d, _} -> d end, {:desc, Date})
     |> Enum.map(fn {_d, m} -> m end)
@@ -105,7 +105,9 @@ defmodule TragarAiWeb.SupplierOpsLive do
 
       <section class="rounded-lg border border-base-300">
         <div class="flex items-center justify-between border-b border-base-300 px-4 py-2">
-          <h2 class="text-sm font-medium">Open delivery manifests <span class="opacity-50">· last 30 days</span></h2>
+          <h2 class="text-sm font-medium">
+            Open delivery manifests <span class="opacity-50">· last 30 days</span>
+          </h2>
           <button phx-click="refresh_manifests" class="btn btn-ghost btn-xs">Refresh</button>
         </div>
 
