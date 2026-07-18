@@ -235,6 +235,19 @@ defmodule TragarAi.Freight do
 
   # ── Base data ─────────────────────────────────────────────────────────────────
 
+  @doc """
+  Open delivery manifests for the current branch — the FreightWare
+  `GET {base}/FreightWare/V2/manifests/deliveryManifests/multiManifest`
+  "manifests that can be closed" list. The live feed for the supplier ops board:
+  each carries its readable `status_code` and allocated `subcontractor_reference`,
+  so no DB status_obj resolution is needed. Returns `{:ok, [%{...}]}`.
+  """
+  def open_delivery_manifests do
+    with {:ok, resp} <- Client.get("/manifests/deliveryManifests/multiManifest") do
+      {:ok, Normalize.open_manifests(resp)}
+    end
+  end
+
   def service_types(valid_for_type \\ nil) do
     filters = if valid_for_type, do: [{"validForType", valid_for_type}], else: []
 
