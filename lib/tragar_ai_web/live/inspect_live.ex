@@ -32,6 +32,7 @@ defmodule TragarAiWeb.InspectLive do
      |> assign(:log, [])
      |> assign(:running, false)
      |> assign(:status, nil)
+     |> assign(:job_status, nil)
      |> assign(:ref, nil)}
   end
 
@@ -49,6 +50,18 @@ defmodule TragarAiWeb.InspectLive do
 
   def handle_event("run", %{"sql" => sql}, %{assigns: %{authorized: true}} = socket) do
     {:noreply, start_query(socket, sql, "ad-hoc")}
+  end
+
+  # Enqueue the supplier-cost warehouse rebuild as a background Oban job — it runs
+  # in-app (never in a user request or an operator's session); we only enqueue here.
+  def handle_event("rebuild_supplier_costs", _params, %{assigns: %{authorized: true}} = socket) do
+    status =
+      case TragarAi.Insight.SupplierCostWorker.new(%{}) |> Oban.insert() do
+        {:ok, _job} -> "supplier-cost rebuild enqueued — runs in the background (see logs)"
+        {:error, reason} -> "could not enqueue — #{inspect(reason)}"
+      end
+
+    {:noreply, assign(socket, :job_status, status)}
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
@@ -108,6 +121,23 @@ defmodule TragarAiWeb.InspectLive do
       <div :if={not @authorized} class="text-sm opacity-70">Not authorized.</div>
 
       <div :if={@authorized}>
+        <div class="mb-4 rounded border border-dashed p-2">
+          <div class="flex items-center gap-2">
+            <h2 class="text-sm font-medium">Warehouse jobs</h2>
+            <button
+              type="button"
+              phx-click="rebuild_supplier_costs"
+              class="btn btn-secondary btn-xs"
+            >
+              Rebuild supplier-cost warehouse
+            </button>
+            <span :if={@job_status} class="text-xs opacity-70">{@job_status}</span>
+          </div>
+          <p class="mt-1 text-xs opacity-60">
+            Runs the ETL in the background via Oban — the aggregation stays in-app.
+          </p>
+        </div>
+
         <div class="mb-4">
           <div class="mb-1 flex items-center justify-between">
             <h2 class="text-sm font-medium">Catalog</h2>
