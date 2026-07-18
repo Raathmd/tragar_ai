@@ -26,17 +26,9 @@ defmodule TragarAiWeb.Router do
   scope "/", TragarAiWeb do
     pipe_through :browser
 
-    # Integration monitor — the landing page (internal app).
-    live "/", DashboardLive
-
-    # Phase 1 — the support-assist agent console.
-    live "/console", ConsoleLive
-
-    # Staff view of FreightWare collections (unauthorised + outstanding).
-    live "/collections", CollectionsLive
-
-    # Sign-in for the margin dashboards (not linked in the menu). Login posts to
-    # the controller so it can set the session cookie; gating is in UserAuth.
+    # --- Public auth entry (no page gate) ---------------------------------
+    # Login posts to the controller so it can set the session cookie; gating is
+    # in UserAuth. mfa_required=false accounts skip the second factor.
     live "/login", LoginLive
     post "/login", SessionController, :create
     get "/logout", SessionController, :delete
@@ -59,27 +51,47 @@ defmodule TragarAiWeb.Router do
       live "/reset-password", ResetPasswordLive
     end
 
-    # The margin dashboard — requires a signed-in, reset-complete user.
-    live_session :margin_authenticated,
-      on_mount: [{TragarAiWeb.UserAuth, :require_authenticated}] do
+    # --- App pages — each gated on its role permission (see Accounts.pages/0).
+    # Admin role is a wildcard (sees all); csd → collections; operations →
+    # supplier selection. Nothing here is public.
+    live_session :page_dashboard,
+      on_mount: [{TragarAiWeb.UserAuth, {:require_page, :dashboard}}] do
+      live "/", DashboardLive
+    end
+
+    live_session :page_console, on_mount: [{TragarAiWeb.UserAuth, {:require_page, :console}}] do
+      live "/console", ConsoleLive
+    end
+
+    live_session :page_collections,
+      on_mount: [{TragarAiWeb.UserAuth, {:require_page, :collections}}] do
+      live "/collections", CollectionsLive
+    end
+
+    live_session :page_margin, on_mount: [{TragarAiWeb.UserAuth, {:require_page, :margin}}] do
       live "/margin", MarginLive
     end
 
-    # Admin-only: manage who can access the margin data.
-    live_session :margin_admin, on_mount: [{TragarAiWeb.UserAuth, :require_admin}] do
+    live_session :page_margin_users,
+      on_mount: [{TragarAiWeb.UserAuth, {:require_page, :margin_users}}] do
       live "/margin/users", MarginUsersLive
     end
 
-    # Read-only tour of the application's design (systems, surfaces, flows).
-    live "/architecture", ArchitectureLive
+    live_session :page_architecture,
+      on_mount: [{TragarAiWeb.UserAuth, {:require_page, :architecture}}] do
+      live "/architecture", ArchitectureLive
+    end
 
-    # Runtime settings (search pipeline toggle, …).
-    live "/settings", SettingsLive
+    live_session :page_settings, on_mount: [{TragarAiWeb.UserAuth, {:require_page, :settings}}] do
+      live "/settings", SettingsLive
+    end
 
-    # Hidden, read-only DB inspection console — intentionally NOT linked in the
-    # app menu. Gated by :inspect_token (reach it at /_inspect?token=…). Streams
-    # SELECT results in-app so raw data stays inside Tragar's infrastructure.
-    live "/_inspect", InspectLive
+    # Read-only DB inspection console — admin-only (the ?token gate is retired;
+    # role membership is the gate now). Streams SELECT results in-app so raw
+    # data stays inside Tragar's infrastructure.
+    live_session :page_inspect, on_mount: [{TragarAiWeb.UserAuth, {:require_page, :inspect}}] do
+      live "/_inspect", InspectLive
+    end
 
     # Force a FreightWare login (nav "Log in" button when there's no token).
     post "/fw/login", FreightWareController, :login

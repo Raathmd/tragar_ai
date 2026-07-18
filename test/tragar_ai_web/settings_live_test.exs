@@ -6,6 +6,8 @@ defmodule TragarAiWeb.SettingsLiveTest do
   alias TragarAi.Assist.SearchStrategy
   alias TragarAi.CoreAI.ModelSetting
 
+  setup :register_and_log_in_admin
+
   setup do
     original = SearchStrategy.get()
 

@@ -4,11 +4,15 @@ defmodule TragarAiWeb.Endpoint do
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
+  # 90-day persistent session so the shared CSD display stays signed in across
+  # reboots (it logs in once, mfa_required=false). Normal accounts still pass
+  # TOTP at login; this only sets how long the signed cookie survives.
   @session_options [
     store: :cookie,
     key: "_tragar_ai_key",
     signing_salt: "p3Nm5lnC",
-    same_site: "Lax"
+    same_site: "Lax",
+    max_age: 60 * 60 * 24 * 90
   ]
 
   socket "/live", Phoenix.LiveView.Socket,

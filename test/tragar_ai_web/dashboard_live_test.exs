@@ -5,6 +5,8 @@ defmodule TragarAiWeb.DashboardLiveTest do
 
   alias TragarAi.Assist
 
+  setup :register_and_log_in_admin
+
   test "groups AI responses by ticket and shows the response time", %{conn: conn} do
     {:ok, _} =
       Assist.create_interaction(%{

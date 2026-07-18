@@ -35,4 +35,44 @@ defmodule TragarAiWeb.ConnCase do
     TragarAi.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Setup helper that creates an admin user (wildcard access) and puts them in the
+  session, so tests of the now role-gated LiveViews mount as a signed-in admin.
+
+      setup :register_and_log_in_admin
+  """
+  def register_and_log_in_admin(%{conn: conn}) do
+    {:ok, conn: log_in_admin(conn)}
+  end
+
+  @doc "Create an admin user, grant the admin role, and store them in the session."
+  def log_in_admin(conn) do
+    email = "admin-#{System.unique_integer([:positive])}@test.local"
+
+    {:ok, user} =
+      TragarAi.Accounts.register_user(%{
+        email: email,
+        type: "admin",
+        password: "test-password-123"
+      })
+
+    # Clear the first-login reset flag so the gate doesn't redirect to /reset-password.
+    {:ok, user} = TragarAi.Accounts.set_password(user, %{password: "test-password-123"})
+
+    admin_role =
+      case Enum.find(TragarAi.Accounts.list_roles!(), &(&1.name == "admin")) do
+        nil ->
+          TragarAi.Accounts.Role
+          |> Ash.Changeset.for_create(:create, %{name: "admin", is_admin: true})
+          |> Ash.create!()
+
+        role ->
+          role
+      end
+
+    {:ok, _} = TragarAi.Accounts.assign_role(user.id, admin_role.id)
+
+    Plug.Test.init_test_session(conn, %{"user_id" => user.id})
+  end
 end

@@ -64,7 +64,7 @@ defmodule TragarAiWeb.SettingsLive do
   def render(assigns) do
     ~H"""
     <div class="p-4 lg:p-6 space-y-4">
-      <Layouts.app_nav active={:settings} flash={@flash} />
+      <Layouts.app_nav active={:settings} flash={@flash} current_user={@current_user} />
 
       <header>
         <h1 class="text-2xl font-semibold">Settings</h1>

@@ -4,6 +4,8 @@ defmodule TragarAiWeb.ConsoleLiveTest do
   import Phoenix.LiveViewTest
   import TragarAi.FreightWareStub
 
+  setup :register_and_log_in_admin
+
   setup do
     Req.Test.set_req_test_to_shared()
     TragarAi.Dovetail.TokenStore.invalidate()

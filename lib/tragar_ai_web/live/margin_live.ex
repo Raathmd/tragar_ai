@@ -18,8 +18,9 @@ defmodule TragarAiWeb.MarginLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    # Gating (signed-in, reset-complete) is enforced by UserAuth :require_authenticated
-    # in the router live_session, which also assigns :current_user.
+    # Gating (signed-in, reset-complete, :margin page permission) is enforced by
+    # UserAuth {:require_page, :margin} in the router live_session, which also
+    # assigns :current_user (with roles preloaded).
     {:ok,
      socket
      |> assign(:active, :margin)
@@ -773,7 +774,7 @@ defmodule TragarAiWeb.MarginLive do
         <div class="flex items-center gap-2 text-xs">
           <span class="opacity-60">{@current_user.email}</span>
           <.link
-            :if={@current_user.type == "admin"}
+            :if={TragarAi.Accounts.can_view?(@current_user, :margin_users)}
             navigate={~p"/margin/users"}
             class="btn btn-ghost btn-xs"
           >
