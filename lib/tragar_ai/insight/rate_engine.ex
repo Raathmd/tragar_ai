@@ -43,17 +43,20 @@ defmodule TragarAi.Insight.RateEngine do
   Keyed on `manifest_obj` (not the reference string) because the API's delivery-
   manifest number and `fwt_manifest.manifest_reference` are different identifiers.
   """
-  @spec rank_manifest_suppliers(String.t()) :: {:ok, [map()]} | {:error, term()}
+  @spec rank_manifest_suppliers(String.t()) ::
+          {:ok, %{ranking: [map()], total_waybills: non_neg_integer()}} | {:error, term()}
   def rank_manifest_suppliers(manifest_obj) when is_binary(manifest_obj) do
     with {:ok, obj} <- sanitize_obj(manifest_obj),
-         {:ok, rows} <- Db.query_rows(rows_sql(obj)) do
-      {:ok, rank(rows)}
+         {:ok, rows} <- Db.query_rows(rows_sql(obj)),
+         {:ok, total_rows} <- Db.query_rows(total_waybills_sql(obj)) do
+      total = total_rows |> List.first(%{}) |> Map.get("total") |> to_int()
+      {:ok, %{ranking: rank(rows, total), total_waybills: total}}
     end
   end
 
   # --- ranking ------------------------------------------------------------
 
-  defp rank(rows) do
+  defp rank(rows, total) do
     rows
     |> Enum.group_by(&Map.get(&1, "supplier_ref"))
     |> Enum.map(fn {ref, supplier_rows} ->
@@ -65,14 +68,19 @@ defmodule TragarAi.Insight.RateEngine do
           wb_rows |> Enum.max_by(&(&1["effective_date"] || "")) |> waybill_cost()
         end)
 
+      priced = length(waybill_costs)
+
       %{
         supplier_ref: ref,
         supplier_name: supplier_rows |> hd() |> Map.get("supplier_name"),
-        waybills_priced: length(waybill_costs),
+        waybills_priced: priced,
+        total_waybills: total,
+        full_coverage: total > 0 and priced == total,
         total_expected: waybill_costs |> Enum.sum() |> Float.round(2)
       }
     end)
-    |> Enum.sort_by(& &1.total_expected)
+    # Full-coverage suppliers first (a real alternative), then cheapest.
+    |> Enum.sort_by(fn s -> {not s.full_coverage, s.total_expected} end)
   end
 
   # base + increment × ((weight − from) / increment_unit); flat when increment_unit = 0.
@@ -126,6 +134,15 @@ defmodule TragarAi.Insight.RateEngine do
     """
   end
 
+  # Total distinct waybills on the tripsheet (the coverage denominator) — used to
+  # tell full-coverage alternatives from partial ones.
+  defp total_waybills_sql(obj) do
+    "SELECT COUNT(DISTINCT wp.waybill_obj) AS total " <>
+      "FROM PUB.fwt_parcel_tripsheet pt " <>
+      "JOIN PUB.fwt_waybill_parcel wp ON wp.waybill_parcel_obj = pt.waybill_parcel_obj " <>
+      "WHERE pt.tripsheet_obj = #{obj}"
+  end
+
   # `owning_obj` comes from the API as a number (sometimes "12345.0"); take the
   # integer part and allow digits only, so it's a safe bare numeric literal.
   defp sanitize_obj(obj) do
@@ -134,5 +151,15 @@ defmodule TragarAi.Insight.RateEngine do
     if String.match?(digits, ~r/^[0-9]{1,20}$/),
       do: {:ok, digits},
       else: {:error, :invalid_manifest_obj}
+  end
+
+  defp to_int(nil), do: 0
+  defp to_int(n) when is_integer(n), do: n
+
+  defp to_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, _} -> n
+      _ -> 0
+    end
   end
 end

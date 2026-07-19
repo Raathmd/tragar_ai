@@ -33,6 +33,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
       |> assign(:manifest_error, nil)
       |> assign(:ranking_ref, nil)
       |> assign(:ranking, nil)
+      |> assign(:ranking_total, nil)
       |> assign(:ranking_error, nil)
       |> assign(:ranking_loading, false)
 
@@ -112,8 +113,14 @@ defmodule TragarAiWeb.SupplierOpsLive do
   end
 
   @impl true
-  def handle_async(:rank, {:ok, {:ok, ranking}}, socket) do
-    {:noreply, assign(socket, ranking: ranking, ranking_error: nil, ranking_loading: false)}
+  def handle_async(:rank, {:ok, {:ok, %{ranking: ranking, total_waybills: total}}}, socket) do
+    {:noreply,
+     assign(socket,
+       ranking: ranking,
+       ranking_total: total,
+       ranking_error: nil,
+       ranking_loading: false
+     )}
   end
 
   def handle_async(:rank, {:ok, {:error, reason}}, socket) do
@@ -142,22 +149,40 @@ defmodule TragarAiWeb.SupplierOpsLive do
     end
   end
 
-  # In the ranking: tint the assigned supplier's row, else the cheapest row.
+  # In the ranking: tint the assigned supplier's row, else the cheapest
+  # full-coverage row.
   defp ranking_row_class(r, i, assigned) do
     cond do
       r.supplier_ref == assigned -> "bg-info/10"
-      i == 1 -> "bg-success/10"
+      i == 1 and r.full_coverage -> "bg-success/10"
       true -> nil
     end
   end
 
-  # True when the cheapest candidate isn't the assigned subcontractor — i.e. a
-  # cheaper 3rd party is available (including when the assigned one has no rate).
-  defp cheaper_alternative?([%{supplier_ref: cheapest} | _], assigned)
-       when is_binary(assigned) and assigned != "",
-       do: cheapest != assigned
+  # True when the cheapest FULL-COVERAGE candidate isn't the assigned
+  # subcontractor — i.e. a cheaper 3rd party that can actually do the whole
+  # manifest is available. Partial-coverage suppliers don't count.
+  defp cheaper_alternative?(ranking, assigned)
+       when is_list(ranking) and is_binary(assigned) and assigned != "" do
+    case Enum.find(ranking, & &1.full_coverage) do
+      %{supplier_ref: cheapest} -> cheapest != assigned
+      _ -> false
+    end
+  end
 
   defp cheaper_alternative?(_ranking, _assigned), do: false
+
+  # The assigned subcontractor's own expected cost (from the ranking), or "no
+  # rate" when it has no FWMSC rate covering these deliveries.
+  defp assigned_cost_label(ranking, assigned)
+       when is_list(ranking) and ranking != [] and is_binary(assigned) and assigned != "" do
+    case Enum.find(ranking, &(&1.supplier_ref == assigned)) do
+      nil -> "no rate"
+      entry -> "R" <> :erlang.float_to_binary(entry.total_expected, decimals: 2)
+    end
+  end
+
+  defp assigned_cost_label(_ranking, _assigned), do: nil
 
   @impl true
   def render(assigns) do
@@ -213,6 +238,15 @@ defmodule TragarAiWeb.SupplierOpsLive do
                   <span
                     :if={
                       @ranking_ref == m["manifest_number"] and
+                        assigned_cost_label(@ranking, m["subcontractor_reference"])
+                    }
+                    class="font-mono opacity-70"
+                  >
+                    · {assigned_cost_label(@ranking, m["subcontractor_reference"])}
+                  </span>
+                  <span
+                    :if={
+                      @ranking_ref == m["manifest_number"] and
                         cheaper_alternative?(@ranking, m["subcontractor_reference"])
                     }
                     class="badge badge-warning badge-xs ml-1"
@@ -257,7 +291,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
                         <tr>
                           <th>#</th>
                           <th>Supplier</th>
-                          <th class="text-right">Waybills priced</th>
+                          <th class="text-right">Coverage</th>
                           <th class="text-right">Total expected</th>
                         </tr>
                       </thead>
@@ -268,18 +302,27 @@ defmodule TragarAiWeb.SupplierOpsLive do
                         >
                           <td>{i}</td>
                           <td>
-                            {r.supplier_name || r.supplier_ref}
+                            <span class="font-mono text-xs opacity-70">{r.supplier_ref}</span>
+                            {r.supplier_name}
                             <span
                               :if={r.supplier_ref == m["subcontractor_reference"]}
                               class="badge badge-info badge-xs ml-1"
                             >
                               assigned
                             </span>
-                            <span :if={i == 1} class="badge badge-success badge-xs ml-1">
+                            <span
+                              :if={i == 1 and r.full_coverage}
+                              class="badge badge-success badge-xs ml-1"
+                            >
                               cheapest
                             </span>
                           </td>
-                          <td class="text-right">{r.waybills_priced}</td>
+                          <td class="text-right">
+                            {r.waybills_priced}/{r.total_waybills}
+                            <span :if={not r.full_coverage} class="badge badge-ghost badge-xs">
+                              partial
+                            </span>
+                          </td>
                           <td class="text-right font-mono">
                             R{:erlang.float_to_binary(r.total_expected, decimals: 2)}
                           </td>
