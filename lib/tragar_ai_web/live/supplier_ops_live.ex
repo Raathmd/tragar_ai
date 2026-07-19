@@ -32,6 +32,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
       |> assign(:ranking_ref, nil)
       |> assign(:ranking, nil)
       |> assign(:ranking_error, nil)
+      |> assign(:ranking_loading, false)
 
     # The open-manifest feed is a live FreightWare API call — only on the
     # connected mount, so the first (static) render isn't blocked on it.
@@ -80,13 +81,28 @@ defmodule TragarAiWeb.SupplierOpsLive do
   # heavy, so we never price every manifest up front.
   @impl true
   def handle_event("rank_manifest", %{"ref" => ref}, socket) do
-    case RateEngine.rank_manifest_suppliers(ref) do
-      {:ok, ranking} ->
-        {:noreply, assign(socket, ranking_ref: ref, ranking: ranking, ranking_error: nil)}
+    # The rate join is heavy; run it off the LiveView process so the UI shows a
+    # loading state immediately instead of blocking until it returns.
+    socket =
+      socket
+      |> assign(ranking_ref: ref, ranking: nil, ranking_error: nil, ranking_loading: true)
+      |> start_async(:rank, fn -> RateEngine.rank_manifest_suppliers(ref) end)
 
-      {:error, reason} ->
-        {:noreply, assign(socket, ranking_ref: ref, ranking: nil, ranking_error: inspect(reason))}
-    end
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_async(:rank, {:ok, {:ok, ranking}}, socket) do
+    {:noreply, assign(socket, ranking: ranking, ranking_error: nil, ranking_loading: false)}
+  end
+
+  def handle_async(:rank, {:ok, {:error, reason}}, socket) do
+    {:noreply, assign(socket, ranking_error: inspect(reason), ranking_loading: false)}
+  end
+
+  def handle_async(:rank, {:exit, reason}, socket) do
+    {:noreply,
+     assign(socket, ranking_error: "pricing crashed: #{inspect(reason)}", ranking_loading: false)}
   end
 
   def handle_event("refresh_manifests", _params, socket) do
@@ -174,10 +190,13 @@ defmodule TragarAiWeb.SupplierOpsLive do
           <span class="opacity-60">· expected cost from the rate card</span>
         </div>
 
+        <p :if={@ranking_loading} class="p-4 text-sm opacity-70">
+          Pricing from the FreightWare rate card…
+        </p>
         <p :if={@ranking_error} class="p-4 text-sm text-error">
           Couldn't price this manifest: {@ranking_error}
         </p>
-        <p :if={@ranking == []} class="p-4 text-sm opacity-70">
+        <p :if={not @ranking_loading and @ranking == []} class="p-4 text-sm opacity-70">
           No 3rd party has a rate covering this manifest's deliveries.
         </p>
 
