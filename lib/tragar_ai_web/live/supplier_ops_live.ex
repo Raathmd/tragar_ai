@@ -1,19 +1,20 @@
 defmodule TragarAiWeb.SupplierOpsLive do
   @moduledoc """
-  Operations supplier-selection board. Pick a lane (origin → destination rate
-  area) and see the candidate suppliers ranked cheapest-first by what they have
-  actually billed (the `supplier_route_costs` warehouse).
+  Operations supplier-selection board:
 
-  First increment — the historical-actuals ranking. Still to come (pending the
-  manifest status/type probes): the live rate-engine columns (rate-only,
-  rate+surcharge) and auto-population of currently-open manifests so ops sees the
-  ranking beside a manifest they're building, not just an ad-hoc lane.
+    * **Open delivery manifests** — the live FreightWare feed (`/multiManifest`),
+      newest first. For any manifest, "Rank suppliers" prices the candidate 3rd
+      parties from the live rate card (`Insight.RateEngine`) — cheapest first,
+      with how many of the manifest's waybills each can cover.
+    * **Lane ranking** — pick an origin → destination rate area for the
+      historical-actuals ranking from the `supplier_route_costs` warehouse.
 
   Gated by the `:supplier_ops` page permission (operations + admin roles).
   """
   use TragarAiWeb, :live_view
 
   alias TragarAi.Freight
+  alias TragarAi.Insight.RateEngine
   alias TragarAi.Insight.SupplierRanking
 
   @impl true
@@ -28,6 +29,9 @@ defmodule TragarAiWeb.SupplierOpsLive do
       |> assign(:rows, nil)
       |> assign(:manifests, nil)
       |> assign(:manifest_error, nil)
+      |> assign(:ranking_ref, nil)
+      |> assign(:ranking, nil)
+      |> assign(:ranking_error, nil)
 
     # The open-manifest feed is a live FreightWare API call — only on the
     # connected mount, so the first (static) render isn't blocked on it.
@@ -71,7 +75,20 @@ defmodule TragarAiWeb.SupplierOpsLive do
 
   defp parse_date(_), do: nil
 
+  # Rank the candidate 3rd-party suppliers for one open manifest by expected cost
+  # (live from the FreightWare rate card). On-demand per manifest — the join is
+  # heavy, so we never price every manifest up front.
   @impl true
+  def handle_event("rank_manifest", %{"ref" => ref}, socket) do
+    case RateEngine.rank_manifest_suppliers(ref) do
+      {:ok, ranking} ->
+        {:noreply, assign(socket, ranking_ref: ref, ranking: ranking, ranking_error: nil)}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, ranking_ref: ref, ranking: nil, ranking_error: inspect(reason))}
+    end
+  end
+
   def handle_event("refresh_manifests", _params, socket) do
     {:noreply, load_manifests(socket)}
   end
@@ -127,15 +144,60 @@ defmodule TragarAiWeb.SupplierOpsLive do
               <th>Branch</th>
               <th>Status</th>
               <th>Subcontractor</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            <tr :for={m <- @manifests}>
+            <tr :for={m <- @manifests} class={m["manifest_number"] == @ranking_ref && "bg-base-200"}>
               <td class="font-mono text-xs">{m["manifest_number"]}</td>
               <td class="text-xs">{m["manifest_date"]}</td>
               <td class="text-xs">{m["station_code"]}</td>
               <td><span class="badge badge-sm badge-ghost">{m["status_code"]}</span></td>
               <td class="text-xs">{m["subcontractor_reference"]}</td>
+              <td class="text-right">
+                <button
+                  phx-click="rank_manifest"
+                  phx-value-ref={m["manifest_number"]}
+                  class="btn btn-ghost btn-xs"
+                >
+                  Rank suppliers
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section :if={@ranking_ref} class="rounded-lg border border-primary/40">
+        <div class="border-b border-base-300 px-4 py-2 text-sm font-medium">
+          Cheapest 3rd parties for <span class="font-mono">{@ranking_ref}</span>
+          <span class="opacity-60">· expected cost from the rate card</span>
+        </div>
+
+        <p :if={@ranking_error} class="p-4 text-sm text-error">
+          Couldn't price this manifest: {@ranking_error}
+        </p>
+        <p :if={@ranking == []} class="p-4 text-sm opacity-70">
+          No 3rd party has a rate covering this manifest's deliveries.
+        </p>
+
+        <table :if={@ranking not in [nil, []]} class="table table-sm w-full">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Supplier</th>
+              <th class="text-right">Waybills priced</th>
+              <th class="text-right">Total expected</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={{r, i} <- Enum.with_index(@ranking, 1)} class={i == 1 && "bg-success/10"}>
+              <td>{i}</td>
+              <td>{r.supplier_name || r.supplier_ref}</td>
+              <td class="text-right">{r.waybills_priced}</td>
+              <td class="text-right font-mono">
+                R{:erlang.float_to_binary(r.total_expected, decimals: 2)}
+              </td>
             </tr>
           </tbody>
         </table>
