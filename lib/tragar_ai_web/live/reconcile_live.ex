@@ -74,9 +74,6 @@ defmodule TragarAiWeb.ReconcileLive do
   def handle_info({:reconcile_result, _stale, _outcome}, socket), do: {:noreply, socket}
 
   # ── reconciliation ──────────────────────────────────────────────────────────
-  # API gives sell (chargedAmount + splits) and the waybill_obj; the replica gives
-  # our sell (total_cost), buy actual (contractor charges) and buy expected (rate
-  # engine). Any one source missing degrades to a partial view, never a crash.
   defp reconcile(number) do
     case Freight.get_waybill(number) do
       {:ok, api} when is_map(api) ->
@@ -103,8 +100,7 @@ defmodule TragarAiWeb.ReconcileLive do
     end
   end
 
-  # Expected-cost component breakdown for this one waybill (or nil — own-fleet /
-  # supplier without a 3rd-party rate card). obj is numeric; keep digits only.
+  # Expected-cost component breakdown for this waybill (or nil — own-fleet / no card).
   defp components(obj) do
     case RateEngine.assigned_expected("w.waybill_obj = '#{digits(obj)}'") do
       {:ok, [%{components: c} | _]} -> c
@@ -118,7 +114,6 @@ defmodule TragarAiWeb.ReconcileLive do
       obj: api["waybill_obj"],
       status: api["status_description"] || api["status_code"],
       account: api["account_reference"],
-      # SELL — API side has the split; our code has only the total (total_cost).
       api_sell: %{
         freight: f(api["freight_charge"]),
         sundry: f(api["sundry_charge"]),
@@ -126,10 +121,8 @@ defmodule TragarAiWeb.ReconcileLive do
         total: f(api["charged_amount"])
       },
       code_sell: detail && detail.sell,
-      # BUY ACTUAL — recorded charge lines (both amount fields, per the SD1 finding).
       charges: detail && detail.charges,
       code_buy: detail && detail.buy,
-      # BUY EXPECTED — every term of the quote.
       components: components,
       expected: detail && detail.expected,
       weight: detail && detail.weight
@@ -149,11 +142,7 @@ defmodule TragarAiWeb.ReconcileLive do
         </div>
       </div>
 
-      <p class="mb-4 text-sm opacity-60">
-        Reconcile our computed buy &amp; sell figures against FreightWare, component by
-        component. Sell is checked against the live FW API; buy against FW's recorded
-        charges in the replica (the API does not expose supplier cost).
-      </p>
+      <p class="mb-4 text-sm opacity-60">{intro()}</p>
 
       <.methodology />
 
@@ -171,9 +160,7 @@ defmodule TragarAiWeb.ReconcileLive do
         <button type="submit" class="btn btn-primary btn-sm" disabled={@loading}>
           {(@loading && "Reconciling…") || "Reconcile"}
         </button>
-        <span class="text-xs opacity-60">
-          FreightWare: {(@fw_ready && "session ready") || "no session (a call will log in)"}
-        </span>
+        <span class="text-xs opacity-60">{fw_status(@fw_ready)}</span>
       </form>
 
       <div :if={@error} class="my-3 rounded border border-error p-3 text-sm text-error">
@@ -196,50 +183,18 @@ defmodule TragarAiWeb.ReconcileLive do
       <div class="collapse-content space-y-3 text-xs leading-relaxed">
         <div>
           <div class="font-semibold">Sell (customer revenue)</div>
-          <p class="opacity-80">
-            <span class="font-mono">sell = fwt_waybill.total_cost</span>
-            — the all-in customer charge. It equals the FreightWare API
-            <span class="font-mono">chargedAmount</span>, which is
-            <span class="font-mono">freightCharge + sundryCharge + tax</span>. Our margin
-            dashboard uses <span class="font-mono">total_cost</span> directly; it does not
-            split surcharges out of sell. The reconcile below shows the API's split next to
-            our single total.
-          </p>
+          <p class="font-mono opacity-70">{sell_formula()}</p>
+          <p class="opacity-80">{sell_doc()}</p>
         </div>
         <div>
           <div class="font-semibold">Buy — actual (what the supplier was paid)</div>
-          <p class="opacity-80">
-            <span class="font-mono">
-              buy = Σ fwt_contractor_charge.total_charge_amount
-            </span>
-            over every charge line on the waybill (collection, line-haul, delivery, and
-            <span class="font-mono">SUR</span>
-            surcharge legs), grouped by <span class="font-mono">station_contractor</span>.
-            <span class="text-warning">
-              Caveat under review: some sundry lines carry their value in
-              <span class="font-mono">charge_amount</span>
-              with <span class="font-mono">total_charge_amount = 0</span>; both fields are
-              shown below so you can see whether our sum misses them.
-            </span>
-          </p>
+          <p class="font-mono opacity-70">{buy_actual_formula()}</p>
+          <p class="opacity-80">{buy_actual_doc()}</p>
         </div>
         <div>
           <div class="font-semibold">Buy — expected (what the rate card says it should cost)</div>
-          <p class="opacity-80">
-            <span class="font-mono">
-              expected = ((CW − from_unit) × rate + minimum) × (1 + fuel%) + sundry
-            </span>. CW = chargeable weight. rate/minimum/band come from the delivery
-            supplier's card (<span class="font-mono">fwm_entity_rate → fwm_rate_table</span>);
-            the supplier is the contractor on the charges whose rate area covers the
-            consignee postcode. fuel% = that supplier's
-            <span class="font-mono">SCFUEL</span>
-            (<span class="font-mono">fwm_charge</span>), effective-dated, clamped 0–50%.
-            <span class="text-warning">
-              sundry (<span class="font-mono">fwm_sundry_postcode</span>) is not yet
-              implemented — shown as 0 / pending.
-            </span>
-            Uses today's effective rates.
-          </p>
+          <p class="font-mono opacity-70">{expected_formula()}</p>
+          <p class="opacity-80">{expected_doc()}</p>
         </div>
       </div>
     </div>
@@ -258,7 +213,6 @@ defmodule TragarAiWeb.ReconcileLive do
         <span :if={@r.weight} class="opacity-60">weight {@r.weight}</span>
       </div>
 
-      <!-- SELL -->
       <div>
         <div class="mb-1 text-sm font-medium">Sell — our code vs FreightWare API</div>
         <table class="table table-xs w-full">
@@ -273,19 +227,19 @@ defmodule TragarAiWeb.ReconcileLive do
           <tbody>
             <tr>
               <td>Freight charge</td>
-              <td class="text-right opacity-40">— not split in code</td>
+              <td class="text-right opacity-40">— not split</td>
               <td class="text-right">{money(@r.api_sell.freight)}</td>
               <td class="text-right opacity-40">—</td>
             </tr>
             <tr>
               <td>Sundry / surcharge</td>
-              <td class="text-right opacity-40">— not split in code</td>
+              <td class="text-right opacity-40">— not split</td>
               <td class="text-right">{money(@r.api_sell.sundry)}</td>
               <td class="text-right opacity-40">—</td>
             </tr>
             <tr>
               <td>Tax</td>
-              <td class="text-right opacity-40">— not split in code</td>
+              <td class="text-right opacity-40">— not split</td>
               <td class="text-right">{money(@r.api_sell.tax)}</td>
               <td class="text-right opacity-40">—</td>
             </tr>
@@ -299,17 +253,11 @@ defmodule TragarAiWeb.ReconcileLive do
             </tr>
           </tbody>
         </table>
-        <p class="mt-1 text-xs opacity-60">
-          Total sell should match (both are the customer charge). A non-zero Δ means our
-          replica <span class="font-mono">total_cost</span> is out of step with the live API.
-        </p>
+        <p class="mt-1 text-xs opacity-60">{sell_note()}</p>
       </div>
 
-      <!-- BUY ACTUAL -->
       <div>
-        <div class="mb-1 text-sm font-medium">
-          Buy actual — FreightWare recorded charges <span class="opacity-50">(API exposes no buy)</span>
-        </div>
+        <div class="mb-1 text-sm font-medium">Buy actual — FreightWare recorded charges</div>
         <table :if={@r.charges} class="table table-xs w-full">
           <thead>
             <tr>
@@ -328,17 +276,14 @@ defmodule TragarAiWeb.ReconcileLive do
               <td colspan="3" class="opacity-60">No contractor charges recorded.</td>
             </tr>
             <tr class="font-semibold">
-              <td colspan="2">Total buy actual (our Σ total_charge_amount)</td>
+              <td colspan="2">Total buy actual (Σ total_charge_amount)</td>
               <td class="text-right">{money(@r.code_buy)}</td>
             </tr>
           </tbody>
         </table>
-        <p :if={!@r.charges} class="text-xs opacity-60">
-          Not in the replica (or replica read failed) — no buy breakdown.
-        </p>
+        <p :if={!@r.charges} class="text-xs opacity-60">{no_charges_note()}</p>
       </div>
 
-      <!-- BUY EXPECTED -->
       <div>
         <div class="mb-1 text-sm font-medium">Buy expected — rate-engine components</div>
         <table :if={@r.components} class="table table-xs w-full">
@@ -357,9 +302,7 @@ defmodule TragarAiWeb.ReconcileLive do
             </tr>
             <tr>
               <td>Rate (increment_amount / increment_unit)</td>
-              <td class="text-right">
-                {money(@r.components.increment_amount)} / {num(@r.components.increment_unit)}
-              </td>
+              <td class="text-right">{rate_str(@r.components)}</td>
             </tr>
             <tr>
               <td>Base subtotal = min + rate × (CW − from_unit)</td>
@@ -367,9 +310,7 @@ defmodule TragarAiWeb.ReconcileLive do
             </tr>
             <tr>
               <td>Fuel surcharge (SCFUEL %)</td>
-              <td class="text-right">
-                {num(@r.components.fuel_percent)}% (×{num(@r.components.fuel_multiplier)})
-              </td>
+              <td class="text-right">{fuel_str(@r.components)}</td>
             </tr>
             <tr class="text-warning">
               <td>Sundry / area (fwm_sundry_postcode)</td>
@@ -387,14 +328,53 @@ defmodule TragarAiWeb.ReconcileLive do
             </tr>
           </tbody>
         </table>
-        <p :if={!@r.components} class="text-xs opacity-60">
-          No 3rd-party rate card for this waybill's delivery supplier (own-fleet, or the
-          supplier's rate area doesn't cover the destination) — expected not computable.
-        </p>
+        <p :if={!@r.components} class="text-xs opacity-60">{no_expected_note()}</p>
       </div>
     </div>
     """
   end
+
+  # ── doc strings + composed cells (single {} nodes stay formatter-stable) ──────
+  defp intro do
+    "Reconcile our computed buy & sell figures against FreightWare, component by component. Sell is checked against the live FW API; buy against FW's recorded charges in the replica (the API does not expose supplier cost)."
+  end
+
+  defp sell_formula, do: "sell = fwt_waybill.total_cost"
+
+  defp sell_doc do
+    "The all-in customer charge; equals the FW API chargedAmount (= freightCharge + sundryCharge + tax). The margin dashboard uses total_cost directly and does not split surcharges out of sell. The reconcile shows the API split beside our single total."
+  end
+
+  defp buy_actual_formula, do: "buy = Σ fwt_contractor_charge.total_charge_amount"
+
+  defp buy_actual_doc do
+    "Every charge line on the waybill (collection, line-haul, delivery, SUR legs), grouped by station_contractor. Caveat under review: some sundry lines hold their value in charge_amount with total_charge_amount = 0."
+  end
+
+  defp expected_formula do
+    "expected = ((CW − from_unit) × rate + minimum) × (1 + fuel%) + sundry"
+  end
+
+  defp expected_doc do
+    "rate/minimum/band come from the delivery supplier's card (fwm_entity_rate → fwm_rate_table); the supplier is the charge-side contractor whose rate area covers the consignee postcode. fuel% = that supplier's SCFUEL (fwm_charge), effective-dated, clamped 0–50%. sundry (fwm_sundry_postcode) is not yet implemented — shown as pending. Uses today's rates."
+  end
+
+  defp sell_note do
+    "Total sell should match — both are the customer charge. A non-zero Δ means our replica total_cost is out of step with the live API."
+  end
+
+  defp no_charges_note, do: "Not in the replica (or replica read failed) — no buy breakdown."
+
+  defp no_expected_note do
+    "No 3rd-party rate card for this waybill's delivery supplier (own-fleet, or the rate area does not cover the destination) — expected not computable."
+  end
+
+  defp rate_str(c), do: money(c.increment_amount) <> " / " <> num(c.increment_unit)
+
+  defp fuel_str(c), do: num(c.fuel_percent) <> "% (×" <> num(c.fuel_multiplier) <> ")"
+
+  defp fw_status(true), do: "FreightWare: session ready"
+  defp fw_status(false), do: "FreightWare: no session (a call will log in)"
 
   # ── formatting ──────────────────────────────────────────────────────────────
   defp delta(nil, _), do: nil
