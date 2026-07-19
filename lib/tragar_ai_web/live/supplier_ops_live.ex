@@ -13,6 +13,8 @@ defmodule TragarAiWeb.SupplierOpsLive do
   """
   use TragarAiWeb, :live_view
 
+  require Logger
+
   alias TragarAi.Freight
   alias TragarAi.Insight.RateEngine
   alias TragarAi.Insight.SupplierRanking
@@ -81,6 +83,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
   # heavy, so we never price every manifest up front.
   @impl true
   def handle_event("rank_manifest", %{"ref" => ref}, socket) do
+    Logger.info("[supplier_ops] rank_manifest fired ref=#{inspect(ref)}")
     # The rate join is heavy; run it off the LiveView process so the UI shows a
     # loading state immediately instead of blocking until it returns.
     socket =
@@ -110,14 +113,17 @@ defmodule TragarAiWeb.SupplierOpsLive do
 
   @impl true
   def handle_async(:rank, {:ok, {:ok, ranking}}, socket) do
+    Logger.info("[supplier_ops] rank done, #{length(ranking)} suppliers")
     {:noreply, assign(socket, ranking: ranking, ranking_error: nil, ranking_loading: false)}
   end
 
   def handle_async(:rank, {:ok, {:error, reason}}, socket) do
+    Logger.warning("[supplier_ops] rank error: #{inspect(reason)}")
     {:noreply, assign(socket, ranking_error: inspect(reason), ranking_loading: false)}
   end
 
   def handle_async(:rank, {:exit, reason}, socket) do
+    Logger.warning("[supplier_ops] rank crashed: #{inspect(reason)}")
     {:noreply,
      assign(socket, ranking_error: "pricing crashed: #{inspect(reason)}", ranking_loading: false)}
   end
