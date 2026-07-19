@@ -22,6 +22,10 @@ defmodule TragarAi.Insight.Rollup do
     field :waybills, :integer
     field :sell, :decimal
     field :buy, :decimal
+    # buy expected: what each waybill's assigned supplier should have charged per
+    # its rate card. Populated separately (Backfill.run_expected/0), partial
+    # coverage (own-fleet legs have no card), so not folded into margin.
+    field :expected_buy, :decimal
     field :surcharges, :decimal
     field :margin, :decimal
 
@@ -41,6 +45,7 @@ defmodule TragarAi.Insight.Rollup do
       :waybills,
       :sell,
       :buy,
+      :expected_buy,
       :surcharges,
       :margin
     ])
