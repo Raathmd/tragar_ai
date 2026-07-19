@@ -130,12 +130,20 @@ defmodule TragarAi.Insight.RateEngine do
   @fuel_pct_max 50.0
   defp fuel_multiplier(wb_rows) do
     pct =
-      case Enum.reject(wb_rows, &(&1["fuel_percent"] in [nil, ""])) do
-        [] -> 0.0
-        fueled -> fueled |> Enum.max_by(&(&1["fuel_effective"] || "")) |> Map.get("fuel_percent") |> num()
-      end
+      wb_rows
+      |> Enum.reject(&(&1["fuel_percent"] in [nil, ""]))
+      |> latest_fuel_pct()
 
     1.0 + max(@fuel_pct_min, min(pct, @fuel_pct_max)) / 100.0
+  end
+
+  defp latest_fuel_pct([]), do: 0.0
+
+  defp latest_fuel_pct(fueled) do
+    fueled
+    |> Enum.max_by(&(&1["fuel_effective"] || ""))
+    |> Map.get("fuel_percent")
+    |> num()
   end
 
   # --- ranking ------------------------------------------------------------
