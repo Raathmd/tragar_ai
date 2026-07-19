@@ -182,9 +182,9 @@ defmodule TragarAiWeb.MarginLive do
   defp drill_error(:timeout), do: "timed out"
   defp drill_error(reason), do: inspect(reason)
 
-  # Streams an explanation from the in-app model (Claude on the Tragar account, or
-  # the local model) grounded in the current view's numbers. The answer renders in
-  # this LiveView — the data reaches the app's model, never the dev session.
+  # Streams an explanation from the local on-box model (Ollama) grounded in the
+  # current view's numbers. The answer renders in this LiveView — freight data stays
+  # on the box and never leaves to a third-party API (POPIA; the cloud tier is removed).
   defp start_ai(socket, prompt) do
     lv = self()
 

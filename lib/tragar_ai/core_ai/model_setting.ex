@@ -3,101 +3,108 @@ defmodule TragarAi.CoreAI.ModelSetting do
   Runtime selection of the active local chat model, plus a reasoning (thinking)
   toggle for models that support it.
 
-  Mirrors `TragarAi.Assist.SearchStrategy`: backed by application env so it can be
-  flipped live from the settings page without a restart, falling back to the
-  configured `CORE_AI_MODEL` (then the first listed model) on boot.
+  The selectable list is discovered LIVE from Ollama (`TragarAi.CoreAI.list_models/0`,
+  i.e. `/api/tags`), so models added or removed on the box appear in Settings with
+  no code change. `@meta` only enriches known tags with a nicer label / description
+  and a reasoning-capability flag; unknown models are still selectable (label = the
+  tag, reasoning inferred from the name).
 
-  Selecting a model asks Ollama to unload the others (`keep_alive: 0`) and warm the
-  chosen one (`keep_alive: -1`), so only one ~14B model is resident at a time — this
-  box has 32 GB and shares it with the live app, so two 14B models will not co-exist.
-  The swap runs in the background; the setting itself applies immediately.
+  There is NO cloud/Claude option — every model is local (`provider: :ollama`).
+  The external tier is removed for POPIA compliance (no freight/customer data may
+  leave the box); see `TragarAi.CoreAI.Cloud`.
+
+  Backed by application env so it can be flipped live without a restart, mirrored
+  to the durable `RuntimeSettings` store, and hydrated back on boot
+  (`load_persisted/0`). Selecting a model asks Ollama to unload the others
+  (`keep_alive: 0`) and warm the chosen one (`keep_alive: -1`) — this 32 GB box
+  shares memory with the live app, so only one ~14B model stays resident.
   """
 
-  # Atom app-env keys (Elixir 1.19 deprecates non-atom keys). Application env is the
-  # fast in-memory cache; the same values are mirrored to the durable
-  # `RuntimeSettings` store under the string keys below so a choice survives a
-  # restart, and hydrated back into app env on boot (see `load_persisted/0`).
+  alias TragarAi.CoreAI
+
   @model_key :core_ai_active_model
   @reasoning_key :core_ai_reasoning_enabled
   @persist_model "core_ai_active_model"
   @persist_reasoning "core_ai_reasoning_enabled"
 
-  # Selectable chat models, in display order (first = default). `provider` is
-  # `:cloud` (Anthropic Claude, via the CoreAI cloud tier) or `:ollama` (a resident
-  # local model). `reasoning: true` marks models that support Ollama's `think`
-  # field (Qwen3). Add the 30B here if you ever want it selectable again.
-  @models [
-    %{
-      tag: "claude",
-      label: "Claude (cloud)",
-      provider: :cloud,
-      reasoning: false,
-      describe:
-        "Default. Anthropic Claude (claude-haiku-4-5) via API — highest-quality " <>
-          "interpret/phrase. Private values are redacted to tokens before they leave " <>
-          "the network; falls back to the local model, then the stub, if the API is down."
-    },
-    %{
-      tag: "qwen3:14b",
+  # Metadata for KNOWN local models — label, reasoning capability, description.
+  # This does NOT limit what's selectable (that comes live from Ollama); it only
+  # enriches these tags. No cloud/Claude entry — the external tier is removed.
+  @meta %{
+    "qwen3:14b" => %{
       label: "Qwen3 14B",
-      provider: :ollama,
       reasoning: true,
       describe:
         "Local. Newer generation, same family as the 30B. Runs with reasoning " <>
           "(thinking) OFF for interpret/phrase; the mode can be toggled below."
     },
-    %{
-      tag: "qwen2.5:14b-instruct",
+    "qwen2.5:14b-instruct" => %{
       label: "Qwen2.5 14B",
-      provider: :ollama,
       reasoning: false,
       describe: "Local. Fast, instruction-tuned generalist. No reasoning mode."
     }
-  ]
+  }
 
-  @doc "Every selectable model (full metadata maps, display order)."
-  def all, do: @models
-
-  @doc "Just the model tags."
-  def tags, do: Enum.map(@models, & &1.tag)
+  # Used only when Ollama's model list can't be read (e.g. it's momentarily down),
+  # so Settings and validation still have something sensible to show.
+  @fallback_tags ["qwen3:14b", "qwen2.5:14b-instruct"]
 
   @doc """
-  The boot default SELECTION: the configured `CORE_AI_MODEL` when it names a
-  selectable model, otherwise the first listed model (Claude). A `CORE_AI_MODEL`
-  that names a non-selectable local model (e.g. qwen3:30b) is treated as the local
-  tier model (see `local_model/0`), not the selection — so the default is Claude
-  and that model becomes the local/fallback engine.
+  Every selectable model as a full metadata map, in the order Ollama lists them:
+  `%{tag, label, provider: :ollama, reasoning, describe}`. Discovered live from
+  Ollama; falls back to the known tags when Ollama can't be reached.
   """
-  def default do
-    tag = config_model()
-    if is_binary(tag) and tag != "" and tag in tags(), do: tag, else: hd(@models).tag
-  end
-
-  # The configured CORE_AI_MODEL (may be unset, a selectable tag, or a
-  # non-selectable local model like qwen3:30b).
-  defp config_model, do: Application.get_env(:tragar_ai, TragarAi.CoreAI, [])[:model]
-
-  @doc """
-  The local Ollama model tag for the local tier: the model the app calls when a
-  local model is selected, and the fallback the loop uses when a cloud model
-  (Claude) is active — so it degrades to the real local model, never straight to
-  the stub. Uses `CORE_AI_MODEL` when it names a local model (any Ollama tag,
-  including non-selectable ones such as qwen3:30b), else the first local model.
-  """
-  def local_model do
-    case config_model() do
-      tag when is_binary(tag) and tag != "" ->
-        if provider(tag) == :ollama, do: tag, else: first_local_tag()
-
-      _ ->
-        first_local_tag()
+  def all do
+    case CoreAI.list_models() do
+      [] -> Enum.map(@fallback_tags, &model_map/1)
+      tags -> Enum.map(tags, &model_map/1)
     end
   end
 
-  defp first_local_tag do
-    case Enum.find(@models, &(&1.provider == :ollama)) do
-      %{tag: tag} -> tag
-      _ -> hd(@models).tag
+  @doc "Just the selectable model tags (live from Ollama, else the known fallback)."
+  def tags, do: Enum.map(all(), & &1.tag)
+
+  defp model_map(tag) do
+    m = Map.get(@meta, tag, %{})
+
+    %{
+      tag: tag,
+      label: Map.get(m, :label, tag),
+      provider: :ollama,
+      reasoning: Map.get(m, :reasoning, reasoning_by_name?(tag)),
+      describe: Map.get(m, :describe, "Local Ollama model.")
+    }
+  end
+
+  # Reasoning (thinking) capability for models we don't have explicit metadata for:
+  # inferred from the tag name (Qwen3 / DeepSeek-R1 / *-reasoning / *-think).
+  @reasoning_hints ["qwen3", "r1", "reason", "think"]
+  defp reasoning_by_name?(tag) do
+    t = String.downcase(to_string(tag))
+    Enum.any?(@reasoning_hints, &String.contains?(t, &1))
+  end
+
+  @doc """
+  The boot default SELECTION: the configured `CORE_AI_MODEL` when set, otherwise
+  the first known fallback model. Cheap (no Ollama call) — it's read on every
+  dispatch via `get/0`.
+  """
+  def default do
+    tag = config_model()
+    if is_binary(tag) and tag != "", do: tag, else: hd(@fallback_tags)
+  end
+
+  defp config_model, do: Application.get_env(:tragar_ai, TragarAi.CoreAI, [])[:model]
+
+  @doc """
+  The local Ollama model tag for the local tier: `CORE_AI_MODEL` when set (any
+  Ollama tag, including non-selectable ones like qwen3:30b), else the first known
+  local model. Every model is local now, so this is just the configured/default tag.
+  """
+  def local_model do
+    case config_model() do
+      tag when is_binary(tag) and tag != "" -> tag
+      _ -> hd(@fallback_tags)
     end
   end
 
@@ -105,12 +112,12 @@ defmodule TragarAi.CoreAI.ModelSetting do
   def get, do: Application.get_env(:tragar_ai, @model_key, default())
 
   @doc """
-  Set the active model at runtime. Returns `{:ok, tag}` for a known model, or
-  `{:error, :unknown_model}` otherwise. Triggers a background load-one/unload-others
-  swap in Ollama so only the chosen model stays resident.
+  Set the active model at runtime. Accepts any model Ollama currently offers.
+  Returns `{:ok, tag}` or `{:error, :unknown_model}`. Triggers a background
+  load-one/unload-others swap so only the chosen model stays resident.
   """
   def set(tag) when is_binary(tag) do
-    if tag in tags() do
+    if tag != "" and tag in tags() do
       Application.put_env(:tragar_ai, @model_key, tag)
       TragarAi.RuntimeSettings.put(@persist_model, tag)
       swap_resident(tag)
@@ -123,22 +130,22 @@ defmodule TragarAi.CoreAI.ModelSetting do
   def set(_), do: {:error, :unknown_model}
 
   @doc "Human-readable label for a model tag."
-  def label(tag), do: field(tag, :label, tag)
+  def label(tag), do: model_map(tag).label
 
   @doc "One-line description of a model tag."
-  def describe(tag), do: field(tag, :describe, "")
+  def describe(tag), do: model_map(tag).describe
 
   @doc "Whether a model supports the reasoning (thinking) mode."
-  def reasoning_capable?(tag), do: field(tag, :reasoning, false) == true
+  def reasoning_capable?(tag), do: model_map(tag).reasoning == true
 
-  @doc "The inference provider for a tag — `:cloud` (Claude) or `:ollama` (local)."
-  def provider(tag), do: field(tag, :provider, :ollama)
+  @doc "The inference provider for a tag — always `:ollama` (the cloud tier is removed)."
+  def provider(_tag), do: :ollama
 
-  @doc "Whether the active model runs on the cloud (Claude) provider."
-  def cloud?, do: provider(get()) == :cloud
+  @doc "Whether the active model runs on the cloud provider — always false (removed)."
+  def cloud?, do: false
 
-  @doc "The metadata map for a tag, or nil if unknown."
-  def meta(tag), do: Enum.find(@models, &(&1.tag == tag))
+  @doc "The metadata map for a tag."
+  def meta(tag), do: model_map(tag)
 
   @doc "Whether the reasoning toggle is on (independent of the active model)."
   def reasoning_enabled?, do: Application.get_env(:tragar_ai, @reasoning_key, false)
@@ -151,15 +158,15 @@ defmodule TragarAi.CoreAI.ModelSetting do
   end
 
   @doc """
-  Hydrate the runtime overrides from the durable store into application env, so a
-  model / reasoning choice made before a restart is restored. Called once at boot
-  after the Repo starts. Best-effort — a missing store leaves the configured
-  defaults in place; a persisted model no longer offered is ignored.
+  Hydrate the runtime overrides from the durable store into application env on
+  boot. The persisted model is restored as-is (it was valid when chosen; if it's
+  since been removed from Ollama the dispatch degrades gracefully) rather than
+  validated against a possibly-not-yet-ready Ollama.
   """
   def load_persisted do
     case TragarAi.RuntimeSettings.get(@persist_model) do
       tag when is_binary(tag) and tag != "" ->
-        if tag in tags(), do: Application.put_env(:tragar_ai, @model_key, tag)
+        Application.put_env(:tragar_ai, @model_key, tag)
 
       _ ->
         :ok
@@ -176,7 +183,7 @@ defmodule TragarAi.CoreAI.ModelSetting do
 
   @doc """
   Clear both runtime overrides (in-memory and durable), reverting to the
-  configured defaults (Claude selection, reasoning off). Mainly for test isolation.
+  configured defaults. Mainly for test isolation.
   """
   def reset do
     Application.delete_env(:tragar_ai, @model_key)
@@ -187,33 +194,23 @@ defmodule TragarAi.CoreAI.ModelSetting do
   end
 
   @doc """
-  Whether generations should actually run with thinking on right now: the toggle
-  is on AND the active model supports reasoning. `model_thinks?/1` answers the same
-  for an explicitly named model (used when a call targets a model directly).
+  Whether generations should run with thinking on right now: the toggle is on AND
+  the active model supports reasoning. `model_thinks?/1` answers for a named model.
   """
   def thinking_active?, do: model_thinks?(get())
 
   def model_thinks?(tag), do: reasoning_enabled?() and reasoning_capable?(tag)
 
-  defp field(tag, key, fallback) do
-    case meta(tag) do
-      %{^key => value} -> value
-      _ -> fallback
-    end
-  end
-
-  # Unload every other resident (local) model, then warm the chosen one if it's
-  # local, in the background so the settings click returns immediately. Cloud
-  # (Claude) has nothing to load/unload, and switching TO it frees the local
-  # models from memory. Best-effort; the unload/preload calls no-op unless CoreAI
-  # is in :ollama mode.
+  # Unload every other resident model, then warm the chosen one — in the background
+  # so the settings click returns immediately. Best-effort; no-ops unless CoreAI is
+  # in :ollama mode.
   defp swap_resident(tag) do
     Task.start(fn ->
-      for other <- tags(), other != tag, provider(other) == :ollama do
-        TragarAi.CoreAI.unload(other)
+      for other <- tags(), other != tag do
+        CoreAI.unload(other)
       end
 
-      if provider(tag) == :ollama, do: TragarAi.CoreAI.preload(tag)
+      CoreAI.preload(tag)
     end)
 
     :ok

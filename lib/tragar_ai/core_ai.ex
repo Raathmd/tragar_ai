@@ -365,6 +365,30 @@ defmodule TragarAi.CoreAI do
     end
   end
 
+  @doc """
+  The chat models Ollama currently has, from its `/api/tags` endpoint (in the
+  order Ollama returns them). Used to build the Settings model list dynamically,
+  so models added/removed on the box show up without a code change. Returns `[]`
+  outside `:ollama` mode or on any failure (Ollama down, bad payload) — callers
+  fall back to their known list.
+  """
+  @spec list_models() :: [String.t()]
+  def list_models do
+    case mode() do
+      :ollama ->
+        case Req.get(req(), url: "/api/tags") do
+          {:ok, %Req.Response{status: 200, body: %{"models" => models}}} when is_list(models) ->
+            models |> Enum.map(& &1["name"]) |> Enum.filter(&is_binary/1)
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end
+  end
+
   def mode, do: Keyword.get(config(), :mode, :stub)
   defp config, do: Application.get_env(:tragar_ai, __MODULE__, [])
 
@@ -382,13 +406,9 @@ defmodule TragarAi.CoreAI do
     # not just the configured default. Stub mode has no model.
     {provider, label, model} =
       cond do
-        mode == :ollama and use_cloud?() ->
-          m = Keyword.get(cfg, :cloud_model) || "claude-haiku-4-5"
-          {"Anthropic", "#{m} · Claude (cloud, redacted → local/stub fallback)", m}
-
         mode == :ollama ->
           m = ollama_model()
-          {"Ollama", "#{m} · Ollama (→ stub fallback)", m}
+          {"Ollama", "#{m} · Ollama (local, on-box → stub fallback)", m}
 
         mode == :http ->
           m = ollama_model()
@@ -637,10 +657,9 @@ defmodule TragarAi.CoreAI do
     end
   end
 
-  # The tag used for the actual Ollama call — the local tier, and the fallback when
-  # a cloud model (Claude) is active. When the active selection is itself a local
-  # model, use it; when it's Claude, use the configured local model so the loop
-  # degrades to a real local model, not straight to the stub.
+  # The tag used for the actual Ollama call. Every selectable model is local now
+  # (the cloud tier is removed), so this is just the active selection; the
+  # local_model/0 branch stays as a defensive fallback to a real local model.
   defp ollama_model do
     tag = TragarAi.CoreAI.ModelSetting.get()
 
