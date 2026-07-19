@@ -83,7 +83,6 @@ defmodule TragarAiWeb.SupplierOpsLive do
   # heavy, so we never price every manifest up front.
   @impl true
   def handle_event("rank_manifest", %{"obj" => obj, "ref" => ref}, socket) do
-    Logger.info("[supplier_ops] rank_manifest fired ref=#{inspect(ref)} obj=#{inspect(obj)}")
     # The rate join is heavy; run it off the LiveView process so the UI shows a
     # loading state immediately instead of blocking until it returns. Keyed on the
     # numeric manifest_obj (API owning_obj), not the reference string.
@@ -114,7 +113,6 @@ defmodule TragarAiWeb.SupplierOpsLive do
 
   @impl true
   def handle_async(:rank, {:ok, {:ok, ranking}}, socket) do
-    Logger.info("[supplier_ops] rank done, #{length(ranking)} suppliers")
     {:noreply, assign(socket, ranking: ranking, ranking_error: nil, ranking_loading: false)}
   end
 
@@ -128,6 +126,39 @@ defmodule TragarAiWeb.SupplierOpsLive do
     {:noreply, assign(socket, ranking_error: "pricing crashed", ranking_loading: false)}
   end
 
+  # Highlight the open manifest when it's expanded AND the cheapest 3rd party
+  # isn't the assigned subcontractor (a cheaper option exists).
+  defp manifest_row_class(m, ranking_ref, ranking) do
+    cond do
+      ranking_ref == m["manifest_number"] and
+          cheaper_alternative?(ranking, m["subcontractor_reference"]) ->
+        "bg-warning/10"
+
+      ranking_ref == m["manifest_number"] ->
+        "bg-base-200"
+
+      true ->
+        nil
+    end
+  end
+
+  # In the ranking: tint the assigned supplier's row, else the cheapest row.
+  defp ranking_row_class(r, i, assigned) do
+    cond do
+      r.supplier_ref == assigned -> "bg-info/10"
+      i == 1 -> "bg-success/10"
+      true -> nil
+    end
+  end
+
+  # True when the cheapest candidate isn't the assigned subcontractor — i.e. a
+  # cheaper 3rd party is available (including when the assigned one has no rate).
+  defp cheaper_alternative?([%{supplier_ref: cheapest} | _], assigned)
+       when is_binary(assigned) and assigned != "",
+       do: cheapest != assigned
+
+  defp cheaper_alternative?(_ranking, _assigned), do: false
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -137,8 +168,9 @@ defmodule TragarAiWeb.SupplierOpsLive do
       <header>
         <h1 class="text-2xl font-semibold">Supplier selection</h1>
         <p class="text-sm text-base-content/70">
-          Candidate suppliers for a lane, ranked cheapest-first by what they've actually billed
-          (last 12 months). Live rate quotes and open-manifest auto-list are coming next.
+          Open delivery manifests — click "Rank suppliers" to price the candidate 3rd parties from
+          the live rate card, cheapest first. A highlighted row means a cheaper option than the
+          assigned subcontractor.
         </p>
       </header>
 
@@ -170,61 +202,89 @@ defmodule TragarAiWeb.SupplierOpsLive do
             </tr>
           </thead>
           <tbody>
-            <tr :for={m <- @manifests} class={m["manifest_number"] == @ranking_ref && "bg-base-200"}>
-              <td class="font-mono text-xs">{m["manifest_number"]}</td>
-              <td class="text-xs">{m["manifest_date"]}</td>
-              <td class="text-xs">{m["station_code"]}</td>
-              <td><span class="badge badge-sm badge-ghost">{m["status_code"]}</span></td>
-              <td class="text-xs">{m["subcontractor_reference"]}</td>
-              <td class="text-right">
-                <button
-                  phx-click="rank_manifest"
-                  phx-value-obj={m["owning_obj"]}
-                  phx-value-ref={m["manifest_number"]}
-                  class="btn btn-ghost btn-xs"
-                >
-                  Rank suppliers
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
+            <%= for m <- @manifests do %>
+              <tr class={manifest_row_class(m, @ranking_ref, @ranking)}>
+                <td class="font-mono text-xs">{m["manifest_number"]}</td>
+                <td class="text-xs">{m["manifest_date"]}</td>
+                <td class="text-xs">{m["station_code"]}</td>
+                <td><span class="badge badge-sm badge-ghost">{m["status_code"]}</span></td>
+                <td class="text-xs">
+                  {m["subcontractor_reference"]}
+                  <span
+                    :if={
+                      @ranking_ref == m["manifest_number"] and
+                        cheaper_alternative?(@ranking, m["subcontractor_reference"])
+                    }
+                    class="badge badge-warning badge-xs ml-1"
+                  >
+                    cheaper option
+                  </span>
+                </td>
+                <td class="text-right">
+                  <button
+                    phx-click="rank_manifest"
+                    phx-value-obj={m["owning_obj"]}
+                    phx-value-ref={m["manifest_number"]}
+                    class="btn btn-ghost btn-xs"
+                  >
+                    {(@ranking_ref == m["manifest_number"] && "Hide") || "Rank suppliers"}
+                  </button>
+                </td>
+              </tr>
 
-      <section :if={@ranking_ref} class="rounded-lg border border-primary/40">
-        <div class="border-b border-base-300 px-4 py-2 text-sm font-medium">
-          Cheapest 3rd parties for <span class="font-mono">{@ranking_ref}</span>
-          <span class="opacity-60">· expected cost from the rate card</span>
-        </div>
+              <tr :if={@ranking_ref == m["manifest_number"]}>
+                <td colspan="6" class="p-0">
+                  <div class="border-l-4 border-primary/50 bg-base-200/40 px-4 py-3">
+                    <div class="mb-2 text-xs font-medium opacity-70">
+                      Cheapest 3rd parties · expected cost from the rate card
+                    </div>
 
-        <p :if={@ranking_loading} class="p-4 text-sm opacity-70">
-          Pricing from the FreightWare rate card…
-        </p>
-        <p :if={@ranking_error} class="p-4 text-sm text-error">
-          Couldn't price this manifest: {@ranking_error}
-        </p>
-        <p :if={not @ranking_loading and @ranking == []} class="p-4 text-sm opacity-70">
-          No 3rd party has a rate covering this manifest's deliveries.
-        </p>
+                    <p :if={@ranking_loading} class="text-sm opacity-70">
+                      Pricing from the FreightWare rate card…
+                    </p>
+                    <p :if={@ranking_error} class="text-sm text-error">
+                      Couldn't price this manifest: {@ranking_error}
+                    </p>
+                    <p :if={not @ranking_loading and @ranking == []} class="text-sm opacity-70">
+                      No 3rd party has a rate covering this manifest's deliveries.
+                    </p>
 
-        <table :if={@ranking not in [nil, []]} class="table table-sm w-full">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Supplier</th>
-              <th class="text-right">Waybills priced</th>
-              <th class="text-right">Total expected</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr :for={{r, i} <- Enum.with_index(@ranking, 1)} class={i == 1 && "bg-success/10"}>
-              <td>{i}</td>
-              <td>{r.supplier_name || r.supplier_ref}</td>
-              <td class="text-right">{r.waybills_priced}</td>
-              <td class="text-right font-mono">
-                R{:erlang.float_to_binary(r.total_expected, decimals: 2)}
-              </td>
-            </tr>
+                    <table :if={@ranking not in [nil, []]} class="table table-xs w-full rounded bg-base-100">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Supplier</th>
+                          <th class="text-right">Waybills priced</th>
+                          <th class="text-right">Total expected</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          :for={{r, i} <- Enum.with_index(@ranking, 1)}
+                          class={ranking_row_class(r, i, m["subcontractor_reference"])}
+                        >
+                          <td>{i}</td>
+                          <td>
+                            {r.supplier_name || r.supplier_ref}
+                            <span
+                              :if={r.supplier_ref == m["subcontractor_reference"]}
+                              class="badge badge-info badge-xs ml-1"
+                            >
+                              assigned
+                            </span>
+                            <span :if={i == 1} class="badge badge-success badge-xs ml-1">cheapest</span>
+                          </td>
+                          <td class="text-right">{r.waybills_priced}</td>
+                          <td class="text-right font-mono">
+                            R{:erlang.float_to_binary(r.total_expected, decimals: 2)}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </td>
+              </tr>
+            <% end %>
           </tbody>
         </table>
       </section>
