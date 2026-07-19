@@ -56,6 +56,16 @@ defmodule TragarAiWeb.InspectLive do
     {:noreply, start_query(socket, sql, "ad-hoc")}
   end
 
+  def handle_event("delete_catalog", %{"id" => id}, %{assigns: %{authorized: true}} = socket) do
+    status =
+      case Catalog.delete(id) do
+        :ok -> "deleted catalog query"
+        {:error, reason} -> "delete failed — #{inspect(reason)}"
+      end
+
+    {:noreply, socket |> assign(:catalog, Catalog.load()) |> assign(:status, status)}
+  end
+
   # Enqueue the supplier-cost warehouse rebuild as a background Oban job — it runs
   # in-app (never in a user request or an operator's session); we only enqueue here.
   def handle_event("rebuild_supplier_costs", _params, %{assigns: %{authorized: true}} = socket) do
@@ -148,15 +158,27 @@ defmodule TragarAiWeb.InspectLive do
             <div :for={q <- @catalog} class="min-w-0 rounded border p-2">
               <div class="flex items-start justify-between gap-2">
                 <span class="min-w-0 break-words text-sm font-medium">{q.title}</span>
-                <button
-                  type="button"
-                  phx-click="run_catalog"
-                  phx-value-id={q.id}
-                  class="btn btn-primary btn-xs shrink-0"
-                  disabled={@running}
-                >
-                  Run
-                </button>
+                <div class="flex shrink-0 gap-1">
+                  <button
+                    type="button"
+                    phx-click="run_catalog"
+                    phx-value-id={q.id}
+                    class="btn btn-primary btn-xs"
+                    disabled={@running}
+                  >
+                    Run
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="delete_catalog"
+                    phx-value-id={q.id}
+                    data-confirm={"Delete catalog query “#{q.title}”?"}
+                    class="btn btn-ghost btn-xs text-error"
+                    disabled={@running}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
               <p :if={q.description != ""} class="text-xs opacity-70">{q.description}</p>
               <pre class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs">{q.sql}</pre>
