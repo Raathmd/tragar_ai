@@ -14,6 +14,7 @@ defmodule TragarAi.Insight.Backfill do
   require Logger
 
   alias TragarAi.Insight.Db
+  alias TragarAi.Insight.RateEngine
   alias TragarAi.Insight.Rollup
   alias TragarAi.Repo
 
@@ -206,6 +207,76 @@ defmodule TragarAi.Insight.Backfill do
       Logger.info("[insight.backfill] #{grain} rollups upserted: #{count}")
       {:ok, count}
     end
+  end
+
+  @doc """
+  Populate `expected_buy` on existing rollups — "buy expected" for the margin
+  report: each waybill priced against its OWN assigned supplier's rate card
+  (`RateEngine.assigned_expected/1`), summed per (month, grain, dim).
+
+  Kept SEPARATE from `run_all/0` — and `expected_buy` is deliberately NOT in the
+  upsert replace list — so a normal sell/buy backfill never clobbers it, and this
+  heavier per-month pricing pass runs on demand. Prices one month at a time (never
+  the whole history in one query), matching RateEngine's per-scope design.
+
+  Only updates rows that already exist, so run it AFTER the sell/buy backfill.
+  Own-fleet waybills (no card) contribute nothing, so expected is partial
+  coverage — comparable to actual per waybill, a floor at aggregate grains.
+  Returns `{:ok, rows_updated}`.
+  """
+  @spec run_expected() :: {:ok, non_neg_integer()}
+  def run_expected do
+    updated =
+      for y <- @from_year..@to_year, m <- 1..12, reduce: 0 do
+        acc -> acc + expected_month(y, m)
+      end
+
+    Logger.info("[insight.backfill] expected_buy rollups updated: #{updated}")
+    {:ok, updated}
+  end
+
+  # Price one month's waybills against their assigned suppliers, fan the totals
+  # out to every grain (enterprise / client / lane / contractor), and write each
+  # onto its rollup row.
+  defp expected_month(y, m) do
+    where = "YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m}"
+
+    case RateEngine.assigned_expected(where) do
+      {:ok, [_ | _] = priced} ->
+        period = Date.new!(y, m, 1)
+
+        groups = %{
+          "enterprise" => %{"all" => sum_expected(priced)},
+          "client" => sum_by(priced, & &1.account_name),
+          "lane" => sum_by(priced, & &1.rate_area_to_code),
+          "contractor" => sum_by(priced, & &1.contractor_reference)
+        }
+
+        for {grain, by_dim} <- groups, {dim, amt} <- by_dim, reduce: 0 do
+          acc -> acc + set_expected(period, grain, dim, amt)
+        end
+
+      _ ->
+        0
+    end
+  end
+
+  defp sum_expected(priced), do: priced |> Enum.map(& &1.expected) |> Enum.sum()
+
+  defp sum_by(priced, key_fun) do
+    priced
+    |> Enum.group_by(fn r -> dim_key(key_fun.(r)) end)
+    |> Map.new(fn {k, rs} -> {k, sum_expected(rs)} end)
+  end
+
+  defp set_expected(period, grain, dim, amt) do
+    {n, _} =
+      from(r in Rollup,
+        where: r.period_month == ^period and r.grain == ^grain and r.dim_key == ^dim
+      )
+      |> Repo.update_all(set: [expected_buy: Decimal.from_float(Float.round(amt, 2))])
+
+    n
   end
 
   defp index_by_month_key(rows) do

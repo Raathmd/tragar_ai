@@ -363,11 +363,12 @@ defmodule TragarAiWeb.MarginLive do
     max_margin = rows |> Enum.map(&to_f(&1.margin)) |> Enum.max(fn -> 1.0 end) |> max(1.0)
     sell = sum(rows, & &1.sell)
     buy = sum(rows, & &1.buy)
+    expected = sum(rows, & &1.expected_buy)
 
     socket
     |> assign(:grain, "enterprise")
     |> assign(:rows, Enum.reverse(rows))
-    |> assign(:totals, totals(length(rows), "Months", sell, buy))
+    |> assign(:totals, totals(length(rows), "Months", sell, buy, expected))
     |> assign(:chart, build_chart(rows))
     |> assign(:max_val, max_margin)
     |> assign(:ranked, [])
@@ -387,6 +388,7 @@ defmodule TragarAiWeb.MarginLive do
         dim: r.dim_key,
         sell: sum(r.sell),
         buy: sum(r.buy),
+        expected_buy: sum(r.expected_buy),
         waybills: sum(r.waybills)
       })
       |> Repo.all()
@@ -405,11 +407,12 @@ defmodule TragarAiWeb.MarginLive do
     max_abs = ranked |> Enum.map(&abs(sort_fun.(&1))) |> Enum.max(fn -> 1.0 end) |> max(1.0)
     sell = Enum.reduce(all_dims, 0.0, &(&2 + &1.sell))
     buy = Enum.reduce(all_dims, 0.0, &(&2 + &1.buy))
+    expected = Enum.reduce(all_dims, 0.0, &(&2 + &1.expected))
 
     socket
     |> assign(:grain, grain)
     |> assign(:rows, [])
-    |> assign(:totals, totals(length(dims), "Dimensions", sell, buy))
+    |> assign(:totals, totals(length(dims), "Dimensions", sell, buy, expected))
     |> assign(:chart, nil)
     |> assign(:max_val, max_abs)
     |> assign(:ranked, Enum.take(ranked, 60))
@@ -453,18 +456,19 @@ defmodule TragarAiWeb.MarginLive do
     }
   end
 
-  defp totals(count, label, sell, buy) do
+  defp totals(count, label, sell, buy, expected) do
     %{
       count: count,
       label: label,
       sell: sell,
       buy: buy,
+      expected: expected,
       margin: sell - buy,
       margin_pct: pct(sell - buy, sell)
     }
   end
 
-  defp dim_metrics(%{dim: dim, sell: sell, buy: buy, waybills: wb}) do
+  defp dim_metrics(%{dim: dim, sell: sell, buy: buy, expected_buy: expected, waybills: wb}) do
     s = to_f(sell)
     b = to_f(buy)
 
@@ -472,6 +476,7 @@ defmodule TragarAiWeb.MarginLive do
       dim: dim || "(unknown)",
       sell: s,
       buy: b,
+      expected: to_f(expected),
       margin: s - b,
       margin_pct: pct(s - b, s),
       waybills: wb || 0
@@ -584,6 +589,10 @@ defmodule TragarAiWeb.MarginLive do
     end
   end
 
+  # Buy expected: "—" when zero — the assigned supplier has no 3rd-party rate card
+  # (own fleet), so there's nothing to compare against, distinct from a real R0.
+  defp expected_cell(v), do: (to_f(v) == 0.0 && "—") || money(v)
+
   defp month_label(%Date{} = d), do: Calendar.strftime(d, "%Y-%m")
   defp month_label(_), do: "—"
 
@@ -688,7 +697,8 @@ defmodule TragarAiWeb.MarginLive do
             <th>{drill_col(@drill.level)}</th>
             <th class="text-right">Waybills</th>
             <th class="text-right">Sell</th>
-            <th class="text-right">Buy</th>
+            <th class="text-right">Buy actual</th>
+            <th class="text-right">Buy expected</th>
             <th class="text-right">Margin</th>
             <th class="text-right">Margin %</th>
           </tr>
@@ -709,11 +719,12 @@ defmodule TragarAiWeb.MarginLive do
             <td class="text-right">{row.n}</td>
             <td class="text-right">{money(row.sell)}</td>
             <td class="text-right">{money(row.buy)}</td>
+            <td class="text-right opacity-70">{expected_cell(row.expected)}</td>
             <td class="text-right">{money(row.margin)}</td>
             <td class="text-right">{row.margin_pct}%</td>
           </tr>
           <tr :if={@drill.rows == []}>
-            <td colspan="6" class="text-xs opacity-60">No rows.</td>
+            <td colspan="7" class="text-xs opacity-60">No rows.</td>
           </tr>
         </tbody>
       </table>
@@ -731,7 +742,10 @@ defmodule TragarAiWeb.MarginLive do
           <div><span class="opacity-60">Weight</span> {@drill.detail.weight}</div>
           <div><span class="opacity-60">Items</span> {@drill.detail.items}</div>
           <div><span class="opacity-60">Sell</span> {money(@drill.detail.sell)}</div>
-          <div><span class="opacity-60">Buy</span> {money(@drill.detail.buy)}</div>
+          <div><span class="opacity-60">Buy actual</span> {money(@drill.detail.buy)}</div>
+          <div>
+            <span class="opacity-60">Buy expected</span> {expected_cell(@drill.detail.expected)}
+          </div>
           <div>
             <span class="opacity-60">Margin</span>
             <span class={@drill.detail.margin < 0 && "text-error"}>
@@ -785,6 +799,10 @@ defmodule TragarAiWeb.MarginLive do
       </div>
       <p class="mb-3 text-sm opacity-60">
         Sell vs contractor buy; margin = sell − buy. Drill down by dimension.
+        <span class="opacity-80">Buy actual</span>
+        = booked contractor charges; <span class="opacity-80">Buy expected</span>
+        = what each waybill's assigned supplier should charge per its rate card
+        (own-fleet legs have no card, so expected only covers rate-carded waybills).
       </p>
 
       <div class="mb-4 text-xs opacity-60">Drill down by</div>
@@ -854,7 +872,7 @@ defmodule TragarAiWeb.MarginLive do
         </.link>
       </div>
 
-      <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <div class="rounded border p-3">
           <div class="text-xs opacity-60">{@totals.label}</div>
           <div class="text-lg font-semibold">{@totals.count}</div>
@@ -864,8 +882,12 @@ defmodule TragarAiWeb.MarginLive do
           <div class="text-lg font-semibold">{money(@totals.sell)}</div>
         </div>
         <div class="rounded border p-3">
-          <div class="text-xs opacity-60">Buy</div>
+          <div class="text-xs opacity-60">Buy actual</div>
           <div class="text-lg font-semibold">{money(@totals.buy)}</div>
+        </div>
+        <div class="rounded border p-3">
+          <div class="text-xs opacity-60">Buy expected</div>
+          <div class="text-lg font-semibold">{money(@totals.expected)}</div>
         </div>
         <div class="rounded border p-3">
           <div class="text-xs opacity-60">Margin</div>
@@ -970,7 +992,8 @@ defmodule TragarAiWeb.MarginLive do
               <th>{@grain}</th>
               <th class="text-right">Waybills</th>
               <th class="text-right">Sell</th>
-              <th class="text-right">Buy</th>
+              <th class="text-right">Buy actual</th>
+              <th class="text-right">Buy expected</th>
               <th class="text-right">Margin</th>
               <th class="text-right">Margin %</th>
               <th class="w-32">Margin</th>
@@ -993,6 +1016,7 @@ defmodule TragarAiWeb.MarginLive do
                 <td class="text-right">{d.waybills}</td>
                 <td class="text-right">{money(d.sell)}</td>
                 <td class="text-right">{money(d.buy)}</td>
+                <td class="text-right opacity-70">{expected_cell(d.expected)}</td>
                 <td class="text-right">{money(d.margin)}</td>
                 <td class="text-right">{d.margin_pct}%</td>
                 <td>
@@ -1014,7 +1038,7 @@ defmodule TragarAiWeb.MarginLive do
                 </td>
               </tr>
               <tr :if={drill_dim_open?(@drill, d.dim)}>
-                <td colspan="8" class="bg-base-200/40 p-0">
+                <td colspan="9" class="bg-base-200/40 p-0">
                   <.drill_panel drill={@drill} grain={@grain} />
                 </td>
               </tr>
@@ -1030,7 +1054,8 @@ defmodule TragarAiWeb.MarginLive do
               <th>Month</th>
               <th class="text-right">Waybills</th>
               <th class="text-right">Sell</th>
-              <th class="text-right">Buy</th>
+              <th class="text-right">Buy actual</th>
+              <th class="text-right">Buy expected</th>
               <th class="text-right">Margin</th>
               <th class="text-right">Margin %</th>
               <th class="w-40">Trend</th>
@@ -1052,6 +1077,7 @@ defmodule TragarAiWeb.MarginLive do
                 <td class="text-right">{r.waybills}</td>
                 <td class="text-right">{money(r.sell)}</td>
                 <td class="text-right">{money(r.buy)}</td>
+                <td class="text-right opacity-70">{expected_cell(r.expected_buy)}</td>
                 <td class="text-right">{money(r.margin)}</td>
                 <td class="text-right">{pct(to_f(r.margin), to_f(r.sell))}%</td>
                 <td>
@@ -1073,7 +1099,7 @@ defmodule TragarAiWeb.MarginLive do
                 </td>
               </tr>
               <tr :if={drill_month_open?(@drill, r.period_month)}>
-                <td colspan="8" class="bg-base-200/40 p-0">
+                <td colspan="9" class="bg-base-200/40 p-0">
                   <.drill_panel drill={@drill} grain={@grain} />
                 </td>
               </tr>
