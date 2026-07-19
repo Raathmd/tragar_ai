@@ -124,8 +124,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
 
   def handle_async(:rank, {:exit, reason}, socket) do
     Logger.warning("[supplier_ops] rank crashed: #{inspect(reason)}")
-    {:noreply,
-     assign(socket, ranking_error: "pricing crashed: #{inspect(reason)}", ranking_loading: false)}
+    {:noreply, assign(socket, ranking_error: "pricing crashed", ranking_loading: false)}
   end
 
   @impl true
