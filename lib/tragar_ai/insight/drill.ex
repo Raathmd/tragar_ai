@@ -313,13 +313,14 @@ defmodule TragarAi.Insight.Drill do
     end
   end
 
-  # WHERE on the `w` alias selecting a dimension's waybills within one month / on
-  # one day, mirroring the sell/buy filters. Contractor keys on the waybill's
-  # assigned contractor (w.contractor_reference); wb-grains reuse dim_filter.
+  # WHERE over the expected-cost query's aliases (`w` = fwt_waybill, `sc` =
+  # fwm_station_contractor delivery supplier), mirroring the sell/buy filters. The
+  # contractor grain keys on the delivery supplier (sc.contractor_reference — the
+  # charge-side party, matching how buy is aggregated); wb-grains reuse dim_filter.
   defp month_where("contractor", dim, y, m),
     do:
       "YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m} " <>
-        "AND w.contractor_reference = '#{escape(dim)}'"
+        "AND sc.contractor_reference = '#{escape(dim)}'"
 
   defp month_where(grain, dim, y, m),
     do:
@@ -327,7 +328,7 @@ defmodule TragarAi.Insight.Drill do
         dim_filter(grain, dim, "w.")
 
   defp day_where("contractor", dim, iso),
-    do: "w.waybill_date = '#{iso}' AND w.contractor_reference = '#{escape(dim)}'"
+    do: "w.waybill_date = '#{iso}' AND sc.contractor_reference = '#{escape(dim)}'"
 
   defp day_where(grain, dim, iso),
     do: "w.waybill_date = '#{iso}'" <> dim_filter(grain, dim, "w.")
