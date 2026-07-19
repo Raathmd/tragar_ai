@@ -7,11 +7,14 @@ defmodule TragarAi.Insight.RateEngine do
   It is a comparison of alternatives, not a lookup of the assigned party (many
   manifests run on Tragar's own fleet, which has no rate card).
 
-  The chain, reverse-engineered + validated against the replica:
+  The chain, reverse-engineered + validated against the replica. The API's open
+  "delivery manifest" is a driver **tripsheet** (`owning_obj` = `tripsheet_obj`),
+  and its deliveries are reached through the parcel tables:
 
-      manifest (fwt_manifest.manifest_reference)
-        → its waybills            (fwt_waybill_allocation → fwt_waybill)
-        → each destination        (fwt_waybill.consignee_postcode_obj)
+      tripsheet (fwt_tripsheet, tripsheet_obj = API owning_obj)
+        → its parcels             (fwt_parcel_tripsheet.tripsheet_obj)
+        → each parcel's waybill    (fwt_waybill_parcel → fwt_waybill)
+        → each destination         (fwt_waybill.consignee_postcode_obj)
         → that supplier's area     (fwc_rate_area_postcode, FWMSC + owning_obj = supplier)
         → that supplier's rate     (fwm_entity_rate, FWMSC, to_rate_area = area, effective)
         → weight band              (fwm_rate_table, from_unit ≤ chargable_units < to_unit)
@@ -96,10 +99,11 @@ defmodule TragarAi.Insight.RateEngine do
 
   # --- query --------------------------------------------------------------
 
-  # Raw per-(waybill, supplier, effective-version, band) rows for one manifest.
-  # Kept a plain SELECT; the Elixir side dedups/prices. `to_rate_area` keying and
-  # owning_obj = supplier were both confirmed against the replica. `obj` is a bare
-  # integer (validated by sanitize_obj), compared to the numeric manifest_obj.
+  # Raw per-(waybill, supplier, effective-version, band) rows for one tripsheet
+  # (the API delivery manifest). Kept a plain SELECT; the Elixir side dedups and
+  # prices. A tripsheet's waybills come via its parcels; the same waybill can be
+  # on several parcels, so the Elixir grouping by waybill_obj dedups it. `obj` is
+  # a bare integer (validated by sanitize_obj), compared to numeric tripsheet_obj.
   defp rows_sql(obj) do
     today = Date.utc_today() |> Date.to_iso8601()
 
@@ -107,9 +111,9 @@ defmodule TragarAi.Insight.RateEngine do
     SELECT c.contractor_reference AS supplier_ref, c.contractor_name AS supplier_name, \
     w.waybill_obj, w.chargable_units, er.effective_date, rt.from_unit, rt.base_amount, \
     rt.increment_amount, rt.increment_unit \
-    FROM PUB.fwt_manifest m \
-    JOIN PUB.fwt_waybill_allocation a ON a.manifest_obj = m.manifest_obj \
-    JOIN PUB.fwt_waybill w ON w.waybill_obj = a.waybill_obj \
+    FROM PUB.fwt_parcel_tripsheet pt \
+    JOIN PUB.fwt_waybill_parcel wp ON wp.waybill_parcel_obj = pt.waybill_parcel_obj \
+    JOIN PUB.fwt_waybill w ON w.waybill_obj = wp.waybill_obj \
     JOIN PUB.fwc_rate_area_postcode pc ON pc.postcode_obj = w.consignee_postcode_obj \
     AND pc.owning_entity_mnemonic = 'FWMSC' \
     JOIN PUB.fwm_station_contractor c ON c.station_contractor_obj = pc.owning_obj \
@@ -118,7 +122,7 @@ defmodule TragarAi.Insight.RateEngine do
     AND (er.cease_date IS NULL OR er.cease_date >= '#{today}') \
     JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
-    WHERE m.manifest_obj = #{obj}
+    WHERE pt.tripsheet_obj = #{obj}
     """
   end
 
