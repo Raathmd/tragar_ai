@@ -28,19 +28,22 @@ defmodule TragarAi.Insight.RateEngine do
   alias TragarAi.Insight.Db
 
   @doc """
-  Rank candidate 3rd-party suppliers for `manifest_reference` (the FreightWare
-  delivery-manifest number, e.g. "JHB-00016037") by total expected cost across
-  its waybills, cheapest first. Returns `{:ok, [row]}` where each row is:
+  Rank candidate 3rd-party suppliers for a manifest, keyed by its numeric
+  `manifest_obj` (the FreightWare API's `owning_obj`), by total expected cost
+  across its waybills, cheapest first. Returns `{:ok, [row]}` where each row is:
 
       %{supplier_ref, supplier_name, waybills_priced, total_expected}
 
   `waybills_priced` is how many of the manifest's waybills that supplier can
   cover — a full alternative covers them all; a partial one covers fewer.
+
+  Keyed on `manifest_obj` (not the reference string) because the API's delivery-
+  manifest number and `fwt_manifest.manifest_reference` are different identifiers.
   """
   @spec rank_manifest_suppliers(String.t()) :: {:ok, [map()]} | {:error, term()}
-  def rank_manifest_suppliers(manifest_reference) when is_binary(manifest_reference) do
-    with {:ok, ref} <- sanitize(manifest_reference),
-         {:ok, rows} <- Db.query_rows(rows_sql(ref)) do
+  def rank_manifest_suppliers(manifest_obj) when is_binary(manifest_obj) do
+    with {:ok, obj} <- sanitize_obj(manifest_obj),
+         {:ok, rows} <- Db.query_rows(rows_sql(obj)) do
       {:ok, rank(rows)}
     end
   end
@@ -95,8 +98,9 @@ defmodule TragarAi.Insight.RateEngine do
 
   # Raw per-(waybill, supplier, effective-version, band) rows for one manifest.
   # Kept a plain SELECT; the Elixir side dedups/prices. `to_rate_area` keying and
-  # owning_obj = supplier were both confirmed against the replica.
-  defp rows_sql(ref) do
+  # owning_obj = supplier were both confirmed against the replica. `obj` is a bare
+  # integer (validated by sanitize_obj), compared to the numeric manifest_obj.
+  defp rows_sql(obj) do
     today = Date.utc_today() |> Date.to_iso8601()
 
     """
@@ -114,17 +118,17 @@ defmodule TragarAi.Insight.RateEngine do
     AND (er.cease_date IS NULL OR er.cease_date >= '#{today}') \
     JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
-    WHERE m.manifest_reference = '#{ref}'
+    WHERE m.manifest_obj = #{obj}
     """
   end
 
-  # The manifest reference comes from the FreightWare API; allow only the safe
-  # characters a manifest number uses, so it can't break out of the literal.
-  defp sanitize(ref) do
-    trimmed = String.trim(ref)
+  # `owning_obj` comes from the API as a number (sometimes "12345.0"); take the
+  # integer part and allow digits only, so it's a safe bare numeric literal.
+  defp sanitize_obj(obj) do
+    digits = obj |> to_string() |> String.trim() |> String.split(".") |> List.first()
 
-    if trimmed != "" and String.match?(trimmed, ~r/^[A-Za-z0-9._\/-]{1,40}$/),
-      do: {:ok, trimmed},
-      else: {:error, :invalid_manifest_reference}
+    if String.match?(digits, ~r/^[0-9]{1,20}$/),
+      do: {:ok, digits},
+      else: {:error, :invalid_manifest_obj}
   end
 end
