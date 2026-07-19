@@ -82,14 +82,15 @@ defmodule TragarAiWeb.SupplierOpsLive do
   # (live from the FreightWare rate card). On-demand per manifest — the join is
   # heavy, so we never price every manifest up front.
   @impl true
-  def handle_event("rank_manifest", %{"ref" => ref}, socket) do
-    Logger.info("[supplier_ops] rank_manifest fired ref=#{inspect(ref)}")
+  def handle_event("rank_manifest", %{"obj" => obj, "ref" => ref}, socket) do
+    Logger.info("[supplier_ops] rank_manifest fired ref=#{inspect(ref)} obj=#{inspect(obj)}")
     # The rate join is heavy; run it off the LiveView process so the UI shows a
-    # loading state immediately instead of blocking until it returns.
+    # loading state immediately instead of blocking until it returns. Keyed on the
+    # numeric manifest_obj (API owning_obj), not the reference string.
     socket =
       socket
       |> assign(ranking_ref: ref, ranking: nil, ranking_error: nil, ranking_loading: true)
-      |> start_async(:rank, fn -> RateEngine.rank_manifest_suppliers(ref) end)
+      |> start_async(:rank, fn -> RateEngine.rank_manifest_suppliers(obj) end)
 
     {:noreply, socket}
   end
@@ -178,6 +179,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
               <td class="text-right">
                 <button
                   phx-click="rank_manifest"
+                  phx-value-obj={m["owning_obj"]}
                   phx-value-ref={m["manifest_number"]}
                   class="btn btn-ghost btn-xs"
                 >
