@@ -249,7 +249,10 @@ defmodule TragarAiWeb.SupplierOpsLive do
                       No 3rd party has a rate covering this manifest's deliveries.
                     </p>
 
-                    <table :if={@ranking not in [nil, []]} class="table table-xs w-full rounded bg-base-100">
+                    <table
+                      :if={@ranking not in [nil, []]}
+                      class="table table-xs w-full rounded bg-base-100"
+                    >
                       <thead>
                         <tr>
                           <th>#</th>
@@ -272,7 +275,9 @@ defmodule TragarAiWeb.SupplierOpsLive do
                             >
                               assigned
                             </span>
-                            <span :if={i == 1} class="badge badge-success badge-xs ml-1">cheapest</span>
+                            <span :if={i == 1} class="badge badge-success badge-xs ml-1">
+                              cheapest
+                            </span>
                           </td>
                           <td class="text-right">{r.waybills_priced}</td>
                           <td class="text-right font-mono">
