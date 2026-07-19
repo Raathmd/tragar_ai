@@ -63,7 +63,8 @@ defmodule TragarAi.Accounts do
     %{key: "margin_users", label: "Access admin", path: "/margin/users"},
     %{key: "settings", label: "Settings", path: "/settings"},
     %{key: "architecture", label: "Architecture", path: "/architecture"},
-    %{key: "inspect", label: "DB inspect", path: "/_inspect"}
+    %{key: "inspect", label: "DB inspect", path: "/_inspect"},
+    %{key: "reconcile", label: "Reconcile (buy/sell verify)", path: "/reconcile"}
   ]
 
   @doc "All gated pages as `%{key, label, path}` in landing-preference order."

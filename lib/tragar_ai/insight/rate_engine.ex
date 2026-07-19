@@ -93,6 +93,7 @@ defmodule TragarAi.Insight.RateEngine do
           # latest-effective SCFUEL % for the multiplier, across the group.
           base_row = Enum.max_by(wb_rows, &(&1["effective_date"] || ""))
           base = waybill_cost(base_row)
+          mult = fuel_multiplier(wb_rows)
 
           %{
             waybill_obj: wb,
@@ -100,7 +101,20 @@ defmodule TragarAi.Insight.RateEngine do
             account_name: base_row["account_name"],
             rate_area_to_code: base_row["rate_area_to_code"],
             contractor_reference: base_row["contractor_reference"],
-            expected: Float.round(base * fuel_multiplier(wb_rows), 2)
+            expected: Float.round(base * mult, 2),
+            # Per-term breakdown for the reconciliation console (every component of
+            # the quote exposed, incl. the still-pending sundry term at 0).
+            components: %{
+              chargable_units: num(base_row["chargable_units"]),
+              from_unit: num(base_row["from_unit"]),
+              minimum: num(base_row["base_amount"]),
+              increment_amount: num(base_row["increment_amount"]),
+              increment_unit: num(base_row["increment_unit"]),
+              base_subtotal: Float.round(base, 2),
+              fuel_percent: Float.round((mult - 1.0) * 100, 2),
+              fuel_multiplier: mult,
+              sundry: 0.0
+            }
           }
         end)
 
