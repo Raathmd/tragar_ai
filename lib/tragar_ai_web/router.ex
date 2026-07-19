@@ -98,6 +98,14 @@ defmodule TragarAiWeb.Router do
       live "/_inspect", InspectLive
     end
 
+    # Buy/sell verification console — documents the calc methodology and reconciles
+    # our code figures against FreightWare (live API for sell; recorded charges in
+    # the replica for buy, which the API does not expose). Management correctness check.
+    live_session :page_reconcile,
+      on_mount: [{TragarAiWeb.UserAuth, {:require_page, :reconcile}}] do
+      live "/reconcile", ReconcileLive
+    end
+
     # Force a FreightWare login (nav "Log in" button when there's no token).
     post "/fw/login", FreightWareController, :login
   end

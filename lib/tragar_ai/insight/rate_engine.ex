@@ -55,26 +55,31 @@ defmodule TragarAi.Insight.RateEngine do
   end
 
   @doc """
-  Expected delivery cost **per waybill**, each priced against its OWN assigned
-  contractor's rate card — i.e. what the party that actually carried the waybill
-  *should* have charged, per the live card. This is the "buy expected" the margin
-  report compares against the booked "buy actual".
+  Expected delivery cost **per waybill**, priced against the waybill's actual
+  DELIVERY supplier — the 3rd party pulled from its contractor charges (not the
+  often-blank `fwt_waybill.contractor_reference` header), self-selected as the one
+  whose rate area covers the consignee postcode. This is the base rate-card "buy
+  expected" the margin report shows beside the booked "buy actual".
 
-  `where_sql` is a SQL predicate on the `w` alias of `PUB.fwt_waybill` that
-  selects the waybills to price (e.g. `"w.waybill_date = '2026-07-01'"` or a
-  month + dimension filter). The caller owns escaping its values — the rate joins
-  and formula are fixed here.
+  `where_sql` is a SQL predicate over the query's aliases — `w` (`PUB.fwt_waybill`)
+  and `sc` (`PUB.fwm_station_contractor`, the delivery supplier) — that selects
+  the waybills to price (e.g. `"w.waybill_date = '2026-07-01'"`, or a month +
+  dimension filter, or `"sc.contractor_reference = 'ITT001'"` for one supplier).
+  The caller owns escaping its values — the rate joins and formula are fixed here.
 
-  Returns `{:ok, [row]}` with one row per waybill whose assigned contractor has a
+  Returns `{:ok, [row]}` with one row per waybill whose delivery supplier has a
   current 3rd-party rate covering its destination:
 
       %{waybill_obj, waybill_date, account_name, rate_area_to_code,
         contractor_reference, expected}
 
-  Waybills on own-fleet (no rate card) simply don't appear — so at aggregate
-  grains the sum is a partial-coverage figure, not a like-for-like total against
-  actual. Priced in Elixir (latest-effective pick + formula) exactly like
-  `rank_manifest_suppliers/1`, keeping the SQL a plain SELECT.
+  The price is `base rate × (1 + SCFUEL%)` — the base rate card plus the supplier's
+  effective-dated fuel surcharge. Destination sundry surcharges (area / township /
+  line-haul via `fwm_sundry_postcode`) are NOT yet folded in, and own-fleet legs /
+  suppliers without a card don't appear — so at aggregate grains the sum is still a
+  partial (base+fuel) figure, not a like-for-like total against actual. Priced in
+  Elixir (latest-effective rate band + fuel, clamped) — the SQL stays a plain
+  SELECT.
   """
   @spec assigned_expected(String.t()) :: {:ok, [map()]} | {:error, term()}
   def assigned_expected(where_sql) when is_binary(where_sql) do
@@ -83,22 +88,54 @@ defmodule TragarAi.Insight.RateEngine do
         rows
         |> Enum.group_by(&Map.get(&1, "waybill_obj"))
         |> Enum.map(fn {wb, wb_rows} ->
-          # Same waybill can match several effective versions/bands — keep the
-          # latest-effective, then price it.
-          top = Enum.max_by(wb_rows, &(&1["effective_date"] || ""))
+          # Base and fuel version independently: the charge/rate/fuel joins fan
+          # out, so pick the latest-effective rate band for the base and the
+          # latest-effective SCFUEL % for the multiplier, across the group.
+          base_row = Enum.max_by(wb_rows, &(&1["effective_date"] || ""))
+          base = waybill_cost(base_row)
+          mult = fuel_multiplier(wb_rows)
 
           %{
             waybill_obj: wb,
-            waybill_date: top["waybill_date"],
-            account_name: top["account_name"],
-            rate_area_to_code: top["rate_area_to_code"],
-            contractor_reference: top["contractor_reference"],
-            expected: top |> waybill_cost() |> Float.round(2)
+            waybill_date: base_row["waybill_date"],
+            account_name: base_row["account_name"],
+            rate_area_to_code: base_row["rate_area_to_code"],
+            contractor_reference: base_row["contractor_reference"],
+            expected: Float.round(base * mult, 2),
+            # Per-term breakdown for the reconciliation console (every component of
+            # the quote exposed, incl. the still-pending sundry term at 0).
+            components: %{
+              chargable_units: num(base_row["chargable_units"]),
+              from_unit: num(base_row["from_unit"]),
+              minimum: num(base_row["base_amount"]),
+              increment_amount: num(base_row["increment_amount"]),
+              increment_unit: num(base_row["increment_unit"]),
+              base_subtotal: Float.round(base, 2),
+              fuel_percent: Float.round((mult - 1.0) * 100, 2),
+              fuel_multiplier: mult,
+              sundry: 0.0
+            }
           }
         end)
 
       {:ok, priced}
     end
+  end
+
+  # SCFUEL fuel surcharge as a multiplier on the base subtotal: 1 + pct/100, using
+  # the waybill supplier's latest-effective percent (LEFT JOIN, so no fuel row →
+  # ×1.0). Clamped to a sane band — fwm_charge carries junk config percents
+  # (-9 to 313) that would otherwise blow up a supplier's expected cost.
+  @fuel_pct_min 0.0
+  @fuel_pct_max 50.0
+  defp fuel_multiplier(wb_rows) do
+    pct =
+      case Enum.reject(wb_rows, &(&1["fuel_percent"] in [nil, ""])) do
+        [] -> 0.0
+        fueled -> fueled |> Enum.max_by(&(&1["fuel_effective"] || "")) |> Map.get("fuel_percent") |> num()
+      end
+
+    1.0 + max(@fuel_pct_min, min(pct, @fuel_pct_max)) / 100.0
   end
 
   # --- ranking ------------------------------------------------------------
@@ -182,28 +219,39 @@ defmodule TragarAi.Insight.RateEngine do
   end
 
   # Raw per-(waybill, effective-version, band) rate rows for the waybills matched
-  # by `where_sql`, priced against each waybill's OWN assigned contractor — the
-  # rate area/rate is pinned to that contractor via
-  # `c.contractor_reference = w.contractor_reference`, so a waybill only prices if
-  # the party that carried it has a current 3rd-party card covering its
-  # destination. The Elixir side dedups by waybill (latest effective) and prices.
+  # by `where_sql`, priced against each waybill's actual DELIVERY supplier.
+  #
+  # The supplier comes from the waybill's contractor charges
+  # (fwt_contractor_charge -> fwm_station_contractor), NOT the fwt_waybill
+  # .contractor_reference header — that header is blank on ~70% of waybills, so
+  # keying on it dropped most real 3rd-party spend. The supplier is pinned to the
+  # party whose rate area covers the consignee postcode
+  # (pc.owning_obj = sc.station_contractor_obj), which self-selects the delivery
+  # leg's supplier without having to guess the charge type. DISTINCT collapses the
+  # charge-join fan-out (a waybill can carry several charge lines for the same
+  # supplier); the Elixir side then dedups by waybill (latest effective) and prices.
   defp assigned_rows_sql(where_sql) do
     today = Date.utc_today() |> Date.to_iso8601()
 
     """
-    SELECT w.waybill_obj, w.waybill_date, w.account_name, w.rate_area_to_code, \
-    w.contractor_reference, w.chargable_units, er.effective_date, rt.from_unit, \
-    rt.base_amount, rt.increment_amount, rt.increment_unit \
+    SELECT DISTINCT w.waybill_obj, w.waybill_date, w.account_name, w.rate_area_to_code, \
+    sc.contractor_reference, w.chargable_units, er.effective_date, rt.from_unit, \
+    rt.base_amount, rt.increment_amount, rt.increment_unit, \
+    fc.charge_percent AS fuel_percent, fc.effective_date AS fuel_effective \
     FROM PUB.fwt_waybill w \
+    JOIN PUB.fwt_contractor_charge cc ON cc.waybill_obj = w.waybill_obj \
+    JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj \
     JOIN PUB.fwc_rate_area_postcode pc ON pc.postcode_obj = w.consignee_postcode_obj \
-    AND pc.owning_entity_mnemonic = 'FWMSC' \
-    JOIN PUB.fwm_station_contractor c ON c.station_contractor_obj = pc.owning_obj \
-    AND c.contractor_reference = w.contractor_reference \
+    AND pc.owning_entity_mnemonic = 'FWMSC' AND pc.owning_obj = sc.station_contractor_obj \
     JOIN PUB.fwm_entity_rate er ON er.owning_entity_mnemonic = 'FWMSC' \
     AND er.owning_obj = pc.owning_obj AND er.to_rate_area_obj = pc.rate_area_obj \
     AND (er.cease_date IS NULL OR er.cease_date >= '#{today}') \
     JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
+    LEFT JOIN PUB.fwm_charge fc ON fc.owning_entity_mnemonic = 'FWMSC' \
+    AND fc.owning_obj = sc.station_contractor_obj AND fc.charge_code = 'SCFUEL' \
+    AND fc.effective_date <= '#{today}' \
+    AND (fc.effective_until_date IS NULL OR fc.effective_until_date >= '#{today}') \
     WHERE #{where_sql}
     """
   end

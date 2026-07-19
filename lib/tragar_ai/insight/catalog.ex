@@ -43,4 +43,47 @@ defmodule TragarAi.Insight.Catalog do
   @doc "Find a catalog entry by id, or nil."
   @spec fetch(String.t()) :: map() | nil
   def fetch(id), do: Enum.find(load(), &(&1.id == id))
+
+  @doc """
+  Delete the catalog entry with the given id and rewrite the JSON file. Ids match
+  `load/0`'s (explicit `"id"`, else positional index), so pass the id the console
+  rendered. Deleting a missing id is a no-op `:ok`. A missing catalog file is also
+  `:ok` (nothing to delete). Only touches the query definitions — still never
+  reads results.
+  """
+  @spec delete(String.t()) :: :ok | {:error, term()}
+  def delete(id) do
+    case File.read(path()) do
+      {:ok, body} ->
+        case Jason.decode(body) do
+          {:ok, list} when is_list(list) -> list |> without(id) |> write()
+          _ -> {:error, :invalid_catalog}
+        end
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Drop the entry whose id (explicit or positional) matches, mirroring load/0's
+  # valid-entry filter + index derivation so the id the UI passes lines up.
+  defp without(list, id) do
+    list
+    |> Enum.filter(&(is_map(&1) and is_binary(&1["sql"])))
+    |> Enum.with_index()
+    |> Enum.reject(fn {q, i} -> to_string(q["id"] || i) == to_string(id) end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp write(list) do
+    file = path()
+
+    with :ok <- File.mkdir_p(Path.dirname(file)),
+         {:ok, json} <- Jason.encode(list, pretty: true) do
+      File.write(file, json)
+    end
+  end
 end
