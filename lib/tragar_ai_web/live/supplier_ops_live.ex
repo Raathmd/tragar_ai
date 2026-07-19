@@ -195,7 +195,9 @@ defmodule TragarAiWeb.SupplierOpsLive do
               <td>{i}</td>
               <td>{r.supplier_name || r.supplier_ref}</td>
               <td class="text-right">{r.waybills_priced}</td>
-              <td class="text-right font-mono">R{:erlang.float_to_binary(r.total_expected, decimals: 2)}</td>
+              <td class="text-right font-mono">
+                R{:erlang.float_to_binary(r.total_expected, decimals: 2)}
+              </td>
             </tr>
           </tbody>
         </table>
