@@ -73,12 +73,13 @@ defmodule TragarAi.Insight.RateEngine do
       %{waybill_obj, waybill_date, account_name, rate_area_to_code,
         contractor_reference, expected}
 
-  Own-fleet legs and waybills whose supplier has no card simply don't appear, and
-  the price is the base rate card only (surcharges / collection / line-haul legs
-  live in the actual charges but not here) — so at aggregate grains the sum is a
-  partial, base-rate figure, not a like-for-like total against actual. Priced in
-  Elixir (latest-effective pick + formula) like `rank_manifest_suppliers/1`,
-  keeping the SQL a plain SELECT.
+  The price is `base rate × (1 + SCFUEL%)` — the base rate card plus the supplier's
+  effective-dated fuel surcharge. Destination sundry surcharges (area / township /
+  line-haul via `fwm_sundry_postcode`) are NOT yet folded in, and own-fleet legs /
+  suppliers without a card don't appear — so at aggregate grains the sum is still a
+  partial (base+fuel) figure, not a like-for-like total against actual. Priced in
+  Elixir (latest-effective rate band + fuel, clamped) — the SQL stays a plain
+  SELECT.
   """
   @spec assigned_expected(String.t()) :: {:ok, [map()]} | {:error, term()}
   def assigned_expected(where_sql) when is_binary(where_sql) do
@@ -87,22 +88,40 @@ defmodule TragarAi.Insight.RateEngine do
         rows
         |> Enum.group_by(&Map.get(&1, "waybill_obj"))
         |> Enum.map(fn {wb, wb_rows} ->
-          # Same waybill can match several effective versions/bands — keep the
-          # latest-effective, then price it.
-          top = Enum.max_by(wb_rows, &(&1["effective_date"] || ""))
+          # Base and fuel version independently: the charge/rate/fuel joins fan
+          # out, so pick the latest-effective rate band for the base and the
+          # latest-effective SCFUEL % for the multiplier, across the group.
+          base_row = Enum.max_by(wb_rows, &(&1["effective_date"] || ""))
+          base = waybill_cost(base_row)
 
           %{
             waybill_obj: wb,
-            waybill_date: top["waybill_date"],
-            account_name: top["account_name"],
-            rate_area_to_code: top["rate_area_to_code"],
-            contractor_reference: top["contractor_reference"],
-            expected: top |> waybill_cost() |> Float.round(2)
+            waybill_date: base_row["waybill_date"],
+            account_name: base_row["account_name"],
+            rate_area_to_code: base_row["rate_area_to_code"],
+            contractor_reference: base_row["contractor_reference"],
+            expected: Float.round(base * fuel_multiplier(wb_rows), 2)
           }
         end)
 
       {:ok, priced}
     end
+  end
+
+  # SCFUEL fuel surcharge as a multiplier on the base subtotal: 1 + pct/100, using
+  # the waybill supplier's latest-effective percent (LEFT JOIN, so no fuel row →
+  # ×1.0). Clamped to a sane band — fwm_charge carries junk config percents
+  # (-9 to 313) that would otherwise blow up a supplier's expected cost.
+  @fuel_pct_min 0.0
+  @fuel_pct_max 50.0
+  defp fuel_multiplier(wb_rows) do
+    pct =
+      case Enum.reject(wb_rows, &(&1["fuel_percent"] in [nil, ""])) do
+        [] -> 0.0
+        fueled -> fueled |> Enum.max_by(&(&1["fuel_effective"] || "")) |> Map.get("fuel_percent") |> num()
+      end
+
+    1.0 + max(@fuel_pct_min, min(pct, @fuel_pct_max)) / 100.0
   end
 
   # --- ranking ------------------------------------------------------------
@@ -203,7 +222,8 @@ defmodule TragarAi.Insight.RateEngine do
     """
     SELECT DISTINCT w.waybill_obj, w.waybill_date, w.account_name, w.rate_area_to_code, \
     sc.contractor_reference, w.chargable_units, er.effective_date, rt.from_unit, \
-    rt.base_amount, rt.increment_amount, rt.increment_unit \
+    rt.base_amount, rt.increment_amount, rt.increment_unit, \
+    fc.charge_percent AS fuel_percent, fc.effective_date AS fuel_effective \
     FROM PUB.fwt_waybill w \
     JOIN PUB.fwt_contractor_charge cc ON cc.waybill_obj = w.waybill_obj \
     JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj \
@@ -214,6 +234,10 @@ defmodule TragarAi.Insight.RateEngine do
     AND (er.cease_date IS NULL OR er.cease_date >= '#{today}') \
     JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
+    LEFT JOIN PUB.fwm_charge fc ON fc.owning_entity_mnemonic = 'FWMSC' \
+    AND fc.owning_obj = sc.station_contractor_obj AND fc.charge_code = 'SCFUEL' \
+    AND fc.effective_date <= '#{today}' \
+    AND (fc.effective_until_date IS NULL OR fc.effective_until_date >= '#{today}') \
     WHERE #{where_sql}
     """
   end
