@@ -91,20 +91,6 @@ defmodule TragarAiWeb.SupplierOpsLive do
     {:noreply, socket}
   end
 
-  @impl true
-  def handle_async(:rank, {:ok, {:ok, ranking}}, socket) do
-    {:noreply, assign(socket, ranking: ranking, ranking_error: nil, ranking_loading: false)}
-  end
-
-  def handle_async(:rank, {:ok, {:error, reason}}, socket) do
-    {:noreply, assign(socket, ranking_error: inspect(reason), ranking_loading: false)}
-  end
-
-  def handle_async(:rank, {:exit, reason}, socket) do
-    {:noreply,
-     assign(socket, ranking_error: "pricing crashed: #{inspect(reason)}", ranking_loading: false)}
-  end
-
   def handle_event("refresh_manifests", _params, socket) do
     {:noreply, load_manifests(socket)}
   end
@@ -120,6 +106,20 @@ defmodule TragarAiWeb.SupplierOpsLive do
 
   def handle_event("rank", _params, socket) do
     {:noreply, put_flash(socket, :error, "Pick both an origin and a destination rate area.")}
+  end
+
+  @impl true
+  def handle_async(:rank, {:ok, {:ok, ranking}}, socket) do
+    {:noreply, assign(socket, ranking: ranking, ranking_error: nil, ranking_loading: false)}
+  end
+
+  def handle_async(:rank, {:ok, {:error, reason}}, socket) do
+    {:noreply, assign(socket, ranking_error: inspect(reason), ranking_loading: false)}
+  end
+
+  def handle_async(:rank, {:exit, reason}, socket) do
+    {:noreply,
+     assign(socket, ranking_error: "pricing crashed: #{inspect(reason)}", ranking_loading: false)}
   end
 
   @impl true
