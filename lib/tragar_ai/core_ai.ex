@@ -60,12 +60,12 @@ defmodule TragarAi.CoreAI do
   # FIRST request's intent/entities mirrored at the top level for backward
   # compatibility (single-intent callers and tests read `:intent`/`:entities`).
   defp finalize(triples, question) do
-    requests =
-      triples
-      |> Enum.map(fn {name, args, scope} ->
+    model_requests =
+      Enum.map(triples, fn {name, args, scope} ->
         %{intent: constrain_intent(name), entities: atomize_entities(args), scope: scope}
       end)
-      |> Enum.uniq()
+
+    requests = Enum.uniq(model_requests ++ candidate_requests(question, model_requests))
 
     requests =
       if requests == [], do: [%{intent: :unknown, entities: %{}, scope: "one"}], else: requests
@@ -80,6 +80,44 @@ defmodule TragarAi.CoreAI do
       raw: question
     }
   end
+
+  # Interpret's job is to surface EVERY alphanumeric reference candidate in the text,
+  # not just the model's single pick (qwen can latch onto a phone-number fragment and
+  # miss the real waybill). Deterministically scan the question — which already includes
+  # CSV/PDF attachment text via `Assist.Extract` — and add each candidate as a waybill
+  # probe. NO cap: a ticket may attach a long list of waybills and every one must be
+  # probed (the fan-out gathers facts for each and drops the ones that resolve to
+  # nothing; its concurrency is bounded, not the candidate count). Gated to
+  # shipment/unknown turns so a stray number in a quote/account turn can't hijack routing.
+  @reference_re ~r/\b([A-Z]{2,4}-?\d{4,}[A-Z0-9-]*|\d{4,}[A-Z]{0,4})\b/i
+  @candidate_intents [:load_status, :eta, :pod, :track, :route, :waybill_lookup, :unknown]
+
+  defp candidate_requests(question, model_requests) when is_binary(question) do
+    if candidate_turn?(model_requests) do
+      already =
+        model_requests
+        |> Enum.flat_map(fn r -> [r.entities[:waybill], r.entities[:quote]] end)
+        |> Enum.filter(&is_binary/1)
+        |> Enum.map(&String.upcase/1)
+        |> MapSet.new()
+
+      @reference_re
+      |> Regex.scan(question, capture: :all_but_first)
+      |> Enum.map(fn [m] -> String.upcase(m) end)
+      |> Enum.uniq()
+      |> Enum.reject(&MapSet.member?(already, &1))
+      |> Enum.map(&%{intent: :load_status, entities: %{waybill: &1}, scope: "one"})
+    else
+      []
+    end
+  end
+
+  defp candidate_requests(_question, _model_requests), do: []
+
+  # Only add deterministic waybill candidates when the turn is about a shipment (or the
+  # model couldn't classify it) — never on a quote/account/service/vehicle turn.
+  defp candidate_turn?([%{intent: intent} | _]), do: intent in @candidate_intents
+  defp candidate_turn?(_), do: true
 
   # Lift a single-request map (the stub) into the `:intents` list shape.
   defp ensure_intents(%{intent: intent, entities: entities} = req) do

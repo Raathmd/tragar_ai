@@ -303,6 +303,11 @@ defmodule TragarAi.Assist.Engine do
   # results are a list, not keyed by intent.
   @gather_timeout 60_000
 
+  # Cap simultaneous source lookups. Every candidate reference IS probed (a ticket may
+  # attach a long list of waybills), but not all at once — bounded concurrency keeps the
+  # shared FreightWare session (one cached token) sane instead of firing N calls at once.
+  @gather_concurrency 8
+
   # The reference slots a bare number can be tested against, and the shipment
   # entities to probe each value across — a bare id is a waybill or a quote, so
   # this fans out over load_status/track/route (FreightWare + Vantage) AND
@@ -538,7 +543,7 @@ defmodule TragarAi.Assist.Engine do
   # outage apart from "not found", exactly as the fan-out does).
   defp step_gather(subs, context) do
     valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
-    {groups, entries, fail, _scoped_out} = gather(valid, context)
+    {groups, entries, fail, _scoped_out, _denied} = gather(valid, context)
     {groups, entries, fail}
   end
 
@@ -569,14 +574,16 @@ defmodule TragarAi.Assist.Engine do
     subs = expand_probe(values)
     interpret_entry = multi_interpret_entry(question, subs)
     valid = Enum.filter(subs, &(Validator.validate(&1) == :ok))
-    {groups, fetch_entries, fail_reason, scoped_out} = gather(valid, context)
+    {groups, fetch_entries, fail_reason, scoped_out, denied} = gather(valid, context)
     log = [interpret_entry | fetch_entries]
 
     # The value matched a waybill/quote NUMBER → surface it. Otherwise fall back to
     # testing the SAME value as the customer's own shipperReference (account-scoped).
     cond do
       groups != [] ->
-        surface_reference(question, groups, context, log)
+        # Surface the references the requester owns, and (via context) tell them
+        # about any they referenced but can't see — never silently drop those.
+        surface_reference(question, groups, Map.put(context, :denied_refs, denied), log)
 
       # The value matched a real waybill/quote by NUMBER, but it belongs to an
       # account not on this ticket. Deny by scope here — same as the sequential
@@ -709,7 +716,7 @@ defmodule TragarAi.Assist.Engine do
 
         _ ->
           subs = for n <- Enum.take(numbers, @ref_match_limit), do: waybill_sub(n)
-          {groups, fetch_entries, _fail_reason, _scoped_out} = gather(subs, context)
+          {groups, fetch_entries, _fail_reason, _scoped_out, _denied} = gather(subs, context)
           {:halt, {:matches, groups, entries ++ fetch_entries}}
       end
     end)
@@ -814,7 +821,7 @@ defmodule TragarAi.Assist.Engine do
         ])
 
       _ ->
-        {groups, fetch_entries, fail_reason, _scoped_out} = gather(valid, context)
+        {groups, fetch_entries, fail_reason, _scoped_out, _denied} = gather(valid, context)
 
         case groups do
           [] ->
@@ -891,10 +898,26 @@ defmodule TragarAi.Assist.Engine do
 
   # One harmonised entity → a flat record (consumable like any single lookup).
   # Several → a `results` list (rendered grouped by the console).
+  # When some referenced waybills belong to accounts the requester isn't linked to,
+  # we surface the ones they own and tell them the rest are withheld — never leak,
+  # never silently drop. Empty unless the fan-out flagged denied references (set on
+  # the ticket/API channel only; the console keeps everything and annotates instead).
+  defp denied_note(context) do
+    case context[:denied_refs] do
+      [_ | _] = denied ->
+        "\n\nI can't share details for #{length(denied)} of the waybills you referenced " <>
+          "(#{Enum.join(denied, ", ")}) — they belong to accounts not linked to this ticket."
+
+      _ ->
+        ""
+    end
+  end
+
   defp create_surface(question, results, context, tool_log) do
     draft =
       (results |> Enum.map(fn r -> "#{result_label(r)}\n#{r.answer}" end) |> Enum.join("\n\n")) <>
-        (scope_note(Enum.map(results, & &1.fields), context) || "")
+        (scope_note(Enum.map(results, & &1.fields), context) || "") <>
+        denied_note(context)
 
     {facts, source} =
       case results do
@@ -959,7 +982,7 @@ defmodule TragarAi.Assist.Engine do
           emit.({:source_done, r.intent, src, r.entities, ok_result?(result, context)})
           {r, src, result}
         end,
-        max_concurrency: max(length(requests), 1),
+        max_concurrency: @gather_concurrency,
         ordered: true,
         timeout: @gather_timeout,
         on_timeout: :kill_task
@@ -1010,7 +1033,13 @@ defmodule TragarAi.Assist.Engine do
           nil
       end)
 
-    {groups, fetch_entries, aggregate_failure(triples), scoped_out}
+    # Every reference we found but the requester may NOT see (their account doesn't
+    # own it) — so when we DO surface the ones they own, we can still tell them they
+    # lack access to the rest, rather than silently dropping them. Empty on the
+    # console channel (deny_out_of_scope?/2 is false there).
+    denied = denied_refs |> Enum.map(&elem(&1, 1)) |> Enum.filter(&is_binary/1) |> Enum.uniq()
+
+    {groups, fetch_entries, aggregate_failure(triples), scoped_out, denied}
   end
 
   # The most actionable failure across the gathered results, for the empty-groups
