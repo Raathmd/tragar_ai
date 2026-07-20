@@ -14,6 +14,7 @@ defmodule TragarAiWeb.SettingsLive do
     {:ok,
      assign(socket,
        strategy: SearchStrategy.get(),
+       models: ModelSetting.all(),
        model: ModelSetting.get(),
        reasoning: ModelSetting.reasoning_enabled?()
      )}
@@ -104,18 +105,12 @@ defmodule TragarAiWeb.SettingsLive do
       <section class="rounded-lg border border-base-300 p-4 space-y-3 max-w-2xl">
         <div>
           <h2 class="text-sm font-medium">Inference model</h2>
-          <p class="text-xs text-base-content/60">
-            Which model answers interpret/phrase. <span class="font-medium">Claude (cloud)</span>
-            runs on Anthropic's API (private values redacted to tokens first) and falls back to a
-            local model, then the stub, if the API is down. A local model keeps everything on the
-            box. Switching a local model loads it and unloads the other so only one stays resident.
-            Applies immediately; resets to the configured default on restart.
-          </p>
+          <p class="text-xs text-base-content/60">{model_help()}</p>
         </div>
 
         <div class="grid gap-2 sm:grid-cols-2">
           <button
-            :for={m <- ModelSetting.all()}
+            :for={m <- @models}
             type="button"
             phx-click="set_model"
             phx-value-model={m.tag}
@@ -158,5 +153,9 @@ defmodule TragarAiWeb.SettingsLive do
       </section>
     </div>
     """
+  end
+
+  defp model_help do
+    "Which local model answers interpret/phrase. The list is read live from Ollama on this box, so models you add or remove show up here. Everything runs on the box — no data leaves it. Switching loads the chosen model and unloads the others so only one stays resident. Applies immediately; resets to the configured default on restart."
   end
 end
