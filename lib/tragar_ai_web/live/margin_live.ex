@@ -189,7 +189,7 @@ defmodule TragarAiWeb.MarginLive do
     lv = self()
 
     Task.Supervisor.start_child(TragarAi.TaskSupervisor, fn ->
-      TragarAi.CoreAI.reason(prompt, %{}, fn chunk -> send(lv, {:ai_chunk, chunk}) end)
+      TragarAi.CoreAI.reason(english_only(prompt), %{}, fn chunk -> send(lv, {:ai_chunk, chunk}) end)
       send(lv, :ai_done)
     end)
 
@@ -198,6 +198,10 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:ai_answer, "")
     |> assign(:ai_running, true)
   end
+
+  # The local model (qwen3) sometimes drifts into another language (German has been
+  # seen) on the freight narrative — pin every margin explanation to English.
+  defp english_only(prompt), do: prompt <> "\n\nAnswer in English only."
 
   defp month_prompt(nil), do: "No data for that month."
 
