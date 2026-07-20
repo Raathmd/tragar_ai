@@ -29,8 +29,6 @@ defmodule TragarAi.CoreAI do
 
   require Logger
 
-  alias TragarAi.CoreAI.Redact
-
   @type request :: %{intent: atom(), entities: map(), raw: String.t()}
 
   @doc "Interpret a free-form question into a structured request."
@@ -39,10 +37,7 @@ defmodule TragarAi.CoreAI do
     case mode() do
       :ollama ->
         with_fallbacks(
-          order(
-            [fn -> ollama_interpret(question, context) end],
-            cloud_interpret_attempts(question, context)
-          ),
+          [fn -> ollama_interpret(question, context) end],
           fn -> {:ok, ensure_intents(__MODULE__.Stub.interpret(question, context))} end,
           "interpret"
         )
@@ -99,10 +94,7 @@ defmodule TragarAi.CoreAI do
     case mode() do
       :ollama ->
         with_fallbacks(
-          order(
-            [fn -> ollama_phrase(intent, facts, context, on_chunk) end],
-            cloud_phrase_attempts(intent, facts, context, on_chunk)
-          ),
+          [fn -> ollama_phrase(intent, facts, context, on_chunk) end],
           fn -> single_chunk(__MODULE__.Stub.phrase(intent, facts, context), on_chunk) end,
           "phrase"
         )
@@ -129,10 +121,7 @@ defmodule TragarAi.CoreAI do
         facts = clarify_facts(reason)
 
         with_fallbacks(
-          order(
-            [fn -> ollama_phrase(:clarify, facts, %{}, nil) end],
-            cloud_phrase_attempts(:clarify, facts, %{}, nil)
-          ),
+          [fn -> ollama_phrase(:clarify, facts, %{}, nil) end],
           fn -> {:ok, __MODULE__.Stub.clarify(reason)} end,
           "clarify"
         )
@@ -158,10 +147,7 @@ defmodule TragarAi.CoreAI do
     case mode() do
       :ollama ->
         with_fallbacks(
-          order(
-            [fn -> ollama_quote_extract(transcript) end],
-            cloud_quote_extract_attempts(transcript)
-          ),
+          [fn -> ollama_quote_extract(transcript) end],
           fn -> {:ok, __MODULE__.Stub.quote_extract(transcript)} end,
           "quote_extract"
         )
@@ -195,156 +181,10 @@ defmodule TragarAi.CoreAI do
 
   # Reason fallback chain: the deep reason model first (thinking on), then the
   # fast local model, before ever using the stub — so a flaky/unavailable 30B
-  # degrades to the 14B's answer, not a canned rule-based reply. (Cloud models,
-  # when configured, slot in here ahead of the stub.)
+  # degrades to the 14B's answer, not a canned rule-based reply.
   defp reason_attempts(question, context, on_chunk) do
     models = Enum.uniq([active_reason_model(), ollama_model()])
-    local = for m <- models, do: fn -> ollama_reason(question, context, on_chunk, m) end
-    order(local, cloud_reason_attempts(question, context, on_chunk))
-  end
-
-  # ── Cloud tier (Claude, redacted) ────────────────────────────────────────────
-  # Claude can serve either as the PRIMARY engine (when the active model's provider
-  # is :cloud — the "Claude" setting) or as a FALLBACK behind the local model
-  # (when a Qwen model is active). `order/2` decides which by putting the cloud
-  # attempts first or last. Either way the cloud attempts are only present when the
-  # tier is enabled. Sensitive values are redacted to [[N]] tokens before the
-  # request and rehydrated before the answer is returned — Anthropic sees only
-  # tokens.
-
-  # Cloud-first when the operator selected Claude and the tier is usable; otherwise
-  # local-first with cloud as a trailing fallback.
-  defp order(local, cloud) do
-    if use_cloud?(), do: cloud ++ local, else: local ++ cloud
-  end
-
-  defp use_cloud?,
-    do: TragarAi.CoreAI.ModelSetting.cloud?() and __MODULE__.Cloud.enabled?()
-
-  defp cloud_interpret_attempts(question, context) do
-    if __MODULE__.Cloud.enabled?(),
-      do: [fn -> cloud_interpret(question, context) end],
-      else: []
-  end
-
-  defp cloud_phrase_attempts(intent, facts, context, on_chunk) do
-    if __MODULE__.Cloud.enabled?(),
-      do: [fn -> cloud_phrase(intent, facts, context, on_chunk) end],
-      else: []
-  end
-
-  defp cloud_reason_attempts(question, context, on_chunk) do
-    if __MODULE__.Cloud.enabled?(),
-      do: [fn -> cloud_reason(question, context, on_chunk) end],
-      else: []
-  end
-
-  defp cloud_quote_extract_attempts(transcript) do
-    if __MODULE__.Cloud.enabled?(),
-      do: [fn -> cloud_quote_extract(transcript) end],
-      else: []
-  end
-
-  defp cloud_interpret(question, context) do
-    map = redact_map(question, %{}, Map.get(context, :entities, %{}))
-
-    with {:ok, content} <-
-           cloud_chat_redacted(
-             interpret_system_prompt(),
-             interpret_user_prompt(question, context),
-             map
-           ),
-         {:ok, body} <- Jason.decode(content) do
-      requests =
-        parse_interpret(body)
-        |> Enum.map(fn {name, args} -> {name, restore_args(args, map)} end)
-
-      {:ok, finalize(requests, question)}
-    else
-      {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
-      {:error, _} = err -> err
-    end
-  end
-
-  defp cloud_phrase(intent, facts, context, on_chunk) do
-    map = redact_map(Map.get(context, :question, ""), facts, Map.get(context, :entities, %{}))
-
-    case cloud_chat_redacted(
-           phrase_system_prompt(),
-           phrase_user_prompt(intent, facts, context),
-           map
-         ) do
-      {:ok, text} -> single_chunk(Redact.restore(clean(text), map), on_chunk)
-      {:error, _} = err -> err
-    end
-  end
-
-  defp cloud_reason(question, context, on_chunk) do
-    map = redact_map(question, %{}, Map.get(context, :entities, %{}))
-
-    case cloud_chat_redacted(
-           reason_system_prompt(),
-           interpret_user_prompt(question, context),
-           map
-         ) do
-      {:ok, text} -> single_chunk(Redact.restore(clean(text), map), on_chunk)
-      {:error, _} = err -> err
-    end
-  end
-
-  defp cloud_quote_extract(transcript) do
-    map = redact_map(transcript, %{}, %{})
-
-    with {:ok, content} <- cloud_chat_redacted(quote_extract_prompt(), transcript, map),
-         {:ok, body} <- Jason.decode(strip_think(content)) do
-      slots =
-        body
-        |> take_quote_slots()
-        |> Map.new(fn {k, v} -> {k, Redact.restore(v, map)} end)
-
-      {:ok, slots}
-    else
-      {:error, %Jason.DecodeError{} = e} -> {:error, {:bad_json, e}}
-      {:error, _} = err -> err
-    end
-  end
-
-  # Build the user prompt with REAL values, then redact the whole thing — so any
-  # secret that landed in either the question or the encoded context/facts is
-  # tokenised before it leaves the network.
-  defp cloud_chat_redacted(system, user, map) do
-    [
-      %{role: "system", content: strip_qwen_control(system) <> cloud_redaction_note()},
-      %{role: "user", content: Redact.apply(user, map)}
-    ]
-    |> __MODULE__.Cloud.chat()
-  end
-
-  # `/no_think` and `/think` are Qwen-specific control tokens. Claude is no-think by
-  # default (we never request extended thinking), so drop them from Claude-bound
-  # prompts rather than shipping meaningless directives.
-  defp strip_qwen_control(text) do
-    text
-    |> String.replace(~r{/no_think|/think}, "")
-    |> String.trim_trailing()
-  end
-
-  defp redact_map(question, facts, entities) do
-    (Redact.secrets(question, facts, entities) ++ Redact.identifiers(question))
-    |> Redact.build()
-  end
-
-  defp restore_args(args, map) when is_map(args),
-    do: Map.new(args, fn {k, v} -> {k, if(is_binary(v), do: Redact.restore(v, map), else: v)} end)
-
-  defp restore_args(args, _map), do: args
-
-  defp clean(text), do: text |> strip_think() |> String.trim()
-
-  defp cloud_redaction_note do
-    "\n\nNote: values shown as [[N]] (e.g. [[1]]) are redacted placeholders for " <>
-      "private data. Preserve every [[N]] token exactly as-is in your output — do " <>
-      "not alter, translate, drop, or invent placeholders."
+    for m <- models, do: fn -> ollama_reason(question, context, on_chunk, m) end
   end
 
   @doc "Whether the real local model is reachable (always true in stub mode)."
