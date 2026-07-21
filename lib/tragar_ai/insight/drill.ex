@@ -3,11 +3,15 @@ defmodule TragarAi.Insight.Drill do
   Row-level drill-down for the margin dashboard: from a dimension's monthly
   rollups down through days, individual waybills, and a single waybill's detail.
 
-  Months come from the `insight_rollups` warehouse (fast, offline). Days,
-  waybills, and waybill detail are **not** in the warehouse — it only stores
-  monthly grain — so they are read live from the FreightWare replica
-  (`PUB.fwt_waybill` / `fwt_contractor_charge`) through [`TragarAi.Insight.Db`],
-  one query per drill.
+  Months come from the `insight_rollups` warehouse. Day and waybill drills for the
+  waybill-keyed grains (enterprise / client / lane) are served from the
+  `insight_waybill_costs` per-waybill fact table (also warehouse, offline) for
+  historical periods, falling back to a live FreightWare query for the current /
+  not-yet-materialised tail (`live_scope?/1`). The contractor grain (charge-keyed,
+  multi-supplier — can't be rebuilt from the one-supplier-per-waybill fact table)
+  and the single-waybill detail leaf (needs the per-charge breakdown the fact table
+  doesn't store) are still read live from the replica (`PUB.fwt_waybill` /
+  `fwt_contractor_charge`) through [`TragarAi.Insight.Db`].
 
   Margin follows the dashboard convention `sell − buy` (surcharges fold into
   buy), so every level sums into the one above it. Waybill-keyed grains
@@ -39,6 +43,7 @@ defmodule TragarAi.Insight.Drill do
   alias TragarAi.Insight.Db
   alias TragarAi.Insight.RateEngine
   alias TragarAi.Insight.Rollup
+  alias TragarAi.Insight.WaybillCost
   alias TragarAi.Repo
 
   # Waybill-keyed grains filter on a column of fwt_waybill (enterprise = no
@@ -56,40 +61,19 @@ defmodule TragarAi.Insight.Drill do
     |> Enum.map(&month_row/1)
   end
 
-  # ── Day level (live FreightWare) ───────────────────────────────────────────
-  @doc "Per-day margin for a dimension within one month (live)."
+  # ── Day level (warehouse-first, live fallback) ─────────────────────────────
+  @doc """
+  Per-day margin for a dimension within one month. Served from the
+  `insight_waybill_costs` warehouse for historical months (no replica round-trip);
+  the current/future month — whose newest waybills post after the last ETL tick —
+  and any month the warehouse hasn't materialised fall back to a live query.
+  """
   @spec days(String.t(), String.t(), Date.t()) :: {:ok, [map()]} | {:error, term()}
-  def days(grain, dim, %Date{year: y, month: m}) when grain in @wb_grains do
-    sell =
-      "SELECT waybill_date AS d, COUNT(*) AS n, SUM(total_cost) AS sell " <>
-        "FROM PUB.fwt_waybill " <>
-        "WHERE YEAR(waybill_date) = #{y} AND MONTH(waybill_date) = #{m}" <>
-        dim_filter(grain, dim, "") <>
-        " GROUP BY waybill_date"
-
-    buy =
-      "SELECT w.waybill_date AS d, SUM(cc.total_charge_amount) AS buy " <>
-        "FROM PUB.fwt_contractor_charge cc " <>
-        "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
-        "WHERE YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m}" <>
-        dim_filter(grain, dim, "w.") <>
-        " GROUP BY w.waybill_date"
-
-    with {:ok, sell_rows} <- Db.query_rows(sell),
-         {:ok, buy_rows} <- Db.query_rows(buy) do
-      buys = Map.new(buy_rows, &{&1["d"], f(&1["buy"])})
-      exp = expected_by(month_where(grain, dim, y, m), & &1.waybill_date)
-
-      rows =
-        sell_rows
-        |> Enum.map(&{&1["d"], int(&1["n"]), f(&1["sell"])})
-        |> Enum.sort_by(&elem(&1, 0))
-        |> Enum.map(fn {d, n, s} ->
-          {e, priced} = Map.get(exp, d, {0.0, 0})
-          day_row(d, n, s, Map.get(buys, d, 0.0), e, max(n - priced, 0))
-        end)
-
-      {:ok, rows}
+  def days(grain, dim, %Date{year: y, month: m} = month) when grain in @wb_grains do
+    if live_scope?(month) do
+      live_days_sql(grain, dim, y, m)
+    else
+      or_live(warehouse_days(grain, dim, month), fn -> live_days_sql(grain, dim, y, m) end)
     end
   end
 
@@ -124,10 +108,219 @@ defmodule TragarAi.Insight.Drill do
     end
   end
 
-  # ── Waybill level (live FreightWare) ───────────────────────────────────────
-  @doc "Individual waybills for a dimension on one day (live)."
+  # ── Waybill level (warehouse-first, live fallback) ─────────────────────────
+  @doc """
+  Individual waybills for a dimension on one day. Warehouse-served for historical
+  days; today/future and not-yet-materialised days fall back to a live query.
+  """
   @spec waybills(String.t(), String.t(), Date.t()) :: {:ok, [map()]} | {:error, term()}
   def waybills(grain, dim, %Date{} = day) when grain in @wb_grains do
+    if live_scope?(day) do
+      live_waybills_sql(grain, dim, day)
+    else
+      or_live(warehouse_waybills(grain, dim, day), fn -> live_waybills_sql(grain, dim, day) end)
+    end
+  end
+
+  def waybills("contractor", dim, %Date{} = day) do
+    iso = Date.to_iso8601(day)
+
+    sql =
+      "SELECT w.waybill_number AS waybill_number, w.waybill_obj AS waybill_obj, " <>
+        "w.total_cost AS sell, SUM(cc.total_charge_amount) AS buy " <>
+        "FROM PUB.fwt_contractor_charge cc " <>
+        "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
+        "JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj " <>
+        "WHERE sc.contractor_reference = '#{escape(dim)}' AND w.waybill_date = '#{iso}' " <>
+        "GROUP BY w.waybill_number, w.waybill_obj, w.total_cost"
+
+    with {:ok, rows} <- Db.query_rows(sql) do
+      exp = expected_by(day_where("contractor", dim, iso), & &1.waybill_obj)
+
+      {:ok,
+       rows
+       |> Enum.map(fn r ->
+         {e, priced} = Map.get(exp, r["waybill_obj"], {0.0, 0})
+
+         wb_row(
+           r["waybill_number"],
+           r["waybill_obj"],
+           nil,
+           f(r["sell"]),
+           f(r["buy"]),
+           e,
+           (priced > 0 && 0) || 1
+         )
+       end)
+       |> Enum.sort_by(& &1.margin)}
+    end
+  end
+
+  # ── warehouse reads (insight_waybill_costs) ─────────────────────────────────
+  # Historical day/waybill drills served from the per-waybill fact table — no
+  # replica round-trip. Only the WAYBILL-KEYED grains (enterprise/client/lane) come
+  # from here; the contractor grain is charge-keyed/multi-supplier and can't be
+  # reproduced from the one-supplier-per-waybill fact table, so it stays live.
+  #
+  # `uncosted` here EXCLUDES own-fleet (no supplier to rate): the stored own_fleet
+  # flag makes the "No rate" count correct at day + waybill grain too, matching the
+  # month cascade — which the live path (fallback only) can't cheaply do.
+  defp warehouse_days(grain, dim, %Date{year: y, month: m}) do
+    {first, last} = month_bounds(y, m)
+
+    rows =
+      from(c in WaybillCost,
+        where: c.waybill_date >= ^first and c.waybill_date <= ^last,
+        group_by: c.waybill_date,
+        order_by: c.waybill_date,
+        select: %{
+          d: c.waybill_date,
+          n: count(c.waybill_obj),
+          sell: sum(c.sell),
+          buy: sum(c.buy),
+          expected: sum(coalesce(c.expected, 0)),
+          priced: sum(fragment("CASE WHEN ? THEN 1 ELSE 0 END", c.priced)),
+          own_fleet: sum(fragment("CASE WHEN ? THEN 1 ELSE 0 END", c.own_fleet))
+        }
+      )
+      |> wb_dim_filter(grain, dim)
+      |> Repo.all()
+
+    {:ok, Enum.map(rows, &wh_day_row/1)}
+  end
+
+  defp warehouse_waybills(grain, dim, %Date{} = day) do
+    rows =
+      from(c in WaybillCost,
+        where: c.waybill_date == ^day,
+        order_by: c.margin,
+        select: %{
+          number: c.waybill_number,
+          obj: c.waybill_obj,
+          sell: c.sell,
+          buy: c.buy,
+          expected: c.expected,
+          priced: c.priced,
+          own_fleet: c.own_fleet
+        }
+      )
+      |> wb_dim_filter(grain, dim)
+      |> Repo.all()
+
+    {:ok, Enum.map(rows, &wh_wb_row/1)}
+  end
+
+  defp wh_day_row(%{d: date, n: n, sell: sell, buy: buy, expected: exp, priced: p, own_fleet: of}) do
+    n = n || 0
+    s = f(sell)
+    b = f(buy)
+
+    %{
+      label: Calendar.strftime(date, "%d %a"),
+      obj: nil,
+      n: n,
+      sell: s,
+      buy: b,
+      expected: f(exp),
+      uncosted: max(n - (p || 0) - (of || 0), 0),
+      margin: s - b,
+      margin_pct: pct(s - b, s),
+      next: %{ev: "drill_day", v: Date.to_iso8601(date)}
+    }
+  end
+
+  defp wh_wb_row(%{number: num, obj: obj, sell: sell, buy: buy, expected: exp, priced: p, own_fleet: of}) do
+    s = f(sell)
+    b = f(buy)
+
+    %{
+      label: "WB #{num}",
+      obj: obj,
+      n: nil,
+      sell: s,
+      buy: b,
+      expected: f(exp),
+      # priced or own-fleet → not uncosted; only a 3rd-party waybill with no
+      # origin-area rate counts as "No rate".
+      uncosted: if(p or of, do: 0, else: 1),
+      margin: s - b,
+      margin_pct: pct(s - b, s),
+      next: %{ev: "waybill_detail", v: obj}
+    }
+  end
+
+  # Restrict a fact-table query to the drill dimension. "(unknown)" is the rollup's
+  # bucket for a blank dimension, so map it back to NULL/"" against the fact rows.
+  defp wb_dim_filter(q, "enterprise", _dim), do: q
+
+  defp wb_dim_filter(q, "client", "(unknown)"),
+    do: from(c in q, where: is_nil(c.account_name) or c.account_name == "")
+
+  defp wb_dim_filter(q, "client", dim), do: from(c in q, where: c.account_name == ^dim)
+
+  defp wb_dim_filter(q, "lane", "(unknown)"),
+    do: from(c in q, where: is_nil(c.rate_area_to_code) or c.rate_area_to_code == "")
+
+  defp wb_dim_filter(q, "lane", dim), do: from(c in q, where: c.rate_area_to_code == ^dim)
+
+  # Warehouse coverage boundary: the current month (and later) isn't reliably
+  # materialised — today's newest waybills post after the last ETL tick — so serve
+  # it live; earlier months come from the warehouse.
+  defp live_scope?(%Date{} = d) do
+    today = Date.utc_today()
+    d.year > today.year or (d.year == today.year and d.month >= today.month)
+  end
+
+  # Warehouse result unless empty or errored, else the live fallback — so a not-yet-
+  # materialised period degrades to a live query rather than a blank screen.
+  defp or_live({:ok, [_ | _]} = ok, _live), do: ok
+  defp or_live(_empty_or_error, live), do: live.()
+
+  defp month_bounds(y, m) do
+    first = Date.new!(y, m, 1)
+    {first, Date.end_of_month(first)}
+  end
+
+  # ── live fallbacks (replica) ────────────────────────────────────────────────
+  # The original live day/waybill queries — now used only for the current-month
+  # tail and unmaterialised periods. Their uncosted still counts own-fleet (the
+  # live queries don't fetch the own_fleet signal); acceptable for the fallback,
+  # exact once the period materialises into the warehouse.
+  defp live_days_sql(grain, dim, y, m) do
+    sell =
+      "SELECT waybill_date AS d, COUNT(*) AS n, SUM(total_cost) AS sell " <>
+        "FROM PUB.fwt_waybill " <>
+        "WHERE YEAR(waybill_date) = #{y} AND MONTH(waybill_date) = #{m}" <>
+        dim_filter(grain, dim, "") <>
+        " GROUP BY waybill_date"
+
+    buy =
+      "SELECT w.waybill_date AS d, SUM(cc.total_charge_amount) AS buy " <>
+        "FROM PUB.fwt_contractor_charge cc " <>
+        "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
+        "WHERE YEAR(w.waybill_date) = #{y} AND MONTH(w.waybill_date) = #{m}" <>
+        dim_filter(grain, dim, "w.") <>
+        " GROUP BY w.waybill_date"
+
+    with {:ok, sell_rows} <- Db.query_rows(sell),
+         {:ok, buy_rows} <- Db.query_rows(buy) do
+      buys = Map.new(buy_rows, &{&1["d"], f(&1["buy"])})
+      exp = expected_by(month_where(grain, dim, y, m), & &1.waybill_date)
+
+      rows =
+        sell_rows
+        |> Enum.map(&{&1["d"], int(&1["n"]), f(&1["sell"])})
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.map(fn {d, n, s} ->
+          {e, priced} = Map.get(exp, d, {0.0, 0})
+          day_row(d, n, s, Map.get(buys, d, 0.0), e, max(n - priced, 0))
+        end)
+
+      {:ok, rows}
+    end
+  end
+
+  defp live_waybills_sql(grain, dim, %Date{} = day) do
     iso = Date.to_iso8601(day)
 
     sell =
@@ -165,40 +358,6 @@ defmodule TragarAi.Insight.Drill do
         |> Enum.sort_by(& &1.margin)
 
       {:ok, rows}
-    end
-  end
-
-  def waybills("contractor", dim, %Date{} = day) do
-    iso = Date.to_iso8601(day)
-
-    sql =
-      "SELECT w.waybill_number AS waybill_number, w.waybill_obj AS waybill_obj, " <>
-        "w.total_cost AS sell, SUM(cc.total_charge_amount) AS buy " <>
-        "FROM PUB.fwt_contractor_charge cc " <>
-        "JOIN PUB.fwt_waybill w ON w.waybill_obj = cc.waybill_obj " <>
-        "JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj " <>
-        "WHERE sc.contractor_reference = '#{escape(dim)}' AND w.waybill_date = '#{iso}' " <>
-        "GROUP BY w.waybill_number, w.waybill_obj, w.total_cost"
-
-    with {:ok, rows} <- Db.query_rows(sql) do
-      exp = expected_by(day_where("contractor", dim, iso), & &1.waybill_obj)
-
-      {:ok,
-       rows
-       |> Enum.map(fn r ->
-         {e, priced} = Map.get(exp, r["waybill_obj"], {0.0, 0})
-
-         wb_row(
-           r["waybill_number"],
-           r["waybill_obj"],
-           nil,
-           f(r["sell"]),
-           f(r["buy"]),
-           e,
-           (priced > 0 && 0) || 1
-         )
-       end)
-       |> Enum.sort_by(& &1.margin)}
     end
   end
 
@@ -272,7 +431,9 @@ defmodule TragarAi.Insight.Drill do
       sell: s,
       buy: b,
       expected: f(r.expected_buy),
-      uncosted: max(wb - (r.priced_waybills || 0), 0),
+      # No-rate count: total − priced − own-fleet. Own fleet has no supplier to rate,
+      # so it isn't "uncosted"; excluding it stops the count over-reporting.
+      uncosted: max(wb - (r.priced_waybills || 0) - (r.own_fleet_waybills || 0), 0),
       margin: s - b,
       margin_pct: pct(s - b, s),
       next: %{ev: "drill_month", v: Date.to_iso8601(r.period_month)}
