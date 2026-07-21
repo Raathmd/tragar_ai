@@ -219,19 +219,26 @@ defmodule TragarAi.Insight.Backfill do
   heavier per-month pricing pass runs on demand. Prices one month at a time (never
   the whole history in one query), matching RateEngine's per-scope design.
 
-  Only updates rows that already exist, so run it AFTER the sell/buy backfill.
+  RESETS `expected_buy` + `priced_waybills` to 0 across ALL rollups first, then
+  recomputes — so a rollup that no longer prices (e.g. after the origin pin
+  narrowed coverage) can't keep a stale value. A full recompute, not an additive
+  pass; run it AFTER the sell/buy backfill (it only touches these two columns).
   Own-fleet waybills (no card) contribute nothing, so expected is partial
   coverage — comparable to actual per waybill, a floor at aggregate grains.
   Returns `{:ok, rows_updated}`.
   """
   @spec run_expected() :: {:ok, non_neg_integer()}
   def run_expected do
+    # Clear prior values so rollups the current method no longer prices don't keep
+    # a stale expected_buy/priced_waybills (only these two columns are touched).
+    {reset, _} = Repo.update_all(Rollup, set: [expected_buy: 0, priced_waybills: 0])
+
     updated =
       for y <- @from_year..@to_year, m <- 1..12, reduce: 0 do
         acc -> acc + expected_month(y, m)
       end
 
-    Logger.info("[insight.backfill] expected_buy rollups updated: #{updated}")
+    Logger.info("[insight.backfill] expected_buy reset #{reset} rows, repriced #{updated}")
     {:ok, updated}
   end
 
