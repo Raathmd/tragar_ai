@@ -188,7 +188,7 @@ defmodule TragarAi.Insight.RateEngine do
         full_coverage: total > 0 and priced == total,
         # nil = no rate could be determined for this supplier from the origin.
         determined: determined,
-        total_expected: (determined && (waybill_costs |> Enum.sum() |> Float.round(2))) || nil
+        total_expected: (determined && waybill_costs |> Enum.sum() |> Float.round(2)) || nil
       }
     end)
     # Determined suppliers first (full-coverage, then cheapest); undetermined
