@@ -229,7 +229,15 @@ defmodule TragarAi.Insight.Drill do
     }
   end
 
-  defp wh_wb_row(%{number: num, obj: obj, sell: sell, buy: buy, expected: exp, priced: p, own_fleet: of}) do
+  defp wh_wb_row(%{
+         number: num,
+         obj: obj,
+         sell: sell,
+         buy: buy,
+         expected: exp,
+         priced: p,
+         own_fleet: of
+       }) do
     s = f(sell)
     b = f(buy)
 
