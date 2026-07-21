@@ -246,14 +246,14 @@ defmodule TragarAi.Insight.Backfill do
         period = Date.new!(y, m, 1)
 
         groups = %{
-          "enterprise" => %{"all" => sum_expected(priced)},
-          "client" => sum_by(priced, & &1.account_name),
-          "lane" => sum_by(priced, & &1.rate_area_to_code),
-          "contractor" => sum_by(priced, & &1.contractor_reference)
+          "enterprise" => %{"all" => agg(priced)},
+          "client" => agg_by(priced, & &1.account_name),
+          "lane" => agg_by(priced, & &1.rate_area_to_code),
+          "contractor" => agg_by(priced, & &1.contractor_reference)
         }
 
-        for {grain, by_dim} <- groups, {dim, amt} <- by_dim, reduce: 0 do
-          acc -> acc + set_expected(period, grain, dim, amt)
+        for {grain, by_dim} <- groups, {dim, {amt, count}} <- by_dim, reduce: 0 do
+          acc -> acc + set_expected(period, grain, dim, amt, count)
         end
 
       _ ->
@@ -261,20 +261,25 @@ defmodule TragarAi.Insight.Backfill do
     end
   end
 
-  defp sum_expected(priced), do: priced |> Enum.map(& &1.expected) |> Enum.sum()
+  # {Σ expected, distinct priced waybills}. `priced` has one row per waybill
+  # (RateEngine groups by waybill_obj), so the group length is the priced-waybill
+  # count — the denominator for the drill's "uncosted" (= waybills − priced).
+  defp agg(priced), do: {priced |> Enum.map(& &1.expected) |> Enum.sum(), length(priced)}
 
-  defp sum_by(priced, key_fun) do
+  defp agg_by(priced, key_fun) do
     priced
     |> Enum.group_by(fn r -> dim_key(key_fun.(r)) end)
-    |> Map.new(fn {k, rs} -> {k, sum_expected(rs)} end)
+    |> Map.new(fn {k, rs} -> {k, agg(rs)} end)
   end
 
-  defp set_expected(period, grain, dim, amt) do
+  defp set_expected(period, grain, dim, amt, count) do
     {n, _} =
       from(r in Rollup,
         where: r.period_month == ^period and r.grain == ^grain and r.dim_key == ^dim
       )
-      |> Repo.update_all(set: [expected_buy: Decimal.from_float(Float.round(amt, 2))])
+      |> Repo.update_all(
+        set: [expected_buy: Decimal.from_float(Float.round(amt, 2)), priced_waybills: count]
+      )
 
     n
   end

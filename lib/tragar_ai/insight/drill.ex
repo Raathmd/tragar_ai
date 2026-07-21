@@ -22,7 +22,7 @@ defmodule TragarAi.Insight.Drill do
   Each level function returns **uniform** rows the LiveView renders without caring
   about the level:
 
-      %{label, obj, n, sell, buy, expected, margin, margin_pct, next}
+      %{label, obj, n, sell, buy, expected, uncosted, margin, margin_pct, next}
 
   where `next` is `%{ev, v}` (the phx event + value to drill deeper) or `nil`.
   `buy` is the booked contractor charge (buy actual); `expected` is what each
@@ -30,7 +30,9 @@ defmodule TragarAi.Insight.Drill do
   expected, via [`TragarAi.Insight.RateEngine`]). Expected only covers waybills
   whose assigned supplier has a 3rd-party card (own-fleet legs have none), so at
   rolled-up grains it is a partial-coverage figure, not a like-for-like total.
-  Live functions return `{:ok, ...}` or `{:error, reason}`.
+  `uncosted` is how many of the level's `n` waybills got NO expected (no origin-
+  area rate) — we never drop them, we count them here and color the waybill row
+  on drill-down. Live functions return `{:ok, ...}` or `{:error, reason}`.
   """
   import Ecto.Query
 
@@ -83,7 +85,8 @@ defmodule TragarAi.Insight.Drill do
         |> Enum.map(&{&1["d"], int(&1["n"]), f(&1["sell"])})
         |> Enum.sort_by(&elem(&1, 0))
         |> Enum.map(fn {d, n, s} ->
-          day_row(d, n, s, Map.get(buys, d, 0.0), Map.get(exp, d, 0.0))
+          {e, priced} = Map.get(exp, d, {0.0, 0})
+          day_row(d, n, s, Map.get(buys, d, 0.0), e, max(n - priced, 0))
         end)
 
       {:ok, rows}
@@ -114,7 +117,8 @@ defmodule TragarAi.Insight.Drill do
        |> Enum.map(fn {d, wbs} ->
          sell = wbs |> Enum.map(&f(&1["sell"])) |> Enum.sum()
          buy = wbs |> Enum.map(&f(&1["buy"])) |> Enum.sum()
-         day_row(d, length(wbs), sell, buy, Map.get(exp, d, 0.0))
+         {e, priced} = Map.get(exp, d, {0.0, 0})
+         day_row(d, length(wbs), sell, buy, e, max(length(wbs) - priced, 0))
        end)
        |> Enum.sort_by(& &1.next.v)}
     end
@@ -146,13 +150,16 @@ defmodule TragarAi.Insight.Drill do
       rows =
         sell_rows
         |> Enum.map(fn r ->
+          {e, priced} = Map.get(exp, r["waybill_obj"], {0.0, 0})
+
           wb_row(
             r["waybill_number"],
             r["waybill_obj"],
             nil,
             f(r["sell"]),
             Map.get(buys, r["waybill_obj"], 0.0),
-            Map.get(exp, r["waybill_obj"], 0.0)
+            e,
+            (priced > 0 && 0) || 1
           )
         end)
         |> Enum.sort_by(& &1.margin)
@@ -179,13 +186,16 @@ defmodule TragarAi.Insight.Drill do
       {:ok,
        rows
        |> Enum.map(fn r ->
+         {e, priced} = Map.get(exp, r["waybill_obj"], {0.0, 0})
+
          wb_row(
            r["waybill_number"],
            r["waybill_obj"],
            nil,
            f(r["sell"]),
            f(r["buy"]),
-           Map.get(exp, r["waybill_obj"], 0.0)
+           e,
+           (priced > 0 && 0) || 1
          )
        end)
        |> Enum.sort_by(& &1.margin)}
@@ -253,21 +263,23 @@ defmodule TragarAi.Insight.Drill do
   defp month_row(r) do
     s = f(r.sell)
     b = f(r.buy)
+    wb = r.waybills || 0
 
     %{
       label: Calendar.strftime(r.period_month, "%b %Y"),
       obj: nil,
-      n: r.waybills || 0,
+      n: wb,
       sell: s,
       buy: b,
       expected: f(r.expected_buy),
+      uncosted: max(wb - (r.priced_waybills || 0), 0),
       margin: s - b,
       margin_pct: pct(s - b, s),
       next: %{ev: "drill_month", v: Date.to_iso8601(r.period_month)}
     }
   end
 
-  defp day_row(iso, n, sell, buy, expected) do
+  defp day_row(iso, n, sell, buy, expected, uncosted) do
     date = Date.from_iso8601!(iso)
 
     %{
@@ -277,13 +289,14 @@ defmodule TragarAi.Insight.Drill do
       sell: sell,
       buy: buy,
       expected: expected,
+      uncosted: uncosted,
       margin: sell - buy,
       margin_pct: pct(sell - buy, sell),
       next: %{ev: "drill_day", v: iso}
     }
   end
 
-  defp wb_row(number, obj, n, sell, buy, expected) do
+  defp wb_row(number, obj, n, sell, buy, expected, uncosted) do
     %{
       label: "WB #{number}",
       obj: obj,
@@ -291,6 +304,7 @@ defmodule TragarAi.Insight.Drill do
       sell: sell,
       buy: buy,
       expected: expected,
+      uncosted: uncosted,
       margin: sell - buy,
       margin_pct: pct(sell - buy, sell),
       next: %{ev: "waybill_detail", v: obj}
@@ -301,12 +315,15 @@ defmodule TragarAi.Insight.Drill do
   # Sum RateEngine's per-waybill expected cost into %{key => expected} for the
   # waybills matched by `where_sql`. A rate hiccup degrades to no expected column
   # (empty map) rather than failing the whole drill — buy/sell/margin still load.
+  # Returns %{key => {Σ expected, priced_waybill_count}}. `priced` is one row per
+  # waybill, so the group length is how many waybills under that key got a rate —
+  # the drill derives uncosted = n − priced_count from it.
   defp expected_by(where_sql, key_fun) do
     case RateEngine.assigned_expected(where_sql) do
       {:ok, priced} ->
         priced
         |> Enum.group_by(key_fun, & &1.expected)
-        |> Map.new(fn {k, xs} -> {k, Enum.sum(xs)} end)
+        |> Map.new(fn {k, xs} -> {k, {Enum.sum(xs), length(xs)}} end)
 
       {:error, _} ->
         %{}

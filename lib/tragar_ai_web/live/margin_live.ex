@@ -189,7 +189,9 @@ defmodule TragarAiWeb.MarginLive do
     lv = self()
 
     Task.Supervisor.start_child(TragarAi.TaskSupervisor, fn ->
-      TragarAi.CoreAI.reason(prompt, %{}, fn chunk -> send(lv, {:ai_chunk, chunk}) end)
+      TragarAi.CoreAI.reason(english_only(prompt), %{}, fn chunk ->
+        send(lv, {:ai_chunk, chunk})
+      end)
       send(lv, :ai_done)
     end)
 
@@ -198,6 +200,10 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:ai_answer, "")
     |> assign(:ai_running, true)
   end
+
+  # The local model (qwen3) sometimes drifts into another language (German has been
+  # seen) on the freight narrative — pin every margin explanation to English.
+  defp english_only(prompt), do: prompt <> "\n\nAnswer in English only."
 
   defp month_prompt(nil), do: "No data for that month."
 
@@ -389,7 +395,8 @@ defmodule TragarAiWeb.MarginLive do
         sell: sum(r.sell),
         buy: sum(r.buy),
         expected_buy: sum(r.expected_buy),
-        waybills: sum(r.waybills)
+        waybills: sum(r.waybills),
+        priced_waybills: sum(r.priced_waybills)
       })
       |> Repo.all()
       |> Enum.map(&dim_metrics/1)
@@ -468,9 +475,10 @@ defmodule TragarAiWeb.MarginLive do
     }
   end
 
-  defp dim_metrics(%{dim: dim, sell: sell, buy: buy, expected_buy: expected, waybills: wb}) do
+  defp dim_metrics(%{dim: dim, sell: sell, buy: buy, expected_buy: expected, waybills: wb} = m) do
     s = to_f(sell)
     b = to_f(buy)
+    waybills = wb || 0
 
     %{
       dim: dim || "(unknown)",
@@ -479,7 +487,9 @@ defmodule TragarAiWeb.MarginLive do
       expected: to_f(expected),
       margin: s - b,
       margin_pct: pct(s - b, s),
-      waybills: wb || 0
+      waybills: waybills,
+      # waybills with no origin-area supplier rate (never dropped, just uncosted).
+      uncosted: max(waybills - (m[:priced_waybills] || 0), 0)
     }
   end
 
@@ -593,6 +603,20 @@ defmodule TragarAiWeb.MarginLive do
   # (own fleet), so there's nothing to compare against, distinct from a real R0.
   defp expected_cell(v), do: (to_f(v) == 0.0 && "—") || money(v)
 
+  # Uncosted waybills for a raw warehouse rollup row = total − priced (those with a
+  # current origin-area rate). Never dropped; surfaced as the "No rate" count.
+  defp uncosted_of(r), do: max((r.waybills || 0) - (r.priced_waybills || 0), 0)
+
+  # Drill-panel row styling: red text for a loss (as before), plus an amber tint
+  # when the row covers waybills with no origin-area rate — the color that flags
+  # "expected couldn't be determined", strongest at the waybill leaf.
+  defp drill_row_class(row) do
+    [
+      (row.margin < 0 && "text-error") || "",
+      (Map.get(row, :uncosted, 0) > 0 && "bg-warning/10") || ""
+    ]
+  end
+
   defp month_label(%Date{} = d), do: Calendar.strftime(d, "%Y-%m")
   defp month_label(_), do: "—"
 
@@ -696,6 +720,7 @@ defmodule TragarAiWeb.MarginLive do
           <tr>
             <th>{drill_col(@drill.level)}</th>
             <th class="text-right">Waybills</th>
+            <th class="text-right">No rate</th>
             <th class="text-right">Sell</th>
             <th class="text-right">Buy actual</th>
             <th class="text-right">Buy expected</th>
@@ -704,7 +729,7 @@ defmodule TragarAiWeb.MarginLive do
           </tr>
         </thead>
         <tbody>
-          <tr :for={row <- @drill.rows} class={row.margin < 0 && "text-error"}>
+          <tr :for={row <- @drill.rows} class={drill_row_class(row)}>
             <td class="whitespace-nowrap">
               <button
                 :if={row.next}
@@ -717,6 +742,10 @@ defmodule TragarAiWeb.MarginLive do
               <span :if={!row.next} class="font-mono text-xs">{row.label}</span>
             </td>
             <td class="text-right">{row.n}</td>
+            <td class="text-right">
+              <span :if={row.uncosted > 0} class="badge badge-warning badge-sm">{row.uncosted}</span>
+              <span :if={row.uncosted == 0} class="opacity-30">—</span>
+            </td>
             <td class="text-right">{money(row.sell)}</td>
             <td class="text-right">{money(row.buy)}</td>
             <td class="text-right opacity-70">{expected_cell(row.expected)}</td>
@@ -724,7 +753,7 @@ defmodule TragarAiWeb.MarginLive do
             <td class="text-right">{row.margin_pct}%</td>
           </tr>
           <tr :if={@drill.rows == []}>
-            <td colspan="7" class="text-xs opacity-60">No rows.</td>
+            <td colspan="8" class="text-xs opacity-60">No rows.</td>
           </tr>
         </tbody>
       </table>
@@ -991,6 +1020,7 @@ defmodule TragarAiWeb.MarginLive do
             <tr>
               <th>{@grain}</th>
               <th class="text-right">Waybills</th>
+              <th class="text-right">No rate</th>
               <th class="text-right">Sell</th>
               <th class="text-right">Buy actual</th>
               <th class="text-right">Buy expected</th>
@@ -1014,6 +1044,10 @@ defmodule TragarAiWeb.MarginLive do
                   </button>
                 </td>
                 <td class="text-right">{d.waybills}</td>
+                <td class="text-right">
+                  <span :if={d.uncosted > 0} class="badge badge-warning badge-sm">{d.uncosted}</span>
+                  <span :if={d.uncosted == 0} class="opacity-30">—</span>
+                </td>
                 <td class="text-right">{money(d.sell)}</td>
                 <td class="text-right">{money(d.buy)}</td>
                 <td class="text-right opacity-70">{expected_cell(d.expected)}</td>
@@ -1038,7 +1072,7 @@ defmodule TragarAiWeb.MarginLive do
                 </td>
               </tr>
               <tr :if={drill_dim_open?(@drill, d.dim)}>
-                <td colspan="9" class="bg-base-200/40 p-0">
+                <td colspan="10" class="bg-base-200/40 p-0">
                   <.drill_panel drill={@drill} grain={@grain} />
                 </td>
               </tr>
@@ -1053,6 +1087,7 @@ defmodule TragarAiWeb.MarginLive do
             <tr>
               <th>Month</th>
               <th class="text-right">Waybills</th>
+              <th class="text-right">No rate</th>
               <th class="text-right">Sell</th>
               <th class="text-right">Buy actual</th>
               <th class="text-right">Buy expected</th>
@@ -1075,6 +1110,12 @@ defmodule TragarAiWeb.MarginLive do
                   </button>
                 </td>
                 <td class="text-right">{r.waybills}</td>
+                <td class="text-right">
+                  <span :if={uncosted_of(r) > 0} class="badge badge-warning badge-sm">
+                    {uncosted_of(r)}
+                  </span>
+                  <span :if={uncosted_of(r) == 0} class="opacity-30">—</span>
+                </td>
                 <td class="text-right">{money(r.sell)}</td>
                 <td class="text-right">{money(r.buy)}</td>
                 <td class="text-right opacity-70">{expected_cell(r.expected_buy)}</td>
@@ -1099,7 +1140,7 @@ defmodule TragarAiWeb.MarginLive do
                 </td>
               </tr>
               <tr :if={drill_month_open?(@drill, r.period_month)}>
-                <td colspan="9" class="bg-base-200/40 p-0">
+                <td colspan="10" class="bg-base-200/40 p-0">
                   <.drill_panel drill={@drill} grain={@grain} />
                 </td>
               </tr>

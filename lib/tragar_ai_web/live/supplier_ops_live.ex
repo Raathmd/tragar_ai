@@ -83,14 +83,17 @@ defmodule TragarAiWeb.SupplierOpsLive do
   # (live from the FreightWare rate card). On-demand per manifest — the join is
   # heavy, so we never price every manifest up front.
   @impl true
-  def handle_event("rank_manifest", %{"obj" => obj, "ref" => ref}, socket) do
+  def handle_event("rank_manifest", %{"obj" => obj, "ref" => ref} = params, socket) do
     # The rate join is heavy; run it off the LiveView process so the UI shows a
     # loading state immediately instead of blocking until it returns. Keyed on the
-    # numeric manifest_obj (API owning_obj), not the reference string.
+    # numeric manifest_obj (API owning_obj), not the reference string. The branch
+    # (manifestBranch) pins the origin rate area; blank/absent → origin unconstrained.
+    branch = params["branch"]
+
     socket =
       socket
       |> assign(ranking_ref: ref, ranking: nil, ranking_error: nil, ranking_loading: true)
-      |> start_async(:rank, fn -> RateEngine.rank_manifest_suppliers(obj) end)
+      |> start_async(:rank, fn -> RateEngine.rank_manifest_suppliers(obj, branch) end)
 
     {:noreply, socket}
   end
@@ -125,13 +128,21 @@ defmodule TragarAiWeb.SupplierOpsLive do
 
   def handle_async(:rank, {:ok, {:error, reason}}, socket) do
     Logger.warning("[supplier_ops] rank error: #{inspect(reason)}")
-    {:noreply, assign(socket, ranking_error: inspect(reason), ranking_loading: false)}
+    {:noreply, assign(socket, ranking_error: rank_error_message(reason), ranking_loading: false)}
   end
 
   def handle_async(:rank, {:exit, reason}, socket) do
     Logger.warning("[supplier_ops] rank crashed: #{inspect(reason)}")
     {:noreply, assign(socket, ranking_error: "pricing crashed", ranking_loading: false)}
   end
+
+  # Origin (the manifest branch) is required to price a lane — without it there is
+  # no from-rate-area, so no ranking. Surface that as a plain ops-facing message
+  # rather than a raw error atom.
+  defp rank_error_message(:missing_origin),
+    do: "No origin branch on this manifest — can't determine the rate-area lane, so suppliers can't be ranked."
+
+  defp rank_error_message(reason), do: inspect(reason)
 
   # Highlight the open manifest when it's expanded AND the cheapest 3rd party
   # isn't the assigned subcontractor (a cheaper option exists).
@@ -150,10 +161,12 @@ defmodule TragarAiWeb.SupplierOpsLive do
   end
 
   # In the ranking: tint the assigned supplier's row, else the cheapest
-  # full-coverage row.
+  # full-coverage row; suppliers with no determinable origin rate get an amber
+  # tint (they rank last and can't be priced — never dropped).
   defp ranking_row_class(r, i, assigned) do
     cond do
       r.supplier_ref == assigned -> "bg-info/10"
+      not Map.get(r, :determined, true) -> "bg-warning/10"
       i == 1 and r.full_coverage -> "bg-success/10"
       true -> nil
     end
@@ -178,6 +191,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
        when is_list(ranking) and ranking != [] and is_binary(assigned) and assigned != "" do
     case Enum.find(ranking, &(&1.supplier_ref == assigned)) do
       nil -> "no rate"
+      %{total_expected: nil} -> "no rate"
       entry -> "R" <> :erlang.float_to_binary(entry.total_expected, decimals: 2)
     end
   end
@@ -231,7 +245,12 @@ defmodule TragarAiWeb.SupplierOpsLive do
               <tr class={manifest_row_class(m, @ranking_ref, @ranking)}>
                 <td class="font-mono text-xs">{m["manifest_number"]}</td>
                 <td class="text-xs">{m["manifest_date"]}</td>
-                <td class="text-xs">{m["station_code"]}</td>
+                <td class="text-xs">
+                  {m["manifest_branch"] || m["station_code"]}
+                  <span :if={m["manifest_branch"] && m["station_code"]} class="opacity-50">
+                    · {m["station_code"]}
+                  </span>
+                </td>
                 <td><span class="badge badge-sm badge-ghost">{m["status_code"]}</span></td>
                 <td class="text-xs">
                   {m["subcontractor_reference"]}
@@ -259,6 +278,7 @@ defmodule TragarAiWeb.SupplierOpsLive do
                     phx-click="rank_manifest"
                     phx-value-obj={m["owning_obj"]}
                     phx-value-ref={m["manifest_number"]}
+                    phx-value-branch={m["manifest_branch"]}
                     class="btn btn-ghost btn-xs"
                   >
                     {(@ranking_ref == m["manifest_number"] && "Hide") || "Rank suppliers"}
@@ -319,12 +339,21 @@ defmodule TragarAiWeb.SupplierOpsLive do
                           </td>
                           <td class="text-right">
                             {r.waybills_priced}/{r.total_waybills}
-                            <span :if={not r.full_coverage} class="badge badge-ghost badge-xs">
+                            <span
+                              :if={r.full_coverage == false and r.determined}
+                              class="badge badge-ghost badge-xs"
+                            >
                               partial
+                            </span>
+                            <span :if={not r.determined} class="badge badge-warning badge-xs">
+                              no origin rate
                             </span>
                           </td>
                           <td class="text-right font-mono">
-                            R{:erlang.float_to_binary(r.total_expected, decimals: 2)}
+                            <span :if={r.determined}>
+                              R{:erlang.float_to_binary(r.total_expected, decimals: 2)}
+                            </span>
+                            <span :if={not r.determined} class="text-warning">—</span>
                           </td>
                         </tr>
                       </tbody>
