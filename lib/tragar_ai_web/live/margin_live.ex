@@ -192,6 +192,7 @@ defmodule TragarAiWeb.MarginLive do
       TragarAi.CoreAI.reason(english_only(prompt), %{}, fn chunk ->
         send(lv, {:ai_chunk, chunk})
       end)
+
       send(lv, :ai_done)
     end)
 

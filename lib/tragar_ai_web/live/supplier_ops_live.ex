@@ -140,7 +140,8 @@ defmodule TragarAiWeb.SupplierOpsLive do
   # no from-rate-area, so no ranking. Surface that as a plain ops-facing message
   # rather than a raw error atom.
   defp rank_error_message(:missing_origin),
-    do: "No origin branch on this manifest — can't determine the rate-area lane, so suppliers can't be ranked."
+    do:
+      "No origin branch on this manifest — can't determine the rate-area lane, so suppliers can't be ranked."
 
   defp rank_error_message(reason), do: inspect(reason)
 
