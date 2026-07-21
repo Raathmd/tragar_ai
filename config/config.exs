@@ -42,7 +42,22 @@ config :tragar_ai, Oban,
     # Refresh the FreightWare account directory hourly in the background, so no
     # user request (ticket click / console lookup) ever triggers the load or
     # blocks on a slow FreightWare — see TragarAi.Freight.AccountsRefreshWorker.
-    {Oban.Plugins.Cron, crontab: [{"0 * * * *", TragarAi.Freight.AccountsRefreshWorker}]}
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"0 * * * *", TragarAi.Freight.AccountsRefreshWorker}
+
+       # Margin warehouse refresh — DISABLED until validated + seeded. Enable ONLY
+       # after: (1) the insight_waybill_costs + insight_etl_state migrations are
+       # deployed, and (2) an initial `WaybillCostBackfill.refresh(:full)` has been
+       # run by rpc to seed history. To enable: add a comma after the
+       # AccountsRefreshWorker entry above and uncomment the two lines below.
+       #   * :window nightly (02:00) — re-sum current + previous year, plus older
+       #     months flagged by fwt_status_history since the stored high-water.
+       #   * :full weekly (Sun 03:00) — backstop for silent old-year cost edits
+       #     that raise no status event (neither waybill nor charge has a modified ts).
+       # {"0 2 * * *", TragarAi.Insight.WarehouseRefreshWorker, args: %{mode: "window"}},
+       # {"0 3 * * 0", TragarAi.Insight.WarehouseRefreshWorker, args: %{mode: "full"}}
+     ]}
   ]
 
 # Core AI (the local model reached over local HTTP — the "Swift sidecar").
