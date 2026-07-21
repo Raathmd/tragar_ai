@@ -397,7 +397,8 @@ defmodule TragarAiWeb.MarginLive do
         buy: sum(r.buy),
         expected_buy: sum(r.expected_buy),
         waybills: sum(r.waybills),
-        priced_waybills: sum(r.priced_waybills)
+        priced_waybills: sum(r.priced_waybills),
+        own_fleet_waybills: sum(r.own_fleet_waybills)
       })
       |> Repo.all()
       |> Enum.map(&dim_metrics/1)
@@ -490,7 +491,8 @@ defmodule TragarAiWeb.MarginLive do
       margin_pct: pct(s - b, s),
       waybills: waybills,
       # waybills with no origin-area supplier rate (never dropped, just uncosted).
-      uncosted: max(waybills - (m[:priced_waybills] || 0), 0)
+      # Excludes own-fleet (no supplier to rate) so the count isn't inflated.
+      uncosted: max(waybills - (m[:priced_waybills] || 0) - (m[:own_fleet_waybills] || 0), 0)
     }
   end
 
@@ -604,9 +606,11 @@ defmodule TragarAiWeb.MarginLive do
   # (own fleet), so there's nothing to compare against, distinct from a real R0.
   defp expected_cell(v), do: (to_f(v) == 0.0 && "—") || money(v)
 
-  # Uncosted waybills for a raw warehouse rollup row = total − priced (those with a
-  # current origin-area rate). Never dropped; surfaced as the "No rate" count.
-  defp uncosted_of(r), do: max((r.waybills || 0) - (r.priced_waybills || 0), 0)
+  # Uncosted waybills for a raw warehouse rollup row = total − priced − own-fleet
+  # (own fleet has no supplier to rate). Never dropped; surfaced as the "No rate"
+  # count.
+  defp uncosted_of(r),
+    do: max((r.waybills || 0) - (r.priced_waybills || 0) - (r.own_fleet_waybills || 0), 0)
 
   # Drill-panel row styling: red text for a loss (as before), plus an amber tint
   # when the row covers waybills with no origin-area rate — the color that flags

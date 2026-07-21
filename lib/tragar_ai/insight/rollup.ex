@@ -26,10 +26,12 @@ defmodule TragarAi.Insight.Rollup do
     # its rate card. Populated separately (Backfill.run_expected/0), partial
     # coverage (own-fleet legs have no card), so not folded into margin.
     field :expected_buy, :decimal
-    # how many of `waybills` got an expected cost. `waybills - priced_waybills` =
-    # the uncosted count (assigned supplier has no origin-area rate). Set with
-    # expected_buy by run_expected/0.
+    # how many of `waybills` got an expected cost. Set with expected_buy.
     field :priced_waybills, :integer
+    # how many of `waybills` rode own fleet (no 3rd-party supplier/card). Set by the
+    # month cascade. uncosted = waybills - priced_waybills - own_fleet_waybills — the
+    # "No rate" count, now excluding own-fleet (which has no supplier to rate).
+    field :own_fleet_waybills, :integer
     field :surcharges, :decimal
     field :margin, :decimal
 
@@ -51,6 +53,7 @@ defmodule TragarAi.Insight.Rollup do
       :buy,
       :expected_buy,
       :priced_waybills,
+      :own_fleet_waybills,
       :surcharges,
       :margin
     ])
