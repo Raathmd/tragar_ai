@@ -15,8 +15,11 @@ defmodule TragarAi.Insight.RateEngine do
         → its parcels             (fwt_parcel_tripsheet.tripsheet_obj)
         → each parcel's waybill    (fwt_waybill_parcel → fwt_waybill)
         → each destination         (fwt_waybill.consignee_postcode_obj)
-        → that supplier's area     (fwc_rate_area_postcode, FWMSC + owning_obj = supplier)
-        → that supplier's rate     (fwm_entity_rate, FWMSC, to_rate_area = area, effective)
+        → that supplier's to-area  (fwc_rate_area_postcode, FWMSC + owning_obj = supplier)
+        → the origin depot         (manifestBranch = fwm_station.station_code)
+        → that depot's postcode    (fwm_station.physical_address_postcode_obj)
+        → that supplier's from-area (fwc_rate_area_postcode, same supplier, origin postcode)
+        → that supplier's rate     (fwm_entity_rate, FWMSC, from_rate_area + to_rate_area, effective)
         → weight band              (fwm_rate_table, from_unit ≤ chargable_units < to_unit)
         → per-waybill expected cost = base_amount + increment_amount ×
                                        ((weight − from_unit) / increment_unit)
@@ -42,12 +45,22 @@ defmodule TragarAi.Insight.RateEngine do
 
   Keyed on `manifest_obj` (not the reference string) because the API's delivery-
   manifest number and `fwt_manifest.manifest_reference` are different identifiers.
+
+  `station_code` is the manifest's owning branch (the API's `manifestBranch`,
+  = `fwm_station.station_code`) — the depot the goods ship from. It pins the
+  origin (`from`) rate area, so a supplier is priced on the actual depot lane.
+  Origin is pinned via a LEFT join, so a candidate supplier that services the
+  destination but has **no rate for that origin area** is never dropped: it ranks
+  LAST with `total_expected: nil` ("rate could not be determined"). A missing or
+  unresolvable branch isn't an error either — origin simply can't be pinned, so
+  every candidate surfaces as undetermined.
   """
-  @spec rank_manifest_suppliers(String.t()) ::
+  @spec rank_manifest_suppliers(String.t(), String.t() | nil) ::
           {:ok, %{ranking: [map()], total_waybills: non_neg_integer()}} | {:error, term()}
-  def rank_manifest_suppliers(manifest_obj) when is_binary(manifest_obj) do
+  def rank_manifest_suppliers(manifest_obj, station_code \\ nil) when is_binary(manifest_obj) do
     with {:ok, obj} <- sanitize_obj(manifest_obj),
-         {:ok, rows} <- Db.query_rows(rows_sql(obj)),
+         {:ok, code} <- sanitize_station(station_code),
+         {:ok, rows} <- Db.query_rows(rows_sql(obj, code)),
          {:ok, total_rows} <- Db.query_rows(total_waybills_sql(obj)) do
       total = total_rows |> List.first(%{}) |> Map.get("total") |> to_int()
       {:ok, %{ranking: rank(rows, total), total_waybills: total}}
@@ -152,15 +165,20 @@ defmodule TragarAi.Insight.RateEngine do
     rows
     |> Enum.group_by(&Map.get(&1, "supplier_ref"))
     |> Enum.map(fn {ref, supplier_rows} ->
-      # Per waybill, keep only the latest-effective rate version, then price it.
+      # The origin is LEFT-joined, so a candidate that services the destination
+      # but has no origin-area rate comes back with null rate columns. Keep only
+      # the rows that actually resolved a rate band before pricing — the rest
+      # price nothing, and the supplier is surfaced as undetermined, not dropped.
       waybill_costs =
         supplier_rows
+        |> Enum.filter(&rated?/1)
         |> Enum.group_by(&Map.get(&1, "waybill_obj"))
         |> Enum.map(fn {_wb, wb_rows} ->
           wb_rows |> Enum.max_by(&(&1["effective_date"] || "")) |> waybill_cost()
         end)
 
       priced = length(waybill_costs)
+      determined = priced > 0
 
       %{
         supplier_ref: ref,
@@ -168,12 +186,22 @@ defmodule TragarAi.Insight.RateEngine do
         waybills_priced: priced,
         total_waybills: total,
         full_coverage: total > 0 and priced == total,
-        total_expected: waybill_costs |> Enum.sum() |> Float.round(2)
+        # nil = no rate could be determined for this supplier from the origin.
+        determined: determined,
+        total_expected: (determined && (waybill_costs |> Enum.sum() |> Float.round(2))) || nil
       }
     end)
-    # Full-coverage suppliers first (a real alternative), then cheapest.
-    |> Enum.sort_by(fn s -> {not s.full_coverage, s.total_expected} end)
+    # Determined suppliers first (full-coverage, then cheapest); undetermined
+    # (no origin-area rate) sink to the bottom — never dropped.
+    |> Enum.sort_by(fn s ->
+      {not s.determined, not s.full_coverage, s.total_expected || 0.0}
+    end)
   end
+
+  # Did this (waybill, supplier) row resolve an actual rate band? The origin
+  # LEFT join leaves rt.base_amount null when the supplier has no rate for the
+  # origin area, so a present base_amount is the "can price this" signal.
+  defp rated?(row), do: row["base_amount"] not in [nil, ""]
 
   # base + increment × ((weight − from) / increment_unit); flat when increment_unit = 0.
   defp waybill_cost(row) do
@@ -204,7 +232,24 @@ defmodule TragarAi.Insight.RateEngine do
   # prices. A tripsheet's waybills come via its parcels; the same waybill can be
   # on several parcels, so the Elixir grouping by waybill_obj dedups it. `obj` is
   # a bare integer (validated by sanitize_obj), compared to numeric tripsheet_obj.
-  defp rows_sql(obj) do
+  # Candidacy (INNER) = the supplier `c` whose rate area covers the waybill's
+  # DESTINATION postcode, AND is currently active — a ceased / not-yet-started
+  # contractor (fwm_station_contractor.cease_date / start_date) is eliminated from
+  # the ranking outright, because it isn't a selectable option (distinct from an
+  # active supplier that merely lacks an origin rate — that one still ranks last).
+  # This active filter is RANKING-ONLY; the margin calc (assigned_rows_sql) never
+  # applies it, since it prices against whoever actually delivered.
+  # The ORIGIN chain is LEFT-joined: the manifest branch
+  # (`code` = manifestBranch = fwm_station.station_code) → that depot's physical
+  # postcode → the same supplier's origin rate area → the rate row's from_rate_area.
+  # When a candidate has no rate for that origin area (or the branch can't be
+  # resolved), er/rt come back null — the supplier is kept and priced as
+  # undetermined (rank/2 sorts it last), never dropped. A blank `code` matches no
+  # station, so every candidate is undetermined — the "no origin branch" case.
+  #
+  # NOTE: forward direction only. Bidirectional cards (fwm_entity_rate.bidirectional)
+  # stored as dest→origin are not yet matched in reverse — a follow-up.
+  defp rows_sql(obj, code) do
     today = Date.utc_today() |> Date.to_iso8601()
 
     """
@@ -217,10 +262,16 @@ defmodule TragarAi.Insight.RateEngine do
     JOIN PUB.fwc_rate_area_postcode pc ON pc.postcode_obj = w.consignee_postcode_obj \
     AND pc.owning_entity_mnemonic = 'FWMSC' \
     JOIN PUB.fwm_station_contractor c ON c.station_contractor_obj = pc.owning_obj \
-    JOIN PUB.fwm_entity_rate er ON er.owning_entity_mnemonic = 'FWMSC' \
+    AND (c.cease_date IS NULL OR c.cease_date >= '#{today}') \
+    AND (c.start_date IS NULL OR c.start_date <= '#{today}') \
+    LEFT JOIN PUB.fwm_station st ON st.station_code = '#{code}' \
+    LEFT JOIN PUB.fwc_rate_area_postcode opc ON opc.postcode_obj = st.physical_address_postcode_obj \
+    AND opc.owning_entity_mnemonic = 'FWMSC' AND opc.owning_obj = pc.owning_obj \
+    LEFT JOIN PUB.fwm_entity_rate er ON er.owning_entity_mnemonic = 'FWMSC' \
     AND er.owning_obj = pc.owning_obj AND er.to_rate_area_obj = pc.rate_area_obj \
+    AND er.from_rate_area_obj = opc.rate_area_obj \
     AND (er.cease_date IS NULL OR er.cease_date >= '#{today}') \
-    JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
+    LEFT JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
     WHERE pt.tripsheet_obj = #{obj}
     """
@@ -238,6 +289,19 @@ defmodule TragarAi.Insight.RateEngine do
   # leg's supplier without having to guess the charge type. DISTINCT collapses the
   # charge-join fan-out (a waybill can carry several charge lines for the same
   # supplier); the Elixir side then dedups by waybill (latest effective) and prices.
+  #
+  # ORIGIN (buy-side): SAME METHOD as the supplier ranking (rows_sql) — the rate
+  # lane's `from` is pinned to the scanning/delivery branch's physical postcode →
+  # the same supplier's rate area → er.from_rate_area_obj. This query only EMITS a
+  # priced row when the origin matches; a waybill with no origin-area rate simply
+  # isn't in the result. It is NOT dropped from the margin report: the drill lists
+  # every waybill from its own sell/buy query and treats the absence here as
+  # "uncosted" (counted + colored — see Drill), so never-drop holds. The branch is
+  # `fwt_waybill.at_station_obj` — the station the waybill is at / was scanned at,
+  # the per-waybill analogue of the delivery manifest's `manifestBranch` (station_obj
+  # is the booking branch and does NOT match the delivery supplier's card). Coverage
+  # is intrinsically partial: no derivable origin matches these cards for >~42% of
+  # waybills, so buy-expected is a partial figure. (Same bidirectional caveat.)
   defp assigned_rows_sql(where_sql) do
     today = Date.utc_today() |> Date.to_iso8601()
 
@@ -251,8 +315,12 @@ defmodule TragarAi.Insight.RateEngine do
     JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj \
     JOIN PUB.fwc_rate_area_postcode pc ON pc.postcode_obj = w.consignee_postcode_obj \
     AND pc.owning_entity_mnemonic = 'FWMSC' AND pc.owning_obj = sc.station_contractor_obj \
+    JOIN PUB.fwm_station ws ON ws.station_obj = w.at_station_obj \
+    JOIN PUB.fwc_rate_area_postcode wopc ON wopc.postcode_obj = ws.physical_address_postcode_obj \
+    AND wopc.owning_entity_mnemonic = 'FWMSC' AND wopc.owning_obj = sc.station_contractor_obj \
     JOIN PUB.fwm_entity_rate er ON er.owning_entity_mnemonic = 'FWMSC' \
     AND er.owning_obj = pc.owning_obj AND er.to_rate_area_obj = pc.rate_area_obj \
+    AND er.from_rate_area_obj = wopc.rate_area_obj \
     AND (er.cease_date IS NULL OR er.cease_date >= '#{today}') \
     JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
@@ -281,6 +349,19 @@ defmodule TragarAi.Insight.RateEngine do
     if String.match?(digits, ~r/^[0-9]{1,20}$/),
       do: {:ok, digits},
       else: {:error, :invalid_manifest_obj}
+  end
+
+  # The API's manifestBranch = fwm_station.station_code, used to pin the origin
+  # (from) rate area. Whitelist to a bare station code so it's a safe SQL literal.
+  # A missing/blank/odd value isn't an error — it just interpolates to an empty
+  # literal that matches no station, so the LEFT-joined origin stays null and
+  # every candidate ranks as undetermined (never dropped).
+  defp sanitize_station(code) do
+    c = code |> to_string() |> String.trim()
+
+    if String.match?(c, ~r/^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$/),
+      do: {:ok, c},
+      else: {:ok, ""}
   end
 
   defp to_int(nil), do: 0

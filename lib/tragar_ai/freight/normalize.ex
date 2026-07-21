@@ -355,8 +355,10 @@ defmodule TragarAi.Freight.Normalize do
 
   @doc """
   Open delivery manifests — the `/multiManifest` "can be closed" list. Returns
-  `[%{owning_obj, manifest_number, manifest_date, station_code, status_code,
-  subcontractor_reference}]`. Casing is lenient (FreightWare varies).
+  `[%{owning_obj, manifest_number, manifest_date, station_code, manifest_branch,
+  status_code, subcontractor_reference}]`. `manifest_branch` is the owning branch
+  (the branch closing/scanning the manifest) — the origin anchor for rate-area
+  costing. Casing is lenient (FreightWare varies).
   """
   def open_manifests(%{"esOpenManifests" => es}) do
     (array(es, "openManifests") ++ array(es, "OpenManifests"))
@@ -371,6 +373,7 @@ defmodule TragarAi.Freight.Normalize do
       "manifest_number" => m["owning_number"] || m["owningNumber"],
       "manifest_date" => m["manifestDate"] || m["manifest_date"],
       "station_code" => m["stationCode"] || m["station_code"],
+      "manifest_branch" => m["manifestBranch"] || m["manifest_branch"],
       "status_code" => m["statusCode"] || m["status_code"],
       "subcontractor_reference" => m["subcontractorReference"] || m["subcontractor_reference"]
     }
