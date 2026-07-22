@@ -152,11 +152,33 @@ defmodule TragarAiWeb.InspectLive do
   # Format the quick-quote result for the in-app log. Raw rate maps so every
   # returned field (freightCharge / sundryCharge / totalCharge per service) shows.
   defp quote_output({:ok, rates}) do
-    "OK — #{length(rates)} rate(s):\n" <> Enum.map_join(rates, "\n", &inspect(&1, limit: :infinity))
+    "OK — #{length(rates)} rate(s):\n" <>
+      Enum.map_join(rates, "\n", &inspect(&1, limit: :infinity))
   end
 
   defp quote_output({:error, reason}), do: "ERROR: #{inspect(reason, limit: :infinity)}"
   defp quote_output(_), do: ""
+
+  # Field name + placeholder for the in-app quick-quote form, rendered via :for so
+  # each input line stays short (formatter-stable).
+  defp quote_fields do
+    [
+      {"account_reference", "accountReference"},
+      {"service_type", "serviceType (blank=all)"},
+      {"consignor_site", "consignorSite code"},
+      {"consignee_site", "consigneeSite code"},
+      {"consignor_suburb", "consignor suburb"},
+      {"consignor_city", "consignor city"},
+      {"collection_postal_code", "consignor postcode"},
+      {"weight", "weight (kg)"},
+      {"consignee_suburb", "consignee suburb"},
+      {"consignee_city", "consignee city"},
+      {"delivery_postal_code", "consignee postcode"},
+      {"length", "L (cm)"},
+      {"width", "W (cm)"},
+      {"height", "H (cm)"}
+    ]
+  end
 
   @impl true
   def render(assigns) do
@@ -190,29 +212,26 @@ defmodule TragarAiWeb.InspectLive do
         <div class="mb-4 rounded border border-dashed p-2">
           <h2 class="text-sm font-medium">FreightWare quick quote (runs in-app)</h2>
           <p class="mt-1 text-xs opacity-60">
-            POST /quotes/quick — supplier account as <code>accountReference</code>, lane by site code + address.
-            Leave <code>serviceType</code> blank for all rates. Runs here; results below (never in Claude's session).
+            POST /quotes/quick. Supplier account as accountReference; lane by site
+            code + address. serviceType blank returns all rates. Results below.
           </p>
           <form phx-submit="run_quote" class="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
-            <input name="account_reference" value={@quote_params["account_reference"]} placeholder="accountReference" class="rounded border p-1 text-xs" />
-            <input name="service_type" value={@quote_params["service_type"]} placeholder="serviceType (blank=all)" class="rounded border p-1 text-xs" />
-            <input name="consignor_site" value={@quote_params["consignor_site"]} placeholder="consignorSite code" class="rounded border p-1 text-xs" />
-            <input name="consignee_site" value={@quote_params["consignee_site"]} placeholder="consigneeSite code" class="rounded border p-1 text-xs" />
-            <input name="consignor_suburb" value={@quote_params["consignor_suburb"]} placeholder="consignor suburb" class="rounded border p-1 text-xs" />
-            <input name="consignor_city" value={@quote_params["consignor_city"]} placeholder="consignor city" class="rounded border p-1 text-xs" />
-            <input name="collection_postal_code" value={@quote_params["collection_postal_code"]} placeholder="consignor postcode" class="rounded border p-1 text-xs" />
-            <input name="weight" value={@quote_params["weight"]} placeholder="weight (kg)" class="rounded border p-1 text-xs" />
-            <input name="consignee_suburb" value={@quote_params["consignee_suburb"]} placeholder="consignee suburb" class="rounded border p-1 text-xs" />
-            <input name="consignee_city" value={@quote_params["consignee_city"]} placeholder="consignee city" class="rounded border p-1 text-xs" />
-            <input name="delivery_postal_code" value={@quote_params["delivery_postal_code"]} placeholder="consignee postcode" class="rounded border p-1 text-xs" />
-            <input name="length" value={@quote_params["length"]} placeholder="L (cm)" class="rounded border p-1 text-xs" />
-            <input name="width" value={@quote_params["width"]} placeholder="W (cm)" class="rounded border p-1 text-xs" />
-            <input name="height" value={@quote_params["height"]} placeholder="H (cm)" class="rounded border p-1 text-xs" />
+            <input
+              :for={{name, ph} <- quote_fields()}
+              name={name}
+              value={@quote_params[name]}
+              placeholder={ph}
+              class="rounded border p-1 text-xs"
+            />
             <div class="col-span-2 md:col-span-4">
               <button type="submit" class="btn btn-primary btn-xs">Run quote</button>
             </div>
           </form>
-          <pre :if={@quote_result} class="mt-2 overflow-auto rounded bg-base-200 p-2 text-xs" style="max-height:30vh">{quote_output(@quote_result)}</pre>
+          <pre
+            :if={@quote_result}
+            class="mt-2 overflow-auto rounded bg-base-200 p-2 text-xs"
+            style="max-height:30vh"
+          >{quote_output(@quote_result)}</pre>
         </div>
 
         <div class="mb-4">
