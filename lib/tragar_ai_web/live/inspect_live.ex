@@ -39,7 +39,7 @@ defmodule TragarAiWeb.InspectLive do
      |> assign(:job_status, nil)
      |> assign(:ref, nil)
      |> assign(:quote_result, nil)
-     |> assign(:quote_params, %{})}
+     |> assign(:quote_params, default_quote_params())}
   end
 
   @impl true
@@ -49,8 +49,45 @@ defmodule TragarAiWeb.InspectLive do
 
   def handle_event("run_catalog", %{"id" => id}, %{assigns: %{authorized: true}} = socket) do
     case Catalog.fetch(id) do
-      %{title: title, sql: sql} -> {:noreply, start_query(socket, sql, title)}
-      _ -> {:noreply, assign(socket, :status, "query not found")}
+      %{title: title, sql: sql} when is_binary(sql) ->
+        {:noreply, start_query(socket, sql, title)}
+
+      _ ->
+        {:noreply, assign(socket, :status, "not a SQL entry")}
+    end
+  end
+
+  # Fill the quick-quote form from a catalog "quote" test case (params are the same
+  # string-keyed fields the form submits). You then click Run quote to execute it.
+  def handle_event("fill_quote", %{"id" => id}, %{assigns: %{authorized: true}} = socket) do
+    case Catalog.fetch(id) do
+      # Real-data case: run the SELECT in-app, fill the form from its first row
+      # (columns aliased to the form field names). The real lane never enters
+      # Claude's session — Claude only authored the query.
+      %{quote_sql: sql} when is_binary(sql) ->
+        case Db.query_rows(sql) do
+          {:ok, [row | _]} ->
+            {:noreply,
+             socket
+             |> assign(:quote_params, Map.merge(default_quote_params(), row))
+             |> assign(:status, "form filled from a real lane — click Run quote below")}
+
+          {:ok, []} ->
+            {:noreply, assign(socket, :status, "quote_sql returned no rows")}
+
+          {:error, reason} ->
+            {:noreply, assign(socket, :status, "quote_sql error — #{inspect(reason)}")}
+        end
+
+      # Static case: params baked into the entry.
+      %{quote: quote} when is_map(quote) ->
+        {:noreply,
+         socket
+         |> assign(:quote_params, Map.merge(default_quote_params(), quote))
+         |> assign(:status, "form filled — click Run quote below")}
+
+      _ ->
+        {:noreply, assign(socket, :status, "not a quote entry")}
     end
   end
 
@@ -180,6 +217,28 @@ defmodule TragarAiWeb.InspectLive do
     ]
   end
 
+  # Blank/synthetic defaults so the form is click-ready; catalog "quote" test cases
+  # merge over these. NOT real customer data (data-blind rule) — swap accountReference
+  # + site codes for a real supplier to test the buy quote.
+  defp default_quote_params do
+    %{
+      "account_reference" => "",
+      "service_type" => "",
+      "consignor_site" => "",
+      "consignor_suburb" => "",
+      "consignor_city" => "",
+      "collection_postal_code" => "",
+      "consignee_site" => "",
+      "consignee_suburb" => "",
+      "consignee_city" => "",
+      "delivery_postal_code" => "",
+      "weight" => "",
+      "length" => "30",
+      "width" => "30",
+      "height" => "30"
+    }
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -250,6 +309,16 @@ defmodule TragarAiWeb.InspectLive do
                 <span class="min-w-0 break-words text-sm font-medium">{q.title}</span>
                 <div class="flex shrink-0 gap-1">
                   <button
+                    :if={q.quote || q.quote_sql}
+                    type="button"
+                    phx-click="fill_quote"
+                    phx-value-id={q.id}
+                    class="btn btn-secondary btn-xs"
+                  >
+                    Fill form
+                  </button>
+                  <button
+                    :if={q.sql}
                     type="button"
                     phx-click="run_catalog"
                     phx-value-id={q.id}
@@ -262,7 +331,7 @@ defmodule TragarAiWeb.InspectLive do
                     type="button"
                     phx-click="delete_catalog"
                     phx-value-id={q.id}
-                    data-confirm={"Delete catalog query “#{q.title}”?"}
+                    data-confirm={"Delete catalog entry “#{q.title}”?"}
                     class="btn btn-ghost btn-xs text-error"
                     disabled={@running}
                   >
@@ -271,7 +340,18 @@ defmodule TragarAiWeb.InspectLive do
                 </div>
               </div>
               <p :if={q.description != ""} class="text-xs opacity-70">{q.description}</p>
-              <pre class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs">{q.sql}</pre>
+              <pre
+                :if={q.sql}
+                class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs"
+              >{q.sql}</pre>
+              <pre
+                :if={q.quote}
+                class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs"
+              >{inspect(q.quote, pretty: true)}</pre>
+              <pre
+                :if={q.quote_sql}
+                class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs"
+              >{q.quote_sql}</pre>
             </div>
           </div>
         </div>

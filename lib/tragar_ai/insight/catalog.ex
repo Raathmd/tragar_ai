@@ -25,14 +25,16 @@ defmodule TragarAi.Insight.Catalog do
     with {:ok, body} <- File.read(path()),
          {:ok, list} when is_list(list) <- Jason.decode(body) do
       list
-      |> Enum.filter(&(is_map(&1) and is_binary(&1["sql"])))
+      |> Enum.filter(&entry?/1)
       |> Enum.with_index()
       |> Enum.map(fn {q, i} ->
         %{
           id: to_string(q["id"] || i),
           title: q["title"] || "(untitled)",
           description: q["description"] || "",
-          sql: q["sql"]
+          sql: q["sql"],
+          quote: q["quote"],
+          quote_sql: q["quote_sql"]
         }
       end)
     else
@@ -72,10 +74,16 @@ defmodule TragarAi.Insight.Catalog do
   # valid-entry filter + index derivation so the id the UI passes lines up.
   defp without(list, id) do
     list
-    |> Enum.filter(&(is_map(&1) and is_binary(&1["sql"])))
+    |> Enum.filter(&entry?/1)
     |> Enum.with_index()
     |> Enum.reject(fn {q, i} -> to_string(q["id"] || i) == to_string(id) end)
     |> Enum.map(&elem(&1, 0))
+  end
+
+  # A valid entry is a SQL query ("sql"), a static quick-quote case ("quote"), or a
+  # real-data quick-quote case ("quote_sql" — a SELECT returning one form-shaped row).
+  defp entry?(q) do
+    is_map(q) and (is_binary(q["sql"]) or is_map(q["quote"]) or is_binary(q["quote_sql"]))
   end
 
   defp write(list) do
