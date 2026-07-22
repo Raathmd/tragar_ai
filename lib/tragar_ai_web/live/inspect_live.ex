@@ -32,6 +32,7 @@ defmodule TragarAiWeb.InspectLive do
      |> assign(:authorized, Accounts.can_view?(socket.assigns[:current_user], :inspect))
      |> assign(:catalog, Catalog.load())
      |> assign(:catalog_filter, nil)
+     |> assign(:filling, nil)
      |> assign(:sql, "")
      |> assign(:current, nil)
      |> assign(:log, [])
@@ -72,8 +73,9 @@ defmodule TragarAiWeb.InspectLive do
       %{quote_sql: sql} when is_binary(sql) ->
         {:noreply,
          socket
-         |> assign(:status, "running quote_sql… (form fills when it returns)")
-         |> start_async(:fill_quote, fn -> Db.query_rows(sql, timeout: 30_000) end)}
+         |> assign(:filling, id)
+         |> assign(:status, "running quote_sql… (up to ~2.5 min)")
+         |> start_async(:fill_quote, fn -> Db.query_rows(sql, timeout: 150_000) end)}
 
       # Static case: params baked into the entry.
       %{quote: quote} when is_map(quote) ->
@@ -151,20 +153,30 @@ defmodule TragarAiWeb.InspectLive do
   def handle_async(:fill_quote, {:ok, {:ok, [row | _]}}, socket) do
     {:noreply,
      socket
+     |> assign(:filling, nil)
      |> assign(:quote_params, Map.merge(default_quote_params(), row))
      |> assign(:status, "form filled from a real lane — click Run quote below")}
   end
 
   def handle_async(:fill_quote, {:ok, {:ok, []}}, socket) do
-    {:noreply, assign(socket, :status, "quote_sql returned no rows for that supplier")}
+    {:noreply,
+     socket
+     |> assign(:filling, nil)
+     |> assign(:status, "quote_sql returned no rows for that supplier")}
   end
 
   def handle_async(:fill_quote, {:ok, {:error, reason}}, socket) do
-    {:noreply, assign(socket, :status, "quote_sql failed — #{inspect(reason)}")}
+    {:noreply,
+     socket
+     |> assign(:filling, nil)
+     |> assign(:status, "quote_sql failed — #{inspect(reason)}")}
   end
 
   def handle_async(:fill_quote, {:exit, reason}, socket) do
-    {:noreply, assign(socket, :status, "quote_sql crashed — #{inspect(reason)}")}
+    {:noreply,
+     socket
+     |> assign(:filling, nil)
+     |> assign(:status, "quote_sql crashed — #{inspect(reason)}")}
   end
 
   @impl true
@@ -378,8 +390,9 @@ defmodule TragarAiWeb.InspectLive do
                     phx-click="fill_quote"
                     phx-value-id={q.id}
                     class="btn btn-secondary btn-xs"
+                    disabled={@filling == q.id}
                   >
-                    Fill form
+                    {if @filling == q.id, do: "filling…", else: "Fill form"}
                   </button>
                   <button
                     :if={q.sql}
