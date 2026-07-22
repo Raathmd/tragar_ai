@@ -235,7 +235,9 @@ defmodule TragarAiWeb.InspectLive do
       "weight" => "",
       "length" => "30",
       "width" => "30",
-      "height" => "30"
+      "height" => "30",
+      "waybill_number" => "",
+      "actual_fra" => ""
     }
   end
 
@@ -286,6 +288,13 @@ defmodule TragarAiWeb.InspectLive do
               <button type="submit" class="btn btn-primary btn-xs">Run quote</button>
             </div>
           </form>
+          <p
+            :if={@quote_params["waybill_number"] not in [nil, ""]}
+            class="mt-2 text-xs opacity-70"
+          >
+            From waybill {@quote_params["waybill_number"]} — actual FRA
+            {@quote_params["actual_fra"]}. Compare to the quote's totalCharge below.
+          </p>
           <pre
             :if={@quote_result}
             class="mt-2 overflow-auto rounded bg-base-200 p-2 text-xs"
