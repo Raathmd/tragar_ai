@@ -33,7 +33,8 @@ defmodule TragarAi.Insight.Catalog do
           title: q["title"] || "(untitled)",
           description: q["description"] || "",
           sql: q["sql"],
-          quote: q["quote"]
+          quote: q["quote"],
+          quote_sql: q["quote_sql"]
         }
       end)
     else
@@ -79,8 +80,11 @@ defmodule TragarAi.Insight.Catalog do
     |> Enum.map(&elem(&1, 0))
   end
 
-  # A valid entry is a SQL query (has "sql") or a quick-quote test case (has "quote").
-  defp entry?(q), do: is_map(q) and (is_binary(q["sql"]) or is_map(q["quote"]))
+  # A valid entry is a SQL query ("sql"), a static quick-quote case ("quote"), or a
+  # real-data quick-quote case ("quote_sql" — a SELECT returning one form-shaped row).
+  defp entry?(q) do
+    is_map(q) and (is_binary(q["sql"]) or is_map(q["quote"]) or is_binary(q["quote_sql"]))
+  end
 
   defp write(list) do
     file = path()

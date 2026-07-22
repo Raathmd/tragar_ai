@@ -61,11 +61,30 @@ defmodule TragarAiWeb.InspectLive do
   # string-keyed fields the form submits). You then click Run quote to execute it.
   def handle_event("fill_quote", %{"id" => id}, %{assigns: %{authorized: true}} = socket) do
     case Catalog.fetch(id) do
+      # Real-data case: run the SELECT in-app, fill the form from its first row
+      # (columns aliased to the form field names). The real lane never enters
+      # Claude's session — Claude only authored the query.
+      %{quote_sql: sql} when is_binary(sql) ->
+        case Db.query_rows(sql) do
+          {:ok, [row | _]} ->
+            {:noreply,
+             socket
+             |> assign(:quote_params, Map.merge(default_quote_params(), row))
+             |> assign(:status, "form filled from a real lane — click Run quote below")}
+
+          {:ok, []} ->
+            {:noreply, assign(socket, :status, "quote_sql returned no rows")}
+
+          {:error, reason} ->
+            {:noreply, assign(socket, :status, "quote_sql error — #{inspect(reason)}")}
+        end
+
+      # Static case: params baked into the entry.
       %{quote: quote} when is_map(quote) ->
         {:noreply,
          socket
          |> assign(:quote_params, Map.merge(default_quote_params(), quote))
-         |> assign(:status, "form filled — scroll to the quote form and click Run quote")}
+         |> assign(:status, "form filled — click Run quote below")}
 
       _ ->
         {:noreply, assign(socket, :status, "not a quote entry")}
@@ -290,7 +309,7 @@ defmodule TragarAiWeb.InspectLive do
                 <span class="min-w-0 break-words text-sm font-medium">{q.title}</span>
                 <div class="flex shrink-0 gap-1">
                   <button
-                    :if={q.quote}
+                    :if={q.quote || q.quote_sql}
                     type="button"
                     phx-click="fill_quote"
                     phx-value-id={q.id}
@@ -329,6 +348,10 @@ defmodule TragarAiWeb.InspectLive do
                 :if={q.quote}
                 class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs"
               >{inspect(q.quote, pretty: true)}</pre>
+              <pre
+                :if={q.quote_sql}
+                class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs"
+              >{q.quote_sql}</pre>
             </div>
           </div>
         </div>
