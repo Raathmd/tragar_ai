@@ -292,8 +292,7 @@ defmodule TragarAiWeb.InspectLive do
             :if={@quote_params["waybill_number"] not in [nil, ""]}
             class="mt-2 text-xs opacity-70"
           >
-            From waybill {@quote_params["waybill_number"]} — actual FRA
-            {@quote_params["actual_fra"]}. Compare to the quote's totalCharge below.
+            From waybill {@quote_params["waybill_number"]} — actual FRA {@quote_params["actual_fra"]}. Compare to the quote's totalCharge below.
           </p>
           <pre
             :if={@quote_result}
