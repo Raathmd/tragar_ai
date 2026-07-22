@@ -66,23 +66,14 @@ defmodule TragarAiWeb.InspectLive do
   # string-keyed fields the form submits). You then click Run quote to execute it.
   def handle_event("fill_quote", %{"id" => id}, %{assigns: %{authorized: true}} = socket) do
     case Catalog.fetch(id) do
-      # Real-data case: run the SELECT in-app, fill the form from its first row
-      # (columns aliased to the form field names). The real lane never enters
-      # Claude's session — Claude only authored the query.
+      # Real-data case: run the SELECT ASYNC (off the LiveView) so a slow query
+      # never freezes the page; the form fills in handle_async when it returns.
+      # The real lane never enters Claude's session — Claude only authored the query.
       %{quote_sql: sql} when is_binary(sql) ->
-        case Db.query_rows(sql) do
-          {:ok, [row | _]} ->
-            {:noreply,
-             socket
-             |> assign(:quote_params, Map.merge(default_quote_params(), row))
-             |> assign(:status, "form filled from a real lane — click Run quote below")}
-
-          {:ok, []} ->
-            {:noreply, assign(socket, :status, "quote_sql returned no rows")}
-
-          {:error, reason} ->
-            {:noreply, assign(socket, :status, "quote_sql error — #{inspect(reason)}")}
-        end
+        {:noreply,
+         socket
+         |> assign(:status, "running quote_sql… (form fills when it returns)")
+         |> start_async(:fill_quote, fn -> Db.query_rows(sql, timeout: 30_000) end)}
 
       # Static case: params baked into the entry.
       %{quote: quote} when is_map(quote) ->
@@ -155,6 +146,26 @@ defmodule TragarAiWeb.InspectLive do
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_async(:fill_quote, {:ok, {:ok, [row | _]}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:quote_params, Map.merge(default_quote_params(), row))
+     |> assign(:status, "form filled from a real lane — click Run quote below")}
+  end
+
+  def handle_async(:fill_quote, {:ok, {:ok, []}}, socket) do
+    {:noreply, assign(socket, :status, "quote_sql returned no rows for that supplier")}
+  end
+
+  def handle_async(:fill_quote, {:ok, {:error, reason}}, socket) do
+    {:noreply, assign(socket, :status, "quote_sql failed — #{inspect(reason)}")}
+  end
+
+  def handle_async(:fill_quote, {:exit, reason}, socket) do
+    {:noreply, assign(socket, :status, "quote_sql crashed — #{inspect(reason)}")}
+  end
 
   @impl true
   def handle_info({:db_row, ref, line}, %{assigns: %{ref: ref}} = socket) do
@@ -304,8 +315,9 @@ defmodule TragarAiWeb.InspectLive do
               placeholder={ph}
               class="rounded border p-1 text-xs"
             />
-            <div class="col-span-2 md:col-span-4">
+            <div class="col-span-2 flex items-center gap-2 md:col-span-4">
               <button type="submit" class="btn btn-primary btn-xs">Run quote</button>
+              <span :if={@status} class="text-xs opacity-70">{@status}</span>
             </div>
           </form>
           <p
