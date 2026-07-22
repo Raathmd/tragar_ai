@@ -19,8 +19,36 @@ defmodule TragarAi.Insight.RateEngine do
         → the origin depot         (manifestBranch = fwm_station.station_code)
         → that depot's postcode    (fwm_station.physical_address_postcode_obj)
         → that supplier's from-area (fwc_rate_area_postcode, same supplier, origin postcode)
-        → that supplier's rate     (fwm_entity_rate, FWMSC, from_rate_area + to_rate_area, effective)
+        → the supplier's buy service (fwm_contractor_service_type, station_contractor_obj =
+                                    supplier, company_service_type_obj = waybill.service_type_obj,
+                                    map effective_date ≤ waybill_date → cst.service_type_obj)
+        → that supplier's rate     (fwm_entity_rate, FWMSC, service_type_obj + rate_type_obj =
+                                    cst.*, from_rate_area + to_rate_area, effective_date ≤ waybill_date
+                                    ≤ cease_date, excluding bidirectional mirror rows)
         → weight band              (fwm_rate_table, from_unit ≤ chargable_units < to_unit)
+
+  SERVICE MAPPING (resolved 2026-07-22): the buy-rate's service_type_obj is deliberately
+  DIFFERENT from the waybill's — a booked sell service maps to the supplier's own buy
+  service, per-subcontractor and effective-dated, via fwm_contractor_service_type
+  (company_service_type_obj → service_type_obj, and its rate_type_obj). Confirmed on
+  waybill 1198849517: sell service 36836 → buy service 44693 → correct rate R108.29 (was
+  fanning out to R73M when unpinned). This is the DB table behind the
+  /subcontractors/{ref}/ServiceTypes API, so the pin stays a plain replica join. A
+  waybill whose service has no mapping for its delivery supplier prices nothing here
+  (uncosted in the drill — never dropped).
+
+  RATE DE-DUP (2026-07-22): a lane+supplier+service+effective still carries several
+  fwm_entity_rate rows. Expected cost must resolve to EXACTLY ONE rate — never a sum,
+  never an arbitrary pick, never zero when a rate exists. So `rate_sort_key` imposes a
+  TOTAL order and `max_by` takes the single winner. Only real determinants are hard
+  filters: `rate_type_obj` = the mapping's cst.rate_type_obj. Everything else is a
+  PREFERENCE in the sort key (candidate never dropped, so we never zero a priced lane):
+  (a) generic `account_product_obj` = 0 preferred — product-specific rates are 0.6%
+  (26/4682), consignment_type never set; per-line product override
+  (fwt_waybill_line_product) is a follow-up. (b) canonical preferred over its generated
+  reverse-mirror (bidirectional_entity_rate_obj = 0) — but the mirror stays a candidate
+  so a lane stored only as the reverse still prices. (c) highest entity_rate_obj is the
+  unique final tie-break guaranteeing determinism for a genuine duplicate.
         → per-waybill expected cost = base_amount + increment_amount ×
                                        ((weight − from_unit) / increment_unit)
 
@@ -102,9 +130,14 @@ defmodule TragarAi.Insight.RateEngine do
         |> Enum.group_by(&Map.get(&1, "waybill_obj"))
         |> Enum.map(fn {wb, wb_rows} ->
           # Base and fuel version independently: the charge/rate/fuel joins fan
-          # out, so pick the latest-effective rate band for the base and the
-          # latest-effective SCFUEL % for the multiplier, across the group.
-          base_row = Enum.max_by(wb_rows, &(&1["effective_date"] || ""))
+          # out, so pick the correct rate band for the base and the latest-effective
+          # SCFUEL % for the multiplier, across the group. Two effective-dated axes,
+          # both SQL-bounded to `<= waybill_date`: the service MAPPING version
+          # (fwm_contractor_service_type, sell service → this supplier's buy service)
+          # and the RATE version. Pick the latest in-force mapping, then the latest
+          # in-force rate under it — so a superseded mapping whose newer version has
+          # no rate on the lane falls back to the mapping that actually prices.
+          base_row = Enum.max_by(wb_rows, &rate_sort_key/1)
           base = waybill_cost(base_row)
           mult = fuel_multiplier(wb_rows)
 
@@ -174,7 +207,9 @@ defmodule TragarAi.Insight.RateEngine do
         |> Enum.filter(&rated?/1)
         |> Enum.group_by(&Map.get(&1, "waybill_obj"))
         |> Enum.map(fn {_wb, wb_rows} ->
-          wb_rows |> Enum.max_by(&(&1["effective_date"] || "")) |> waybill_cost()
+          # Latest in-force service mapping, then latest in-force rate (mirrors
+          # assigned_expected) — both SQL-bounded to <= today for the live ranking.
+          wb_rows |> Enum.max_by(&rate_sort_key/1) |> waybill_cost()
         end)
 
       priced = length(waybill_costs)
@@ -202,6 +237,31 @@ defmodule TragarAi.Insight.RateEngine do
   # LEFT join leaves rt.base_amount null when the supplier has no rate for the
   # origin area, so a present base_amount is the "can price this" signal.
   defp rated?(row), do: row["base_amount"] not in [nil, ""]
+
+  # Ordering key that resolves a waybill's fanned-out rate rows to EXACTLY ONE rate.
+  # Expected cost must always use a single rate — never a sum, never an arbitrary pick,
+  # and never zero when a rate exists. Total order (max_by wins on the largest tuple):
+  #   1. latest in-force service MAPPING (fwm_contractor_service_type)
+  #   2. latest in-force RATE version
+  #   3. prefer the GENERIC (account_product_obj = 0) rate — product-specific rates are
+  #      0.6%; without per-line account_product resolution the account-agnostic base is
+  #      correct for the ~99% of accounts with no product (per-line override = follow-up)
+  #   4. prefer the CANONICAL rate over its generated reverse-mirror
+  #      (bidirectional_entity_rate_obj = 0). A PREFERENCE, not a filter: the mirror stays
+  #      a candidate, so a lane whose rate is stored only as the reverse row still prices
+  #      (never zero) — we just favour the canonical when both exist.
+  #   5. highest entity_rate_obj — a UNIQUE final tie-break so the pick is deterministic
+  #      even for a genuine duplicate (OpenEdge obj is sequence-assigned, so highest =
+  #      latest-created record). This guarantees "only one rate is ever used".
+  # Mapping/rate are SQL-bounded to <= the reference date; ISO date strings sort
+  # chronologically. Falls back to an older mapping only when the newer has no lane rate.
+  defp rate_sort_key(row) do
+    generic = if num(row["account_product_obj"]) == 0.0, do: 1, else: 0
+    canonical = if num(row["bidirectional_entity_rate_obj"]) == 0.0, do: 1, else: 0
+
+    {row["map_effective_date"] || "", row["effective_date"] || "", generic, canonical,
+     num(row["entity_rate_obj"])}
+  end
 
   # base + increment × ((weight − from) / increment_unit); flat when increment_unit = 0.
   defp waybill_cost(row) do
@@ -254,7 +314,9 @@ defmodule TragarAi.Insight.RateEngine do
 
     """
     SELECT c.contractor_reference AS supplier_ref, c.contractor_name AS supplier_name, \
-    w.waybill_obj, w.chargable_units, er.effective_date, rt.from_unit, rt.base_amount, \
+    w.waybill_obj, w.chargable_units, er.entity_rate_obj, \
+    er.bidirectional_entity_rate_obj, er.effective_date, \
+    cst.effective_date AS map_effective_date, er.account_product_obj, rt.from_unit, rt.base_amount, \
     rt.increment_amount, rt.increment_unit \
     FROM PUB.fwt_parcel_tripsheet pt \
     JOIN PUB.fwt_waybill_parcel wp ON wp.waybill_parcel_obj = pt.waybill_parcel_obj \
@@ -264,12 +326,18 @@ defmodule TragarAi.Insight.RateEngine do
     JOIN PUB.fwm_station_contractor c ON c.station_contractor_obj = pc.owning_obj \
     AND (c.cease_date IS NULL OR c.cease_date >= '#{today}') \
     AND (c.start_date IS NULL OR c.start_date <= '#{today}') \
+    LEFT JOIN PUB.fwm_contractor_service_type cst ON cst.station_contractor_obj = c.station_contractor_obj \
+    AND cst.company_service_type_obj = w.service_type_obj \
+    AND cst.effective_date <= '#{today}' \
     LEFT JOIN PUB.fwm_station st ON st.station_code = '#{code}' \
     LEFT JOIN PUB.fwc_rate_area_postcode opc ON opc.postcode_obj = st.physical_address_postcode_obj \
     AND opc.owning_entity_mnemonic = 'FWMSC' AND opc.owning_obj = pc.owning_obj \
     LEFT JOIN PUB.fwm_entity_rate er ON er.owning_entity_mnemonic = 'FWMSC' \
     AND er.owning_obj = pc.owning_obj AND er.to_rate_area_obj = pc.rate_area_obj \
     AND er.from_rate_area_obj = opc.rate_area_obj \
+    AND er.service_type_obj = cst.service_type_obj \
+    AND er.rate_type_obj = cst.rate_type_obj \
+    AND er.effective_date <= '#{today}' \
     AND (er.cease_date IS NULL OR er.cease_date >= '#{today}') \
     LEFT JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
@@ -303,16 +371,19 @@ defmodule TragarAi.Insight.RateEngine do
   # is intrinsically partial: no derivable origin matches these cards for >~42% of
   # waybills, so buy-expected is a partial figure. (Same bidirectional caveat.)
   defp assigned_rows_sql(where_sql) do
-    today = Date.utc_today() |> Date.to_iso8601()
-
     """
     SELECT DISTINCT w.waybill_obj, w.waybill_date, w.account_name, w.rate_area_to_code, \
-    sc.contractor_reference, w.chargable_units, er.effective_date, rt.from_unit, \
+    sc.contractor_reference, w.chargable_units, er.entity_rate_obj, \
+    er.bidirectional_entity_rate_obj, er.effective_date, \
+    cst.effective_date AS map_effective_date, er.account_product_obj, rt.from_unit, \
     rt.base_amount, rt.increment_amount, rt.increment_unit, \
     fc.charge_percent AS fuel_percent, fc.effective_date AS fuel_effective \
     FROM PUB.fwt_waybill w \
     JOIN PUB.fwt_contractor_charge cc ON cc.waybill_obj = w.waybill_obj \
     JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj \
+    JOIN PUB.fwm_contractor_service_type cst ON cst.station_contractor_obj = sc.station_contractor_obj \
+    AND cst.company_service_type_obj = w.service_type_obj \
+    AND cst.effective_date <= w.waybill_date \
     JOIN PUB.fwc_rate_area_postcode pc ON pc.postcode_obj = w.consignee_postcode_obj \
     AND pc.owning_entity_mnemonic = 'FWMSC' AND pc.owning_obj = sc.station_contractor_obj \
     JOIN PUB.fwm_station ws ON ws.station_obj = w.at_station_obj \
@@ -321,13 +392,16 @@ defmodule TragarAi.Insight.RateEngine do
     JOIN PUB.fwm_entity_rate er ON er.owning_entity_mnemonic = 'FWMSC' \
     AND er.owning_obj = pc.owning_obj AND er.to_rate_area_obj = pc.rate_area_obj \
     AND er.from_rate_area_obj = wopc.rate_area_obj \
-    AND (er.cease_date IS NULL OR er.cease_date >= '#{today}') \
+    AND er.service_type_obj = cst.service_type_obj \
+    AND er.rate_type_obj = cst.rate_type_obj \
+    AND er.effective_date <= w.waybill_date \
+    AND (er.cease_date IS NULL OR er.cease_date >= w.waybill_date) \
     JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
     LEFT JOIN PUB.fwm_charge fc ON fc.owning_entity_mnemonic = 'FWMSC' \
     AND fc.owning_obj = sc.station_contractor_obj AND fc.charge_code = 'SCFUEL' \
-    AND fc.effective_date <= '#{today}' \
-    AND (fc.effective_until_date IS NULL OR fc.effective_until_date >= '#{today}') \
+    AND fc.effective_date <= w.waybill_date \
+    AND (fc.effective_until_date IS NULL OR fc.effective_until_date >= w.waybill_date) \
     WHERE #{where_sql}
     """
   end
