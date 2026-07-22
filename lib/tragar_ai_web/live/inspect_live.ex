@@ -37,7 +37,9 @@ defmodule TragarAiWeb.InspectLive do
      |> assign(:running, false)
      |> assign(:status, nil)
      |> assign(:job_status, nil)
-     |> assign(:ref, nil)}
+     |> assign(:ref, nil)
+     |> assign(:quote_result, nil)
+     |> assign(:quote_params, %{})}
   end
 
   @impl true
@@ -78,6 +80,38 @@ defmodule TragarAiWeb.InspectLive do
     {:noreply, assign(socket, :job_status, status)}
   end
 
+  # Run a FreightWare quick-quote IN-APP (never from Claude's session) — the same
+  # data-blind rule as the DB console: Claude authors the form, you execute it here
+  # and see the esRates. Supplier-as-account / site codes are filled in by you.
+  def handle_event("run_quote", params, %{assigns: %{authorized: true}} = socket) do
+    qp = %{
+      "account_reference" => params["account_reference"],
+      "service_type" => params["service_type"],
+      "consignor_site" => params["consignor_site"],
+      "consignor_suburb" => params["consignor_suburb"],
+      "consignor_city" => params["consignor_city"],
+      "collection_postal_code" => params["collection_postal_code"],
+      "consignee_site" => params["consignee_site"],
+      "consignee_suburb" => params["consignee_suburb"],
+      "consignee_city" => params["consignee_city"],
+      "delivery_postal_code" => params["delivery_postal_code"],
+      "items" => [
+        %{
+          "quantity" => 1,
+          "weight" => params["weight"],
+          "length" => params["length"],
+          "width" => params["width"],
+          "height" => params["height"]
+        }
+      ]
+    }
+
+    {:noreply,
+     socket
+     |> assign(:quote_params, params)
+     |> assign(:quote_result, TragarAi.Freight.quick_quote(qp))}
+  end
+
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   @impl true
@@ -115,6 +149,15 @@ defmodule TragarAiWeb.InspectLive do
     end
   end
 
+  # Format the quick-quote result for the in-app log. Raw rate maps so every
+  # returned field (freightCharge / sundryCharge / totalCharge per service) shows.
+  defp quote_output({:ok, rates}) do
+    "OK — #{length(rates)} rate(s):\n" <> Enum.map_join(rates, "\n", &inspect(&1, limit: :infinity))
+  end
+
+  defp quote_output({:error, reason}), do: "ERROR: #{inspect(reason, limit: :infinity)}"
+  defp quote_output(_), do: ""
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -142,6 +185,34 @@ defmodule TragarAiWeb.InspectLive do
           <p class="mt-1 text-xs opacity-60">
             Runs the ETL in the background via Oban — the aggregation stays in-app.
           </p>
+        </div>
+
+        <div class="mb-4 rounded border border-dashed p-2">
+          <h2 class="text-sm font-medium">FreightWare quick quote (runs in-app)</h2>
+          <p class="mt-1 text-xs opacity-60">
+            POST /quotes/quick — supplier account as <code>accountReference</code>, lane by site code + address.
+            Leave <code>serviceType</code> blank for all rates. Runs here; results below (never in Claude's session).
+          </p>
+          <form phx-submit="run_quote" class="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <input name="account_reference" value={@quote_params["account_reference"]} placeholder="accountReference" class="rounded border p-1 text-xs" />
+            <input name="service_type" value={@quote_params["service_type"]} placeholder="serviceType (blank=all)" class="rounded border p-1 text-xs" />
+            <input name="consignor_site" value={@quote_params["consignor_site"]} placeholder="consignorSite code" class="rounded border p-1 text-xs" />
+            <input name="consignee_site" value={@quote_params["consignee_site"]} placeholder="consigneeSite code" class="rounded border p-1 text-xs" />
+            <input name="consignor_suburb" value={@quote_params["consignor_suburb"]} placeholder="consignor suburb" class="rounded border p-1 text-xs" />
+            <input name="consignor_city" value={@quote_params["consignor_city"]} placeholder="consignor city" class="rounded border p-1 text-xs" />
+            <input name="collection_postal_code" value={@quote_params["collection_postal_code"]} placeholder="consignor postcode" class="rounded border p-1 text-xs" />
+            <input name="weight" value={@quote_params["weight"]} placeholder="weight (kg)" class="rounded border p-1 text-xs" />
+            <input name="consignee_suburb" value={@quote_params["consignee_suburb"]} placeholder="consignee suburb" class="rounded border p-1 text-xs" />
+            <input name="consignee_city" value={@quote_params["consignee_city"]} placeholder="consignee city" class="rounded border p-1 text-xs" />
+            <input name="delivery_postal_code" value={@quote_params["delivery_postal_code"]} placeholder="consignee postcode" class="rounded border p-1 text-xs" />
+            <input name="length" value={@quote_params["length"]} placeholder="L (cm)" class="rounded border p-1 text-xs" />
+            <input name="width" value={@quote_params["width"]} placeholder="W (cm)" class="rounded border p-1 text-xs" />
+            <input name="height" value={@quote_params["height"]} placeholder="H (cm)" class="rounded border p-1 text-xs" />
+            <div class="col-span-2 md:col-span-4">
+              <button type="submit" class="btn btn-primary btn-xs">Run quote</button>
+            </div>
+          </form>
+          <pre :if={@quote_result} class="mt-2 overflow-auto rounded bg-base-200 p-2 text-xs" style="max-height:30vh">{quote_output(@quote_result)}</pre>
         </div>
 
         <div class="mb-4">
