@@ -31,6 +31,7 @@ defmodule TragarAiWeb.InspectLive do
      socket
      |> assign(:authorized, Accounts.can_view?(socket.assigns[:current_user], :inspect))
      |> assign(:catalog, Catalog.load())
+     |> assign(:catalog_filter, nil)
      |> assign(:sql, "")
      |> assign(:current, nil)
      |> assign(:log, [])
@@ -45,6 +46,10 @@ defmodule TragarAiWeb.InspectLive do
   @impl true
   def handle_event("reload_catalog", _params, socket) do
     {:noreply, assign(socket, :catalog, Catalog.load())}
+  end
+
+  def handle_event("filter_catalog", %{"group" => g}, socket) do
+    {:noreply, assign(socket, :catalog_filter, if(g == "", do: nil, else: g))}
   end
 
   def handle_event("run_catalog", %{"id" => id}, %{assigns: %{authorized: true}} = socket) do
@@ -241,6 +246,21 @@ defmodule TragarAiWeb.InspectLive do
     }
   end
 
+  # Group a catalog entry: explicit "group", else the id prefix (svc / rate / qq …).
+  defp entry_group(%{group: g}) when is_binary(g) and g != "", do: g
+  defp entry_group(%{id: id}), do: id |> to_string() |> String.split("-") |> hd()
+
+  defp catalog_groups(catalog) do
+    catalog |> Enum.map(&entry_group/1) |> Enum.uniq() |> Enum.sort()
+  end
+
+  # Newest-first (reverse of authoring/execution order), filtered to the group.
+  defp visible_catalog(catalog, filter) do
+    catalog
+    |> Enum.reverse()
+    |> Enum.filter(fn q -> is_nil(filter) or entry_group(q) == filter end)
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -309,10 +329,34 @@ defmodule TragarAiWeb.InspectLive do
             </button>
           </div>
 
+          <div class="mb-1 flex flex-wrap items-center gap-1">
+            <span class="text-xs opacity-60">group:</span>
+            <button
+              type="button"
+              phx-click="filter_catalog"
+              phx-value-group=""
+              class={["btn btn-xs", (is_nil(@catalog_filter) && "btn-primary") || "btn-ghost"]}
+            >
+              all
+            </button>
+            <button
+              :for={g <- catalog_groups(@catalog)}
+              type="button"
+              phx-click="filter_catalog"
+              phx-value-group={g}
+              class={["btn btn-xs", (@catalog_filter == g && "btn-primary") || "btn-ghost"]}
+            >
+              {g}
+            </button>
+          </div>
+
           <p :if={@catalog == []} class="text-sm opacity-60">No catalog queries yet.</p>
 
-          <div class="grid gap-2">
-            <div :for={q <- @catalog} class="min-w-0 rounded border p-2">
+          <div class="grid max-h-[55vh] gap-2 overflow-y-auto pr-1">
+            <div
+              :for={q <- visible_catalog(@catalog, @catalog_filter)}
+              class="min-w-0 rounded border p-2"
+            >
               <div class="flex items-start justify-between gap-2">
                 <span class="min-w-0 break-words text-sm font-medium">{q.title}</span>
                 <div class="flex shrink-0 gap-1">

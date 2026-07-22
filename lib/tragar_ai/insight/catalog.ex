@@ -34,7 +34,8 @@ defmodule TragarAi.Insight.Catalog do
           description: q["description"] || "",
           sql: q["sql"],
           quote: q["quote"],
-          quote_sql: q["quote_sql"]
+          quote_sql: q["quote_sql"],
+          group: q["group"]
         }
       end)
     else
