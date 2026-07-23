@@ -14,35 +14,51 @@ defmodule TragarAi.Insight.ManifestOriginBackfill do
   if needed. Read-only against the replica; writes stay on-box.
   """
 
+  require Logger
+
   alias TragarAi.Insight.Db
   alias TragarAi.Repo
 
+  # Resolve PER SUPPLIER (each supplier's tripsheets are a small set) with TOP 50 —
+  # the all-suppliers scan times out even offline. Scoped to the test suppliers for
+  # now; widen the list once the quote proves out.
+  @suppliers ~w(JX002 ITT001 FPD001 GAV001)
   @days 90
-  @query_timeout 1_200_000
+  @per_query_timeout 300_000
 
-  @spec refresh() :: {:ok, map()} | {:error, term()}
-  def refresh do
+  @spec refresh([String.t()]) :: {:ok, map()} | {:error, term()}
+  def refresh(suppliers \\ @suppliers) do
     cutoff = Date.utc_today() |> Date.add(-@days) |> Date.to_iso8601()
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    with {:ok, rows} <- Db.query_rows(sql(cutoff), timeout: @query_timeout) do
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
+    {rows, skipped} =
+      Enum.reduce(suppliers, {[], []}, fn ref, {acc, skip} ->
+        case Db.query_rows(sql(ref, cutoff), timeout: @per_query_timeout) do
+          {:ok, rs} ->
+            Logger.info("[insight.manifest_origin] #{ref}: #{length(rs)} rows")
+            {rs ++ acc, skip}
 
-      maps =
-        rows
-        |> Enum.uniq_by(&Map.get(&1, "waybill_number"))
-        |> Enum.reject(&(Map.get(&1, "waybill_number") in [nil, ""]))
-        |> Enum.map(&to_map(&1, now))
-
-      Repo.transaction(fn ->
-        Repo.delete_all("insight_manifest_origin")
-
-        maps
-        |> Enum.chunk_every(1000)
-        |> Enum.each(&Repo.insert_all("insight_manifest_origin", &1))
+          {:error, reason} ->
+            Logger.error("[insight.manifest_origin] #{ref}: #{inspect(reason)}")
+            {acc, [ref | skip]}
+        end
       end)
 
-      {:ok, %{rows: length(maps)}}
-    end
+    maps =
+      rows
+      |> Enum.uniq_by(&Map.get(&1, "waybill_number"))
+      |> Enum.reject(&(Map.get(&1, "waybill_number") in [nil, ""]))
+      |> Enum.map(&to_map(&1, now))
+
+    Repo.transaction(fn ->
+      Repo.delete_all("insight_manifest_origin")
+
+      maps
+      |> Enum.chunk_every(1000)
+      |> Enum.each(&Repo.insert_all("insight_manifest_origin", &1))
+    end)
+
+    {:ok, %{rows: length(maps), suppliers: suppliers, skipped: skipped}}
   end
 
   defp to_map(r, now) do
@@ -77,9 +93,9 @@ defmodule TragarAi.Insight.ManifestOriginBackfill do
   # Start from the supplier's tripsheets (small set) so we read parcels by the
   # indexed waybill_parcel_obj rather than scanning by waybill_obj. Origin = the
   # tripsheet station; destination + weight + FRA come off the waybill/charge.
-  defp sql(cutoff) do
+  defp sql(ref, cutoff) do
     """
-    SELECT DISTINCT w.waybill_number, sc.contractor_reference, \
+    SELECT TOP 50 w.waybill_number, sc.contractor_reference, \
     osite.site_reference AS origin_site, \
     st.physical_address_suburb AS origin_suburb, \
     st.physical_address_city AS origin_city, \
@@ -97,7 +113,8 @@ defmodule TragarAi.Insight.ManifestOriginBackfill do
     JOIN PUB.fwt_contractor_charge cc ON cc.waybill_obj = w.waybill_obj \
     AND cc.charge_type_tla = 'FRA' AND cc.station_contractor_obj = sc.station_contractor_obj \
     JOIN PUB.fwm_postcode pcd ON pcd.postcode_obj = w.consignee_postcode_obj \
-    WHERE w.waybill_date >= '#{cutoff}' AND w.chargable_units > 0 AND w.consignee_suburb <> ''
+    WHERE sc.contractor_reference = '#{ref}' AND w.waybill_date >= '#{cutoff}' \
+    AND w.chargable_units > 0 AND w.consignee_suburb <> ''
     """
   end
 end
