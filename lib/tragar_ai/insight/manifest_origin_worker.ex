@@ -13,14 +13,8 @@ defmodule TragarAi.Insight.ManifestOriginWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    case ManifestOriginBackfill.refresh() do
-      {:ok, stats} ->
-        Logger.info("[insight.manifest_origin] refresh ok: #{inspect(stats)}")
-        :ok
-
-      {:error, reason} = err ->
-        Logger.error("[insight.manifest_origin] refresh failed: #{inspect(reason)}")
-        err
-    end
+    {:ok, stats} = ManifestOriginBackfill.refresh()
+    Logger.info("[insight.manifest_origin] refresh ok: #{inspect(stats)}")
+    :ok
   end
 end
