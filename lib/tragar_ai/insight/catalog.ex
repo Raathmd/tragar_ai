@@ -35,6 +35,7 @@ defmodule TragarAi.Insight.Catalog do
           sql: q["sql"],
           quote: q["quote"],
           quote_sql: q["quote_sql"],
+          quote_supplier: q["quote_supplier"],
           group: q["group"]
         }
       end)
@@ -81,10 +82,13 @@ defmodule TragarAi.Insight.Catalog do
     |> Enum.map(&elem(&1, 0))
   end
 
-  # A valid entry is a SQL query ("sql"), a static quick-quote case ("quote"), or a
-  # real-data quick-quote case ("quote_sql" — a SELECT returning one form-shaped row).
+  # A valid entry is a SQL query ("sql"), a static quick-quote case ("quote"), a
+  # replica quick-quote case ("quote_sql"), or a materialised one ("quote_supplier"
+  # — fills from insight_manifest_origin by supplier, instantly).
   defp entry?(q) do
-    is_map(q) and (is_binary(q["sql"]) or is_map(q["quote"]) or is_binary(q["quote_sql"]))
+    is_map(q) and
+      (is_binary(q["sql"]) or is_map(q["quote"]) or is_binary(q["quote_sql"]) or
+         is_binary(q["quote_supplier"]))
   end
 
   defp write(list) do

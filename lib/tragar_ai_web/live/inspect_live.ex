@@ -16,9 +16,12 @@ defmodule TragarAiWeb.InspectLive do
   """
   use TragarAiWeb, :live_view
 
+  import Ecto.Query
+
   alias TragarAi.Accounts
   alias TragarAi.Insight.Catalog
   alias TragarAi.Insight.Db
+  alias TragarAi.Repo
 
   # Keep the on-screen log bounded (newest-first internally, reversed for display).
   @max_lines 2000
@@ -67,7 +70,12 @@ defmodule TragarAiWeb.InspectLive do
   # string-keyed fields the form submits). You then click Run quote to execute it.
   def handle_event("fill_quote", %{"id" => id}, %{assigns: %{authorized: true}} = socket) do
     case Catalog.fetch(id) do
-      # Real-data case: run the SELECT ASYNC (off the LiveView) so a slow query
+      # Materialised case: read the pre-resolved manifest origin from Postgres by
+      # supplier — instant, no parcel scan. Populate via "Resolve manifest origins".
+      %{quote_supplier: ref} when is_binary(ref) ->
+        {:noreply, fill_from_materialised(socket, ref)}
+
+      # Replica case: run the SELECT ASYNC (off the LiveView) so a slow query
       # never freezes the page; the form fills in handle_async when it returns.
       # The real lane never enters Claude's session — Claude only authored the query.
       %{quote_sql: sql} when is_binary(sql) ->
@@ -109,6 +117,18 @@ defmodule TragarAiWeb.InspectLive do
     status =
       case TragarAi.Insight.SupplierCostWorker.new(%{}) |> Oban.insert() do
         {:ok, _job} -> "supplier-cost rebuild enqueued — runs in the background (see logs)"
+        {:error, reason} -> "could not enqueue — #{inspect(reason)}"
+      end
+
+    {:noreply, assign(socket, :job_status, status)}
+  end
+
+  # Enqueue the (slow, offline) manifest-origin resolve that fills
+  # insight_manifest_origin — the quote form then reads it instantly.
+  def handle_event("resolve_origins", _params, %{assigns: %{authorized: true}} = socket) do
+    status =
+      case TragarAi.Insight.ManifestOriginWorker.new(%{}) |> Oban.insert() do
+        {:ok, _job} -> "manifest-origin resolve enqueued — background (slow; see logs)"
         {:error, reason} -> "could not enqueue — #{inspect(reason)}"
       end
 
@@ -269,6 +289,46 @@ defmodule TragarAiWeb.InspectLive do
     }
   end
 
+  # Fill the quote form from the materialised manifest-origin table (Postgres) for a
+  # supplier — instant, no replica parcel scan.
+  defp fill_from_materialised(socket, ref) do
+    row =
+      from(m in "insight_manifest_origin",
+        where: m.contractor_reference == ^ref,
+        limit: 1,
+        select: %{
+          "account_reference" => m.contractor_reference,
+          "consignor_site" => m.origin_site,
+          "consignor_suburb" => m.origin_suburb,
+          "consignor_city" => m.origin_city,
+          "collection_postal_code" => m.origin_postcode,
+          "consignee_suburb" => m.consignee_suburb,
+          "consignee_city" => m.consignee_city,
+          "delivery_postal_code" => m.consignee_postcode,
+          "weight" => m.weight,
+          "waybill_number" => m.waybill_number,
+          "actual_fra" => m.actual_fra
+        }
+      )
+      |> Repo.one()
+
+    case row do
+      nil ->
+        assign(socket, :status, "no materialised origin for #{ref} — run resolve first")
+
+      r ->
+        params = Map.merge(default_quote_params(), Map.new(r, fn {k, v} -> {k, form_str(v)} end))
+
+        socket
+        |> assign(:quote_params, params)
+        |> assign(:status, "filled from materialised manifest origin — click Run quote")
+    end
+  end
+
+  defp form_str(nil), do: ""
+  defp form_str(v) when is_binary(v), do: v
+  defp form_str(v), do: to_string(v)
+
   # Group a catalog entry: explicit "group", else the id prefix (svc / rate / qq …).
   defp entry_group(%{group: g}) when is_binary(g) and g != "", do: g
   defp entry_group(%{id: id}), do: id |> to_string() |> String.split("-") |> hd()
@@ -297,7 +357,7 @@ defmodule TragarAiWeb.InspectLive do
 
       <div :if={@authorized}>
         <div class="mb-4 rounded border border-dashed p-2">
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2">
             <h2 class="text-sm font-medium">Warehouse jobs</h2>
             <button
               type="button"
@@ -305,6 +365,13 @@ defmodule TragarAiWeb.InspectLive do
               class="btn btn-secondary btn-xs"
             >
               Rebuild supplier-cost warehouse
+            </button>
+            <button
+              type="button"
+              phx-click="resolve_origins"
+              class="btn btn-secondary btn-xs"
+            >
+              Resolve manifest origins
             </button>
             <span :if={@job_status} class="text-xs opacity-70">{@job_status}</span>
           </div>
@@ -385,7 +452,7 @@ defmodule TragarAiWeb.InspectLive do
                 <span class="min-w-0 break-words text-sm font-medium">{q.title}</span>
                 <div class="flex shrink-0 gap-1">
                   <button
-                    :if={q.quote || q.quote_sql}
+                    :if={q.quote || q.quote_sql || q.quote_supplier}
                     type="button"
                     phx-click="fill_quote"
                     phx-value-id={q.id}
@@ -429,6 +496,9 @@ defmodule TragarAiWeb.InspectLive do
                 :if={q.quote_sql}
                 class="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-xs"
               >{q.quote_sql}</pre>
+              <p :if={q.quote_supplier} class="mt-1 text-xs opacity-70">
+                materialised manifest origin for supplier {q.quote_supplier}
+              </p>
             </div>
           </div>
         </div>
