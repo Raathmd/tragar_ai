@@ -28,6 +28,10 @@ defmodule TragarAi.Insight.Rollup do
     field :expected_buy, :decimal
     # how many of `waybills` got an expected cost. Set with expected_buy.
     field :priced_waybills, :integer
+    # actual buy over ONLY the priced (rate-carded) waybills — the like-for-like
+    # partner to expected_buy. `buy` covers ALL legs, so buy vs expected_buy mixes
+    # in coverage; priced_buy vs expected_buy is pure rate divergence (same legs).
+    field :priced_buy, :decimal
     # how many of `waybills` rode own fleet (no 3rd-party supplier/card). Set by the
     # month cascade. uncosted = waybills - priced_waybills - own_fleet_waybills — the
     # "No rate" count, now excluding own-fleet (which has no supplier to rate).
@@ -53,6 +57,7 @@ defmodule TragarAi.Insight.Rollup do
       :buy,
       :expected_buy,
       :priced_waybills,
+      :priced_buy,
       :own_fleet_waybills,
       :surcharges,
       :margin

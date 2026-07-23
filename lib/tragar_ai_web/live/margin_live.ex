@@ -377,6 +377,7 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:rows, Enum.reverse(rows))
     |> assign(:totals, totals(length(rows), "Months", sell, buy, expected))
     |> assign(:chart, build_chart(rows))
+    |> assign(:compare_chart, build_compare_chart(rows))
     |> assign(:max_val, max_margin)
     |> assign(:ranked, [])
     |> assign(:pie, [])
@@ -423,6 +424,7 @@ defmodule TragarAiWeb.MarginLive do
     |> assign(:rows, [])
     |> assign(:totals, totals(length(dims), "Dimensions", sell, buy, expected))
     |> assign(:chart, nil)
+    |> assign(:compare_chart, nil)
     |> assign(:max_val, max_abs)
     |> assign(:ranked, Enum.take(ranked, 60))
     |> assign(:pie, build_pie(dims, pie_fun))
@@ -572,6 +574,52 @@ defmodule TragarAiWeb.MarginLive do
       ticks: ticks,
       peak: money(ymax),
       baseline: @chart_h - @chart_pad_bottom
+    }
+  end
+
+  # ── contracted-vs-actual line chart (rate-carded legs only) ─────────────────
+  # Expected (rate-card) vs actual buy on the SAME priced waybills, so the gap is
+  # pure rate divergence, not coverage. Own y-scale (both series are the priced
+  # subset, well below total sell) so the divergence is legible. variance = actual
+  # over/under contract across the period (+ = actual exceeds the rate card).
+  defp build_compare_chart([]), do: nil
+
+  defp build_compare_chart(rows) do
+    n = length(rows)
+
+    ymax =
+      rows
+      |> Enum.flat_map(&[to_f(&1.expected_buy), to_f(&1.priced_buy)])
+      |> Enum.max(fn -> 1.0 end)
+      |> max(1.0)
+
+    plot_w = @chart_w - 2 * @chart_pad_x
+    plot_h = @chart_h - @chart_pad_top - @chart_pad_bottom
+
+    coord = fn i, v ->
+      x = @chart_pad_x + if(n > 1, do: i / (n - 1) * plot_w, else: plot_w / 2)
+      y = @chart_pad_top + (1.0 - min(v / ymax, 1.0)) * plot_h
+      {Float.round(x, 1), Float.round(y, 1)}
+    end
+
+    ticks =
+      rows
+      |> Enum.with_index()
+      |> Enum.filter(fn {r, _} -> match?(%Date{month: 1}, r.period_month) end)
+      |> Enum.map(fn {r, i} -> {elem(coord.(i, 0.0), 0), r.period_month.year} end)
+
+    exp_tot = sum(rows, & &1.expected_buy)
+    act_tot = sum(rows, & &1.priced_buy)
+
+    %{
+      expected: polyline(pts(rows, &to_f(&1.expected_buy), coord)),
+      actual: polyline(pts(rows, &to_f(&1.priced_buy), coord)),
+      ticks: ticks,
+      peak: money(ymax),
+      baseline: @chart_h - @chart_pad_bottom,
+      expected_total: money(exp_tot),
+      actual_total: money(act_tot),
+      variance_pct: (exp_tot > 0.0 && Float.round((act_tot - exp_tot) / exp_tot * 100, 1)) || nil
     }
   end
 
@@ -970,6 +1018,51 @@ defmodule TragarAiWeb.MarginLive do
             {yr}
           </text>
         </svg>
+      </div>
+
+      <div :if={@compare_chart} class="mb-5 rounded border p-3">
+        <div class="mb-1 text-sm font-medium">Contracted vs actual buy — rate-carded legs</div>
+        <div class="mb-2 flex flex-wrap items-center gap-4 text-xs">
+          <span class="flex items-center gap-1">
+            <span class="inline-block h-2 w-3 rounded" style="background: rgb(59,130,246)"></span>
+            Expected (contracted)
+          </span>
+          <span class="flex items-center gap-1">
+            <span class="inline-block h-2 w-3 rounded" style="background: rgb(239,68,68)"></span>
+            Actual (same legs)
+          </span>
+          <span :if={@compare_chart.variance_pct} class="opacity-60">
+            actual {@compare_chart.variance_pct}% vs contract · exp {@compare_chart.expected_total} · act {@compare_chart.actual_total}
+          </span>
+        </div>
+        <svg viewBox="0 0 960 240" class="w-full" style="max-height:280px">
+          <polyline
+            points={@compare_chart.expected}
+            fill="none"
+            stroke="rgb(59,130,246)"
+            stroke-width="1.5"
+          />
+          <polyline
+            points={@compare_chart.actual}
+            fill="none"
+            stroke="rgb(239,68,68)"
+            stroke-width="1.5"
+          />
+          <text
+            :for={{x, yr} <- @compare_chart.ticks}
+            x={x}
+            y={@compare_chart.baseline + 14}
+            font-size="9"
+            text-anchor="middle"
+            fill="currentColor"
+            opacity="0.5"
+          >
+            {yr}
+          </text>
+        </svg>
+        <p class="mt-2 text-xs opacity-60">
+          Both lines cover only waybills with a supplier rate card (own-fleet and uncosted legs excluded), so the gap is rate divergence, not coverage.
+        </p>
       </div>
 
       <div :if={@pie != []} class="mb-5 flex flex-col gap-4 rounded border p-3 sm:flex-row">

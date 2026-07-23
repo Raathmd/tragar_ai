@@ -267,6 +267,7 @@ defmodule TragarAi.Insight.WaybillCostBackfill do
         sell: sum(c.sell),
         buy: sum(c.buy),
         expected_buy: sum(coalesce(c.expected, 0)),
+        priced_buy: sum(fragment("CASE WHEN ? THEN ? ELSE 0 END", c.priced, c.buy)),
         priced_waybills: sum(fragment("CASE WHEN ? THEN 1 ELSE 0 END", c.priced)),
         own_fleet_waybills: sum(fragment("CASE WHEN ? THEN 1 ELSE 0 END", c.own_fleet))
       }
@@ -294,6 +295,7 @@ defmodule TragarAi.Insight.WaybillCostBackfill do
         sell: sum(c.sell),
         buy: sum(c.buy),
         expected_buy: sum(coalesce(c.expected, 0)),
+        priced_buy: sum(fragment("CASE WHEN ? THEN ? ELSE 0 END", c.priced, c.buy)),
         priced_waybills: sum(fragment("CASE WHEN ? THEN 1 ELSE 0 END", c.priced)),
         own_fleet_waybills: sum(fragment("CASE WHEN ? THEN 1 ELSE 0 END", c.own_fleet))
       }
@@ -317,6 +319,7 @@ defmodule TragarAi.Insight.WaybillCostBackfill do
       sell: sell,
       buy: buy,
       expected_buy: a.expected_buy || Decimal.new(0),
+      priced_buy: a.priced_buy || Decimal.new(0),
       priced_waybills: a.priced_waybills || 0,
       own_fleet_waybills: a.own_fleet_waybills || 0,
       surcharges: Decimal.new(0),
