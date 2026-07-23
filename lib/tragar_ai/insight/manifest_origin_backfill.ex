@@ -106,7 +106,9 @@ defmodule TragarAi.Insight.ManifestOriginBackfill do
     JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = ts.station_contractor_obj \
     JOIN PUB.fwm_station st ON st.station_obj = ts.station_obj \
     LEFT JOIN PUB.fwm_site osite ON osite.station_obj = ts.station_obj \
-    LEFT JOIN PUB.fwm_postcode opc ON opc.postcode_obj = st.physical_address_postcode_obj \
+    JOIN PUB.fwm_postcode opc ON opc.postcode_obj = st.physical_address_postcode_obj \
+    JOIN PUB.fwc_rate_area_postcode rap ON rap.postcode_obj = st.physical_address_postcode_obj \
+    AND rap.owning_entity_mnemonic = 'FWMSC' AND rap.owning_obj = sc.station_contractor_obj \
     JOIN PUB.fwt_parcel_tripsheet pt ON pt.tripsheet_obj = ts.tripsheet_obj \
     JOIN PUB.fwt_waybill_parcel wp ON wp.waybill_parcel_obj = pt.waybill_parcel_obj \
     JOIN PUB.fwt_waybill w ON w.waybill_obj = wp.waybill_obj \
@@ -114,7 +116,10 @@ defmodule TragarAi.Insight.ManifestOriginBackfill do
     AND cc.charge_type_tla = 'FRA' AND cc.station_contractor_obj = sc.station_contractor_obj \
     JOIN PUB.fwm_postcode pcd ON pcd.postcode_obj = w.consignee_postcode_obj \
     WHERE sc.contractor_reference = '#{ref}' AND w.waybill_date >= '#{cutoff}' \
-    AND w.chargable_units > 0 AND w.consignee_suburb <> ''
+    AND w.chargable_units > 0 AND w.consignee_suburb <> '' \
+    AND EXISTS (SELECT 1 FROM PUB.fwm_entity_rate er \
+    WHERE er.owning_entity_mnemonic = 'FWMSC' AND er.owning_obj = sc.station_contractor_obj \
+    AND er.from_rate_area_obj = rap.rate_area_obj)
     """
   end
 end
