@@ -16,7 +16,7 @@ defmodule TragarAiWeb.InspectLive do
   """
   use TragarAiWeb, :live_view
 
-  import Ecto.Query
+  import Ecto.Query, only: [from: 2]
 
   alias TragarAi.Accounts
   alias TragarAi.Insight.Catalog
