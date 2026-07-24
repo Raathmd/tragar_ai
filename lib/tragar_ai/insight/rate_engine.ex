@@ -184,6 +184,58 @@ defmodule TragarAi.Insight.RateEngine do
     end
   end
 
+  @doc """
+  Per-waybill AUDIT rows for the delivery-audit view — the resolution BEHIND each
+  expected cost, so the calc is visually inspectable. Same delivery-area matching
+  as `assigned_expected`, but LEFT-joined so a waybill with no resolved rate still
+  appears (uncosted), and enriched with the town / postal code / rate-area / rate
+  that produced the number. `where_sql` selects the waybills (e.g. a
+  `w.waybill_obj IN (...)` list for one page). Returns `{:ok, [row]}` — one per
+  waybill — each carrying `costed?`, the resolved `delivery_rate_area`, and the
+  single chosen rate's obj/effective/base.
+  """
+  @spec audit(String.t()) :: {:ok, [map()]} | {:error, term()}
+  def audit(where_sql) when is_binary(where_sql) do
+    with {:ok, rows} <- Db.query_rows(audit_rows_sql(where_sql)) do
+      audited =
+        rows
+        |> Enum.group_by(&Map.get(&1, "waybill_obj"))
+        |> Enum.map(fn {wb, wb_rows} ->
+          # Same single-rate pick as assigned_expected (rate_sort_key + max_by), so
+          # the audit shows EXACTLY the rate the calc uses. LEFT joins mean an
+          # uncosted waybill has null rate columns → base_amount absent → costed? false.
+          row = Enum.max_by(wb_rows, &rate_sort_key/1)
+          costed? = row["base_amount"] not in [nil, ""]
+
+          expected =
+            if costed?, do: Float.round(waybill_cost(row) * fuel_multiplier(wb_rows), 2), else: nil
+
+          %{
+            waybill_obj: wb,
+            waybill_number: row["waybill_number"],
+            waybill_date: row["waybill_date"],
+            account_name: row["account_name"],
+            supplier: row["contractor_reference"],
+            chargable_units: num(row["chargable_units"]),
+            consignee_suburb: row["consignee_suburb"],
+            consignee_postcode: row["consignee_postcode"],
+            consignor_suburb: row["consignor_suburb"],
+            consignor_postcode: row["consignor_postcode"],
+            delivery_rate_area: row["delivery_rate_area"],
+            expected: expected,
+            costed?: costed?,
+            rate_base: num(row["base_amount"]),
+            rate_effective: row["effective_date"],
+            entity_rate_obj: row["entity_rate_obj"],
+            from_rate_area_obj: row["from_rate_area_obj"],
+            to_rate_area_obj: row["to_rate_area_obj"]
+          }
+        end)
+
+      {:ok, audited}
+    end
+  end
+
   # SCFUEL fuel surcharge as a multiplier on the base subtotal: 1 + pct/100, using
   # the waybill supplier's latest-effective percent (LEFT JOIN, so no fuel row →
   # ×1.0). Clamped to a sane band — fwm_charge carries junk config percents
@@ -414,6 +466,49 @@ defmodule TragarAi.Insight.RateEngine do
     AND er.effective_date <= w.waybill_date \
     AND (er.cease_date IS NULL OR er.cease_date >= w.waybill_date) \
     JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
+    AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
+    LEFT JOIN PUB.fwm_charge fc ON fc.owning_entity_mnemonic = 'FWMSC' \
+    AND fc.owning_obj = sc.station_contractor_obj AND fc.charge_code = 'SCFUEL' \
+    AND fc.effective_date <= w.waybill_date \
+    AND (fc.effective_until_date IS NULL OR fc.effective_until_date >= w.waybill_date) \
+    WHERE #{where_sql}
+    """
+  end
+
+  # AUDIT variant of assigned_rows_sql: the rate chain (cst / pc / rate area / er /
+  # rt / fc) is LEFT-joined so an UNCOSTED waybill still returns (with null rate
+  # columns), and extra columns expose the resolution — the delivery town + postal
+  # code, the resolved delivery rate-area CODE (fwm_rate_area), and the chosen
+  # rate's obj/effective/from-to. Same delivery-area match as the calc
+  # (er.to_rate_area_obj = pc.rate_area_obj). The supplier (cc/sc) stays INNER —
+  # a delivery-audit row is a 3rd-party leg. `where_sql` scopes it (a page's
+  # waybill_obj IN list), so the LEFT fan-out stays small.
+  defp audit_rows_sql(where_sql) do
+    """
+    SELECT w.waybill_obj, w.waybill_number, w.waybill_date, w.account_name, \
+    sc.contractor_reference, w.consignee_suburb, w.post_code AS consignee_postcode, \
+    w.consignor_suburb, w.consignor_postal_code AS consignor_postcode, \
+    ra.rate_area_code AS delivery_rate_area, w.chargable_units, er.entity_rate_obj, \
+    er.bidirectional_entity_rate_obj, er.effective_date, \
+    cst.effective_date AS map_effective_date, er.account_product_obj, \
+    er.from_rate_area_obj, er.to_rate_area_obj, rt.from_unit, rt.base_amount, \
+    rt.increment_amount, rt.increment_unit, fc.charge_percent AS fuel_percent, \
+    fc.effective_date AS fuel_effective \
+    FROM PUB.fwt_waybill w \
+    JOIN PUB.fwt_contractor_charge cc ON cc.waybill_obj = w.waybill_obj \
+    AND cc.charge_type_tla = 'FRA' \
+    JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj \
+    LEFT JOIN PUB.fwm_contractor_service_type cst ON cst.station_contractor_obj = sc.station_contractor_obj \
+    AND cst.company_service_type_obj = w.service_type_obj AND cst.effective_date <= w.waybill_date \
+    LEFT JOIN PUB.fwc_rate_area_postcode pc ON pc.postcode_obj = w.consignee_postcode_obj \
+    AND pc.owning_entity_mnemonic = 'FWMSC' AND pc.owning_obj = sc.station_contractor_obj \
+    LEFT JOIN PUB.fwm_rate_area ra ON ra.rate_area_obj = pc.rate_area_obj \
+    LEFT JOIN PUB.fwm_entity_rate er ON er.owning_entity_mnemonic = 'FWMSC' \
+    AND er.owning_obj = pc.owning_obj AND er.to_rate_area_obj = pc.rate_area_obj \
+    AND er.service_type_obj = cst.service_type_obj AND er.rate_type_obj = cst.rate_type_obj \
+    AND er.effective_date <= w.waybill_date \
+    AND (er.cease_date IS NULL OR er.cease_date >= w.waybill_date) \
+    LEFT JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
     LEFT JOIN PUB.fwm_charge fc ON fc.owning_entity_mnemonic = 'FWMSC' \
     AND fc.owning_obj = sc.station_contractor_obj AND fc.charge_code = 'SCFUEL' \

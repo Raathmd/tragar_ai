@@ -60,6 +60,7 @@ defmodule TragarAi.Accounts do
     %{key: "supplier_ops", label: "Supplier selection (ops)", path: "/supplier"},
     %{key: "supplier_mgmt", label: "Supplier selection (management)", path: "/supplier/history"},
     %{key: "margin", label: "Margin", path: "/margin"},
+    %{key: "delivery_audit", label: "Delivery audit", path: "/delivery-audit"},
     %{key: "margin_users", label: "Access admin", path: "/margin/users"},
     %{key: "settings", label: "Settings", path: "/settings"},
     %{key: "architecture", label: "Architecture", path: "/architecture"},
