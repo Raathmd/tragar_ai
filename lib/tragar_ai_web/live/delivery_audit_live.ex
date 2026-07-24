@@ -97,6 +97,8 @@ defmodule TragarAiWeb.DeliveryAuditLive do
       buy: r.buy,
       expected: r.expected,
       priced: r.priced,
+      sell_from_area: r.rate_area_from_code,
+      sell_to_area: r.rate_area_to_code,
       res: Map.get(resolution, r.waybill_obj, %{})
     }
   end
@@ -213,7 +215,8 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <th>Supplier</th>
               <th>Delivery town</th>
               <th>Postcode</th>
-              <th>Rate area</th>
+              <th>Sell area (from→to)</th>
+              <th>Buy area (delivery)</th>
               <th class="text-right">Expected buy</th>
               <th class="text-right">Actual buy</th>
               <th class="text-right">Rate base</th>
@@ -230,6 +233,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <td class="font-mono">{blank(r.supplier)}</td>
               <td>{res(r.res, :consignee_suburb)}</td>
               <td>{res(r.res, :consignee_postcode)}</td>
+              <td class="font-mono opacity-70">{blank(r.sell_from_area)}→{blank(r.sell_to_area)}</td>
               <td class="font-mono">{res(r.res, :delivery_rate_area)}</td>
               <td class={["text-right", r.priced && "text-success"]}>{money(r.expected)}</td>
               <td class="text-right">{money(r.buy)}</td>
@@ -238,7 +242,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <td class="font-mono opacity-70">{res(r.res, :entity_rate_obj)}</td>
             </tr>
             <tr :if={@rows == []}>
-              <td colspan="13" class="p-4 text-center opacity-60">
+              <td colspan="14" class="p-4 text-center opacity-60">
                 No deliveries — the month may not be materialised yet (run a warehouse refresh),
                 or the filter matched nothing.
               </td>
