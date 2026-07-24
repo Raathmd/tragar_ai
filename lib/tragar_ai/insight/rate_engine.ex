@@ -223,12 +223,19 @@ defmodule TragarAi.Insight.RateEngine do
             |> Enum.map(fn c ->
               %{
                 entity_rate_obj: c["entity_rate_obj"],
+                service: c["rate_service"],
+                rate_type: c["rate_type_obj"],
                 from_rate_area_obj: c["from_rate_area_obj"],
                 to_rate_area_obj: c["to_rate_area_obj"],
-                base: num(c["base_amount"]),
-                effective: c["effective_date"],
                 product: c["account_product_obj"],
                 bidirectional: c["bidirectional_entity_rate_obj"],
+                effective: c["effective_date"],
+                cease: c["cease_date"],
+                from_unit: num(c["from_unit"]),
+                to_unit: num(c["to_unit"]),
+                base: num(c["base_amount"]),
+                increment_amount: num(c["increment_amount"]),
+                increment_unit: num(c["increment_unit"]),
                 used?: c["entity_rate_obj"] == row["entity_rate_obj"]
               }
             end)
@@ -240,6 +247,7 @@ defmodule TragarAi.Insight.RateEngine do
             waybill_date: row["waybill_date"],
             account_name: row["account_name"],
             supplier: row["contractor_reference"],
+            wb_service: row["wb_service"],
             chargable_units: num(row["chargable_units"]),
             consignee_suburb: row["consignee_suburb"],
             consignee_postcode: row["consignee_postcode"],
@@ -515,15 +523,17 @@ defmodule TragarAi.Insight.RateEngine do
     sc.contractor_reference, w.consignee_suburb, w.post_code AS consignee_postcode, \
     w.consignor_suburb, w.consignor_postal_code AS consignor_postcode, \
     ra.rate_area_code AS delivery_rate_area, w.chargable_units, er.entity_rate_obj, \
-    er.bidirectional_entity_rate_obj, er.effective_date, \
-    cst.effective_date AS map_effective_date, er.account_product_obj, \
-    er.from_rate_area_obj, er.to_rate_area_obj, rt.from_unit, rt.base_amount, \
+    er.bidirectional_entity_rate_obj, er.effective_date, er.cease_date, \
+    cst.effective_date AS map_effective_date, er.account_product_obj, er.rate_type_obj, \
+    wsvc.service_type_code AS wb_service, rsvc.service_type_code AS rate_service, \
+    er.from_rate_area_obj, er.to_rate_area_obj, rt.from_unit, rt.to_unit, rt.base_amount, \
     rt.increment_amount, rt.increment_unit, fc.charge_percent AS fuel_percent, \
     fc.effective_date AS fuel_effective \
     FROM PUB.fwt_waybill w \
     JOIN PUB.fwt_contractor_charge cc ON cc.waybill_obj = w.waybill_obj \
     AND cc.charge_type_tla = 'FRA' \
     JOIN PUB.fwm_station_contractor sc ON sc.station_contractor_obj = cc.station_contractor_obj \
+    LEFT JOIN PUB.fwc_service_type wsvc ON wsvc.service_type_obj = w.service_type_obj \
     LEFT JOIN PUB.fwm_contractor_service_type cst ON cst.station_contractor_obj = sc.station_contractor_obj \
     AND cst.company_service_type_obj = w.service_type_obj AND cst.effective_date <= w.waybill_date \
     LEFT JOIN PUB.fwc_rate_area_postcode pc ON pc.postcode_obj = w.consignee_postcode_obj \
@@ -534,6 +544,7 @@ defmodule TragarAi.Insight.RateEngine do
     AND er.service_type_obj = cst.service_type_obj AND er.rate_type_obj = cst.rate_type_obj \
     AND er.effective_date <= w.waybill_date \
     AND (er.cease_date IS NULL OR er.cease_date >= w.waybill_date) \
+    LEFT JOIN PUB.fwc_service_type rsvc ON rsvc.service_type_obj = er.service_type_obj \
     LEFT JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
     LEFT JOIN PUB.fwm_charge fc ON fc.owning_entity_mnemonic = 'FWMSC' \
