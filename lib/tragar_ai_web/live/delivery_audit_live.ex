@@ -36,6 +36,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
      |> assign(:rows, [])
      |> assign(:total, 0)
      |> assign(:error, nil)
+     |> assign(:expanded, MapSet.new())
      |> load()}
   end
 
@@ -55,6 +56,17 @@ defmodule TragarAiWeb.DeliveryAuditLive do
 
   def handle_event("page", %{"to" => to}, socket) do
     {:noreply, socket |> assign(:page, max(1, to_int(to, socket.assigns.page))) |> load()}
+  end
+
+  def handle_event("toggle", %{"wb" => wb}, socket) do
+    expanded = socket.assigns.expanded
+
+    expanded =
+      if MapSet.member?(expanded, wb),
+        do: MapSet.delete(expanded, wb),
+        else: MapSet.put(expanded, wb)
+
+    {:noreply, assign(socket, :expanded, expanded)}
   end
 
   # ── data ────────────────────────────────────────────────────────────────────
@@ -88,7 +100,10 @@ defmodule TragarAiWeb.DeliveryAuditLive do
   end
 
   defp merge_row(r, resolution) do
+    res = Map.get(resolution, r.waybill_obj, %{})
+
     %{
+      waybill_obj: r.waybill_obj,
       waybill_number: r.waybill_number,
       waybill_date: r.waybill_date,
       customer: r.account_name,
@@ -99,7 +114,9 @@ defmodule TragarAiWeb.DeliveryAuditLive do
       priced: r.priced,
       sell_from_area: r.rate_area_from_code,
       sell_to_area: r.rate_area_to_code,
-      res: Map.get(resolution, r.waybill_obj, %{})
+      rate_count: Map.get(res, :rate_count, 0),
+      candidates: Map.get(res, :candidates, []),
+      res: res
     }
   end
 
@@ -122,6 +139,13 @@ defmodule TragarAiWeb.DeliveryAuditLive do
     case Integer.parse(to_string(v || "")) do
       {n, _} -> n
       :error -> default
+    end
+  end
+
+  defp num_str(v) do
+    case Float.parse(to_string(v || "0")) do
+      {f, _} -> f
+      :error -> 0.0
     end
   end
 
@@ -217,6 +241,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <th>Postcode</th>
               <th>Sell area (from→to)</th>
               <th>Buy area (delivery)</th>
+              <th class="text-center">Rates</th>
               <th class="text-right">Expected buy</th>
               <th class="text-right">Actual buy</th>
               <th class="text-right">Rate base</th>
@@ -224,8 +249,8 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <th>Rate obj</th>
             </tr>
           </thead>
-          <tbody>
-            <tr :for={r <- @rows} class={[!r.priced && "bg-warning/10"]}>
+          <tbody :for={r <- @rows}>
+            <tr class={[!r.priced && "bg-warning/10"]}>
               <td class="font-mono">{r.waybill_number}</td>
               <td>{r.waybill_date}</td>
               <td class="max-w-40 truncate" title={r.customer}>{blank(r.customer)}</td>
@@ -235,14 +260,62 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <td>{res(r.res, :consignee_postcode)}</td>
               <td class="font-mono opacity-70">{blank(r.sell_from_area)}→{blank(r.sell_to_area)}</td>
               <td class="font-mono">{res(r.res, :delivery_rate_area)}</td>
+              <td class="text-center">
+                <button
+                  :if={r.rate_count > 0}
+                  type="button"
+                  phx-click="toggle"
+                  phx-value-wb={r.waybill_obj}
+                  class="link link-primary font-semibold"
+                >
+                  {r.rate_count}
+                </button>
+                <span :if={r.rate_count == 0} class="opacity-50">0</span>
+              </td>
               <td class={["text-right", r.priced && "text-success"]}>{money(r.expected)}</td>
               <td class="text-right">{money(r.buy)}</td>
               <td class="text-right">{(r.priced && money(Map.get(r.res, :rate_base))) || "—"}</td>
               <td>{res(r.res, :rate_effective)}</td>
               <td class="font-mono opacity-70">{res(r.res, :entity_rate_obj)}</td>
             </tr>
-            <tr :if={@rows == []}>
-              <td colspan="14" class="p-4 text-center opacity-60">
+            <tr :if={MapSet.member?(@expanded, r.waybill_obj)}>
+              <td colspan="15" class="bg-base-200 p-2">
+                <div class="mb-1 text-xs font-semibold">
+                  {r.rate_count} rate(s) found on the delivery area for {r.waybill_number} — the
+                  highlighted row is the one the calc used.
+                </div>
+                <table class="table table-xs w-auto">
+                  <thead>
+                    <tr>
+                      <th>Rate obj</th>
+                      <th>From area</th>
+                      <th>To area</th>
+                      <th class="text-right">Base</th>
+                      <th>Effective</th>
+                      <th>Product</th>
+                      <th>Mirror</th>
+                      <th>Used</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr :for={c <- r.candidates} class={[c.used? && "bg-success/20 font-semibold"]}>
+                      <td class="font-mono">{c.entity_rate_obj}</td>
+                      <td class="font-mono">{c.from_rate_area_obj}</td>
+                      <td class="font-mono">{c.to_rate_area_obj}</td>
+                      <td class="text-right">{money(c.base)}</td>
+                      <td>{blank(c.effective)}</td>
+                      <td>{if num_str(c.product) == 0, do: "generic", else: c.product}</td>
+                      <td>{if num_str(c.bidirectional) == 0, do: "—", else: "mirror"}</td>
+                      <td>{(c.used? && "✓ used") || ""}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </td>
+            </tr>
+          </tbody>
+          <tbody :if={@rows == []}>
+            <tr>
+              <td colspan="15" class="p-4 text-center opacity-60">
                 No deliveries — the month may not be materialised yet (run a warehouse refresh),
                 or the filter matched nothing.
               </td>
