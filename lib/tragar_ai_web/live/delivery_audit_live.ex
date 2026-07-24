@@ -108,6 +108,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
       waybill_date: r.waybill_date,
       customer: r.account_name,
       supplier: r.contractor_reference,
+      wb_service: Map.get(res, :wb_service),
       sell: r.sell,
       buy: r.buy,
       expected: r.expected,
@@ -154,6 +155,13 @@ defmodule TragarAiWeb.DeliveryAuditLive do
   defp money(nil), do: "—"
   defp money(%Decimal{} = d), do: money(Decimal.to_float(d))
   defp money(n) when is_number(n), do: "R" <> :erlang.float_to_binary(n * 1.0, decimals: 2)
+
+  defp numfmt(n) when is_number(n), do: :erlang.float_to_binary(n * 1.0, decimals: 1)
+  defp numfmt(_), do: "—"
+
+  # Increment term: R<amount> per <unit> of weight; "flat" when there's no per-unit step.
+  defp fmt_incr(_amount, unit) when unit in [0, 0.0], do: "flat"
+  defp fmt_incr(amount, unit), do: money(amount) <> " / " <> numfmt(unit)
 
   defp res(res, key), do: blank(Map.get(res, key))
   defp blank(v) when v in [nil, ""], do: "—"
@@ -237,6 +245,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <th>Customer</th>
               <th class="text-right">Sell</th>
               <th>Supplier</th>
+              <th>Service</th>
               <th>Delivery town</th>
               <th>Postcode</th>
               <th>Sell area (from→to)</th>
@@ -256,6 +265,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <td class="max-w-40 truncate" title={r.customer}>{blank(r.customer)}</td>
               <td class="text-right">{money(r.sell)}</td>
               <td class="font-mono">{blank(r.supplier)}</td>
+              <td class="font-mono">{blank(r.wb_service)}</td>
               <td>{res(r.res, :consignee_suburb)}</td>
               <td>{res(r.res, :consignee_postcode)}</td>
               <td class="font-mono opacity-70">{blank(r.sell_from_area)}→{blank(r.sell_to_area)}</td>
@@ -279,7 +289,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
               <td class="font-mono opacity-70">{res(r.res, :entity_rate_obj)}</td>
             </tr>
             <tr :if={MapSet.member?(@expanded, r.waybill_obj)}>
-              <td colspan="15" class="bg-base-200 p-2">
+              <td colspan="16" class="bg-base-200 p-2">
                 <div class="mb-1 text-xs font-semibold">
                   {r.rate_count} rate(s) found on the delivery area for {r.waybill_number} — the
                   highlighted row is the one the calc used.
@@ -287,26 +297,36 @@ defmodule TragarAiWeb.DeliveryAuditLive do
                 <table class="table table-xs w-auto">
                   <thead>
                     <tr>
+                      <th>Used</th>
                       <th>Rate obj</th>
+                      <th>Service</th>
+                      <th>Rate type</th>
                       <th>From area</th>
                       <th>To area</th>
-                      <th class="text-right">Base</th>
-                      <th>Effective</th>
                       <th>Product</th>
                       <th>Mirror</th>
-                      <th>Used</th>
+                      <th>Effective</th>
+                      <th>Cease</th>
+                      <th>Weight band</th>
+                      <th class="text-right">Base</th>
+                      <th class="text-right">Increment</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr :for={c <- r.candidates} class={[c.used? && "bg-success/20 font-semibold"]}>
+                      <td>{(c.used? && "✓ used") || ""}</td>
                       <td class="font-mono">{c.entity_rate_obj}</td>
+                      <td class="font-mono">{blank(c.service)}</td>
+                      <td class="font-mono">{blank(c.rate_type)}</td>
                       <td class="font-mono">{c.from_rate_area_obj}</td>
                       <td class="font-mono">{c.to_rate_area_obj}</td>
-                      <td class="text-right">{money(c.base)}</td>
-                      <td>{blank(c.effective)}</td>
                       <td>{if num_str(c.product) == 0, do: "generic", else: c.product}</td>
                       <td>{if num_str(c.bidirectional) == 0, do: "—", else: "mirror"}</td>
-                      <td>{(c.used? && "✓ used") || ""}</td>
+                      <td>{blank(c.effective)}</td>
+                      <td>{blank(c.cease)}</td>
+                      <td>{numfmt(c.from_unit)}–{numfmt(c.to_unit)}</td>
+                      <td class="text-right">{money(c.base)}</td>
+                      <td class="text-right">{fmt_incr(c.increment_amount, c.increment_unit)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -315,7 +335,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
           </tbody>
           <tbody :if={@rows == []}>
             <tr>
-              <td colspan="15" class="p-4 text-center opacity-60">
+              <td colspan="16" class="p-4 text-center opacity-60">
                 No deliveries — the month may not be materialised yet (run a warehouse refresh),
                 or the filter matched nothing.
               </td>
