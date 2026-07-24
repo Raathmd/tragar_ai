@@ -225,6 +225,8 @@ defmodule TragarAi.Insight.RateEngine do
                 entity_rate_obj: c["entity_rate_obj"],
                 service: c["rate_service"],
                 rate_type: c["rate_type_obj"],
+                calc_rule: c["rate_calculation_rule"],
+                consignment_type: c["consignment_type_obj"],
                 from_rate_area_obj: c["from_rate_area_obj"],
                 to_rate_area_obj: c["to_rate_area_obj"],
                 product: c["account_product_obj"],
@@ -236,6 +238,10 @@ defmodule TragarAi.Insight.RateEngine do
                 base: num(c["base_amount"]),
                 increment_amount: num(c["increment_amount"]),
                 increment_unit: num(c["increment_unit"]),
+                discount_amount: num(c["default_discount_amount"]),
+                discount_percent: num(c["default_discount_percent"]),
+                min_discount_amount: num(c["minimum_discount_amount"]),
+                min_discount_percent: num(c["minimum_discount_percent"]),
                 used?: c["entity_rate_obj"] == row["entity_rate_obj"]
               }
             end)
@@ -525,6 +531,8 @@ defmodule TragarAi.Insight.RateEngine do
     ra.rate_area_code AS delivery_rate_area, w.chargable_units, er.entity_rate_obj, \
     er.bidirectional_entity_rate_obj, er.effective_date, er.cease_date, \
     cst.effective_date AS map_effective_date, er.account_product_obj, er.rate_type_obj, \
+    er.rate_calculation_rule, er.consignment_type_obj, er.default_discount_amount, \
+    er.default_discount_percent, er.minimum_discount_amount, er.minimum_discount_percent, \
     wsvc.service_type_code AS wb_service, rsvc.service_type_code AS rate_service, \
     er.from_rate_area_obj, er.to_rate_area_obj, rt.from_unit, rt.to_unit, rt.base_amount, \
     rt.increment_amount, rt.increment_unit, fc.charge_percent AS fuel_percent, \

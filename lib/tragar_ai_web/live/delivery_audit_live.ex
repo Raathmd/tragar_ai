@@ -163,6 +163,10 @@ defmodule TragarAiWeb.DeliveryAuditLive do
   defp fmt_incr(_amount, unit) when unit in [0, 0.0], do: "flat"
   defp fmt_incr(amount, unit), do: money(amount) <> " / " <> numfmt(unit)
 
+  # Default discount: amount and/or percent; "—" when neither is set.
+  defp fmt_disc(amount, percent) when amount in [0, 0.0] and percent in [0, 0.0], do: "—"
+  defp fmt_disc(amount, percent), do: money(amount) <> " / " <> numfmt(percent) <> "%"
+
   defp res(res, key), do: blank(Map.get(res, key))
   defp blank(v) when v in [nil, ""], do: "—"
   defp blank(v), do: v
@@ -301,15 +305,18 @@ defmodule TragarAiWeb.DeliveryAuditLive do
                       <th>Rate obj</th>
                       <th>Service</th>
                       <th>Rate type</th>
+                      <th>Calc rule</th>
                       <th>From area</th>
                       <th>To area</th>
                       <th>Product</th>
+                      <th>Consgmt</th>
                       <th>Mirror</th>
                       <th>Effective</th>
                       <th>Cease</th>
                       <th>Weight band</th>
                       <th class="text-right">Base</th>
                       <th class="text-right">Increment</th>
+                      <th class="text-right">Discount</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -318,15 +325,18 @@ defmodule TragarAiWeb.DeliveryAuditLive do
                       <td class="font-mono">{c.entity_rate_obj}</td>
                       <td class="font-mono">{blank(c.service)}</td>
                       <td class="font-mono">{blank(c.rate_type)}</td>
+                      <td class="font-mono">{blank(c.calc_rule)}</td>
                       <td class="font-mono">{c.from_rate_area_obj}</td>
                       <td class="font-mono">{c.to_rate_area_obj}</td>
                       <td>{if num_str(c.product) == 0, do: "generic", else: c.product}</td>
+                      <td class="font-mono">{blank(c.consignment_type)}</td>
                       <td>{if num_str(c.bidirectional) == 0, do: "—", else: "mirror"}</td>
                       <td>{blank(c.effective)}</td>
                       <td>{blank(c.cease)}</td>
                       <td>{numfmt(c.from_unit)}–{numfmt(c.to_unit)}</td>
                       <td class="text-right">{money(c.base)}</td>
                       <td class="text-right">{fmt_incr(c.increment_amount, c.increment_unit)}</td>
+                      <td class="text-right">{fmt_disc(c.discount_amount, c.discount_percent)}</td>
                     </tr>
                   </tbody>
                 </table>
