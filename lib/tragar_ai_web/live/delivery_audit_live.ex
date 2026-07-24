@@ -376,8 +376,8 @@ defmodule TragarAiWeb.DeliveryAuditLive do
                       <td class="font-mono">{blank(c.service)}</td>
                       <td class="font-mono">{blank(c.rate_type)}</td>
                       <td class="font-mono">{blank(c.calc_rule)}</td>
-                      <td class="font-mono">{c.from_rate_area_obj}</td>
-                      <td class="font-mono">{c.to_rate_area_obj}</td>
+                      <td class="font-mono">{blank(c.from_area_code)}</td>
+                      <td class="font-mono">{blank(c.to_area_code)}</td>
                       <td>{if num_str(c.product) == 0, do: "generic", else: c.product}</td>
                       <td class="font-mono">{blank(c.consignment_type)}</td>
                       <td>{if num_str(c.bidirectional) == 0, do: "—", else: "mirror"}</td>
