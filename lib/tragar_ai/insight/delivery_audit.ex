@@ -29,7 +29,8 @@ defmodule TragarAi.Insight.DeliveryAudit do
   def per_page, do: @per_page
 
   @typedoc "all | {:supplier, ref} | {:customer, name} | {:manifest, [obj]}"
-  @type filter :: :all | {:supplier, String.t()} | {:customer, String.t()} | {:manifest, [String.t()]}
+  @type filter ::
+          :all | {:supplier, String.t()} | {:customer, String.t()} | {:manifest, [String.t()]}
 
   @doc """
   A page of 3rd-party (non-own-fleet) deliveries from the warehouse for the month,
@@ -107,8 +108,11 @@ defmodule TragarAi.Insight.DeliveryAudit do
         "WHERE " <> pred
 
     case Db.query_rows(sql) do
-      {:ok, rows} -> {:ok, rows |> Enum.map(& &1["waybill_obj"]) |> Enum.reject(&(&1 in [nil, ""]))}
-      {:error, _} = err -> err
+      {:ok, rows} ->
+        {:ok, rows |> Enum.map(& &1["waybill_obj"]) |> Enum.reject(&(&1 in [nil, ""]))}
+
+      {:error, _} = err ->
+        err
     end
   end
 
