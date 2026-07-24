@@ -27,17 +27,20 @@ defmodule TragarAi.Insight.RateEngine do
 
   ORIGIN (resolved 2026-07-23): the buy-rate's `from` area is the SAME as its `to` — the
   supplier's rate area for the waybill's own DELIVERY location. A 3rd-party last-mile
-  supplier rates a LOCAL lane (from = to = the region it delivers in), so the origin is
-  taken off the waybill's delivery postcode + town, looked up against the SUPPLIER's rate
-  areas (fwc_rate_area_postcode, owning_obj = supplier) — which is exactly `pc.rate_area_obj`,
-  already resolved for the destination. So `er.from_rate_area_obj = er.to_rate_area_obj =
-  pc.rate_area_obj`. This REPLACES the earlier at-station origin (w.at_station_obj → depot
-  postcode → area): the scanning branch is often a different region than the delivery (e.g.
-  scanned at the JHB hub, delivered in Cape Town), so a CPT supplier with only CPT→CPT local
-  rates never matched, leaving >42% of waybills uncosted. Keying the origin off the delivery
-  region matches the supplier's actual local card. (The supplier RANKING, rows_sql, is a
-  different question — "who'd be cheapest FROM the current branch" — and keeps its
-  branch-origin lane.)
+  the waybill IS the source of both ends of the lane. The `from` area is the supplier's
+  rate area for the waybill's CONSIGNOR (origin) postcode, and the `to` area is the
+  supplier's rate area for the CONSIGNEE (delivery) postcode — both via fwc_rate_area_postcode
+  (owning_obj = supplier), the same lookup on each end. So `er.from_rate_area_obj =
+  opc.rate_area_obj` (consignor) and `er.to_rate_area_obj = pc.rate_area_obj` (consignee),
+  pricing the waybill's real consignor→consignee lane against the subcontractor's card.
+  This REPLACES two earlier wrong origins: (1) the at-station origin (w.at_station_obj → depot
+  postcode → area), which used the SCANNING branch — often a different region than the lane,
+  leaving >42% uncosted; and (2) a `from = to = delivery area` collapse, which only matched
+  same-region local rates and sent the "No rate" count through the roof. (The supplier
+  RANKING, rows_sql, is a different question — "who'd be cheapest FROM the current branch" —
+  and keeps its branch-origin lane.) NOTE: buy cost is replica-only; the live quick-quote API
+  is a customer/sell tool and cannot price a subcontractor, so expected buy stays a rate-card
+  calc here.
 
   SERVICE MAPPING (resolved 2026-07-22): the buy-rate's service_type_obj is deliberately
   DIFFERENT from the waybill's — a booked sell service maps to the supplier's own buy
@@ -370,17 +373,18 @@ defmodule TragarAi.Insight.RateEngine do
   # charge-join fan-out (a waybill can carry several charge lines for the same
   # supplier); the Elixir side then dedups by waybill (latest effective) and prices.
   #
-  # ORIGIN (buy-side): the rate lane's `from` is the SAME area as its `to` — the
-  # supplier's rate area for the waybill's own DELIVERY postcode (er.from_rate_area_obj
-  # = er.to_rate_area_obj = pc.rate_area_obj). A last-mile supplier rates a LOCAL lane
-  # (from = to = the region it delivers in), so the origin comes off the delivery, not a
-  # separate depot. This REPLACED the old at_station origin (w.at_station_obj → depot
-  # postcode → area), which used the SCANNING branch: often a different region than the
-  # delivery (scanned at JHB, delivered in CPT), so a CPT supplier's CPT→CPT local card
-  # never matched and >42% of waybills went uncosted. A waybill with no local rate simply
-  # isn't in the result; it is NOT dropped from the margin report — the drill lists every
-  # waybill from its own sell/buy query and treats the absence here as "uncosted" (counted
-  # + colored — see Drill), so never-drop holds. (Same bidirectional caveat.)
+  # ORIGIN (buy-side): the waybill is the source of BOTH ends of the lane. `from` = the
+  # supplier's rate area for the waybill's CONSIGNOR postcode (opc), `to` = the supplier's
+  # rate area for the CONSIGNEE postcode (pc) — same fwc_rate_area_postcode lookup on each
+  # end (owning_obj = supplier). So er.from_rate_area_obj = opc.rate_area_obj and
+  # er.to_rate_area_obj = pc.rate_area_obj, pricing the real consignor→consignee lane against
+  # the subcontractor's card. Supersedes two wrong origins: (1) the at_station SCANNING branch
+  # (often a different region → >42% uncosted); (2) a from = to = delivery-area collapse (only
+  # matched same-region local rates → "No rate" count exploded). A waybill whose consignor/
+  # consignee postcode has no supplier rate area, or no rate on the lane, simply isn't in the
+  # result; it is NOT dropped from the margin report — the drill lists every waybill from its
+  # own sell/buy query and treats the absence here as "uncosted" (counted + colored — see
+  # Drill), so never-drop holds. (Same bidirectional caveat.)
   defp assigned_rows_sql(where_sql) do
     """
     SELECT DISTINCT w.waybill_obj, w.waybill_date, w.account_name, w.rate_area_to_code, \
@@ -397,9 +401,11 @@ defmodule TragarAi.Insight.RateEngine do
     AND cst.effective_date <= w.waybill_date \
     JOIN PUB.fwc_rate_area_postcode pc ON pc.postcode_obj = w.consignee_postcode_obj \
     AND pc.owning_entity_mnemonic = 'FWMSC' AND pc.owning_obj = sc.station_contractor_obj \
+    JOIN PUB.fwc_rate_area_postcode opc ON opc.postcode_obj = w.consignor_postcode_obj \
+    AND opc.owning_entity_mnemonic = 'FWMSC' AND opc.owning_obj = sc.station_contractor_obj \
     JOIN PUB.fwm_entity_rate er ON er.owning_entity_mnemonic = 'FWMSC' \
     AND er.owning_obj = pc.owning_obj AND er.to_rate_area_obj = pc.rate_area_obj \
-    AND er.from_rate_area_obj = pc.rate_area_obj \
+    AND er.from_rate_area_obj = opc.rate_area_obj \
     AND er.service_type_obj = cst.service_type_obj \
     AND er.rate_type_obj = cst.rate_type_obj \
     AND er.effective_date <= w.waybill_date \
