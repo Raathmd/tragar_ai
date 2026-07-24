@@ -212,6 +212,28 @@ defmodule TragarAi.Insight.RateEngine do
               do: Float.round(waybill_cost(row) * fuel_multiplier(wb_rows), 2),
               else: nil
 
+          # Every DISTINCT candidate rate the delivery-area match surfaced for this
+          # waybill (the rate-band/fuel fan-out collapses to one row per
+          # entity_rate_obj), flagged with which one the calc actually USED — so the
+          # audit view can list them and show the pick.
+          candidates =
+            wb_rows
+            |> Enum.reject(&(&1["entity_rate_obj"] in [nil, ""]))
+            |> Enum.uniq_by(& &1["entity_rate_obj"])
+            |> Enum.map(fn c ->
+              %{
+                entity_rate_obj: c["entity_rate_obj"],
+                from_rate_area_obj: c["from_rate_area_obj"],
+                to_rate_area_obj: c["to_rate_area_obj"],
+                base: num(c["base_amount"]),
+                effective: c["effective_date"],
+                product: c["account_product_obj"],
+                bidirectional: c["bidirectional_entity_rate_obj"],
+                used?: c["entity_rate_obj"] == row["entity_rate_obj"]
+              }
+            end)
+            |> Enum.sort_by(&(!&1.used?))
+
           %{
             waybill_obj: wb,
             waybill_number: row["waybill_number"],
@@ -230,7 +252,9 @@ defmodule TragarAi.Insight.RateEngine do
             rate_effective: row["effective_date"],
             entity_rate_obj: row["entity_rate_obj"],
             from_rate_area_obj: row["from_rate_area_obj"],
-            to_rate_area_obj: row["to_rate_area_obj"]
+            to_rate_area_obj: row["to_rate_area_obj"],
+            rate_count: length(candidates),
+            candidates: candidates
           }
         end)
 
