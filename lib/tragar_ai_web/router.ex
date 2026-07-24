@@ -77,6 +77,13 @@ defmodule TragarAiWeb.Router do
       live "/margin", MarginLive
     end
 
+    # Per-delivery audit of the expected-cost calc: sell/buy/expected side by side
+    # with the town → rate-area → rate resolution, so the calc is visually verifiable.
+    live_session :page_delivery_audit,
+      on_mount: [{TragarAiWeb.UserAuth, {:require_page, :delivery_audit}}] do
+      live "/delivery-audit", DeliveryAuditLive
+    end
+
     live_session :page_margin_users,
       on_mount: [{TragarAiWeb.UserAuth, {:require_page, :margin_users}}] do
       live "/margin/users", MarginUsersLive
