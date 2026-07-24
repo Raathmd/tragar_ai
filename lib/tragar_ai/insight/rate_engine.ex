@@ -206,11 +206,32 @@ defmodule TragarAi.Insight.RateEngine do
           # uncosted waybill has null rate columns → base_amount absent → costed? false.
           row = Enum.max_by(wb_rows, &rate_sort_key/1)
           costed? = row["base_amount"] not in [nil, ""]
+          mult = fuel_multiplier(wb_rows)
+          base_subtotal = if costed?, do: Float.round(waybill_cost(row), 2), else: 0.0
+          fuel_amount = Float.round(base_subtotal * (mult - 1.0), 2)
 
           expected =
             if costed?,
-              do: Float.round(waybill_cost(row) * fuel_multiplier(wb_rows), 2),
+              do: Float.round(base_subtotal * mult, 2),
               else: nil
+
+          # Term-by-term build-up of expected, for the audit's cost-breakdown expand:
+          # rate-card band base + weight increment = subtotal, then the fuel surcharge.
+          # Destination sundries (township / remote / area) are not yet folded in
+          # (still 0) — surfaced explicitly so the gap is visible, not hidden.
+          components = %{
+            chargable_units: num(row["chargable_units"]),
+            from_unit: num(row["from_unit"]),
+            band_base: num(row["base_amount"]),
+            increment_amount: num(row["increment_amount"]),
+            increment_unit: num(row["increment_unit"]),
+            increment_charged: Float.round(base_subtotal - num(row["base_amount"]), 2),
+            base_subtotal: base_subtotal,
+            fuel_percent: Float.round((mult - 1.0) * 100, 2),
+            fuel_amount: fuel_amount,
+            sundry: 0.0,
+            total: expected || 0.0
+          }
 
           # Every DISTINCT candidate rate the delivery-area match surfaced for this
           # waybill (the rate-band/fuel fan-out collapses to one row per
@@ -254,6 +275,8 @@ defmodule TragarAi.Insight.RateEngine do
             account_name: row["account_name"],
             supplier: row["contractor_reference"],
             wb_service: row["wb_service"],
+            fuel_percent: Float.round((mult - 1.0) * 100, 2),
+            components: components,
             chargable_units: num(row["chargable_units"]),
             consignee_suburb: row["consignee_suburb"],
             consignee_postcode: row["consignee_postcode"],

@@ -117,6 +117,8 @@ defmodule TragarAiWeb.DeliveryAuditLive do
       sell_to_area: r.rate_area_to_code,
       rate_count: Map.get(res, :rate_count, 0),
       candidates: Map.get(res, :candidates, []),
+      costed: Map.get(res, :costed?, false),
+      components: Map.get(res, :components, %{}),
       res: res
     }
   end
@@ -166,6 +168,8 @@ defmodule TragarAiWeb.DeliveryAuditLive do
   # Default discount: amount and/or percent; "—" when neither is set.
   defp fmt_disc(amount, percent) when amount in [0, 0.0] and percent in [0, 0.0], do: "—"
   defp fmt_disc(amount, percent), do: money(amount) <> " / " <> numfmt(percent) <> "%"
+
+  defp comp(row, key), do: Map.get(row.components, key, 0.0)
 
   defp res(res, key), do: blank(Map.get(res, key))
   defp blank(v) when v in [nil, ""], do: "—"
@@ -286,7 +290,18 @@ defmodule TragarAiWeb.DeliveryAuditLive do
                 </button>
                 <span :if={r.rate_count == 0} class="opacity-50">0</span>
               </td>
-              <td class={["text-right", r.priced && "text-success"]}>{money(r.expected)}</td>
+              <td class={["text-right", r.priced && "text-success"]}>
+                <button
+                  :if={r.priced}
+                  type="button"
+                  phx-click="toggle"
+                  phx-value-wb={r.waybill_obj}
+                  class="link"
+                >
+                  {money(r.expected)}
+                </button>
+                <span :if={!r.priced}>{money(r.expected)}</span>
+              </td>
               <td class="text-right">{money(r.buy)}</td>
               <td class="text-right">{(r.priced && money(Map.get(r.res, :rate_base))) || "—"}</td>
               <td>{res(r.res, :rate_effective)}</td>
@@ -294,6 +309,39 @@ defmodule TragarAiWeb.DeliveryAuditLive do
             </tr>
             <tr :if={MapSet.member?(@expanded, r.waybill_obj)}>
               <td colspan="16" class="bg-base-200 p-2">
+                <div :if={r.costed} class="mb-3">
+                  <div class="mb-1 text-xs font-semibold">
+                    Expected-cost build-up for {r.waybill_number} ({numfmt(comp(r, :chargable_units))} units)
+                  </div>
+                  <table class="table table-xs w-auto">
+                    <tbody>
+                      <tr>
+                        <td>Rate-card base (band {numfmt(comp(r, :from_unit))}+)</td>
+                        <td class="text-right">{money(comp(r, :band_base))}</td>
+                      </tr>
+                      <tr>
+                        <td>Weight increment ({money(comp(r, :increment_amount))} / {numfmt(comp(r, :increment_unit))})</td>
+                        <td class="text-right">{money(comp(r, :increment_charged))}</td>
+                      </tr>
+                      <tr class="font-semibold">
+                        <td>Rate-card subtotal</td>
+                        <td class="text-right">{money(comp(r, :base_subtotal))}</td>
+                      </tr>
+                      <tr>
+                        <td>Fuel surcharge ({numfmt(comp(r, :fuel_percent))}%)</td>
+                        <td class="text-right">{money(comp(r, :fuel_amount))}</td>
+                      </tr>
+                      <tr>
+                        <td class="opacity-60">Destination sundries (township / remote / area)</td>
+                        <td class="text-right opacity-60">not yet computed</td>
+                      </tr>
+                      <tr class="font-semibold text-success">
+                        <td>Expected total</td>
+                        <td class="text-right">{money(comp(r, :total))}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
                 <div class="mb-1 text-xs font-semibold">
                   {r.rate_count} rate(s) found on the delivery area for {r.waybill_number} — the
                   highlighted row is the one the calc used.
