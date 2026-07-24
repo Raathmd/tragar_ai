@@ -171,6 +171,8 @@ defmodule TragarAiWeb.DeliveryAuditLive do
 
   defp comp(row, key), do: Map.get(row.components, key, 0.0)
 
+  defp incr_of(row), do: fmt_incr(comp(row, :increment_amount), comp(row, :increment_unit))
+
   defp res(res, key), do: blank(Map.get(res, key))
   defp blank(v) when v in [nil, ""], do: "—"
   defp blank(v), do: v
@@ -320,7 +322,7 @@ defmodule TragarAiWeb.DeliveryAuditLive do
                         <td class="text-right">{money(comp(r, :band_base))}</td>
                       </tr>
                       <tr>
-                        <td>Weight increment ({money(comp(r, :increment_amount))} / {numfmt(comp(r, :increment_unit))})</td>
+                        <td>Weight increment ({incr_of(r)})</td>
                         <td class="text-right">{money(comp(r, :increment_charged))}</td>
                       </tr>
                       <tr class="font-semibold">
