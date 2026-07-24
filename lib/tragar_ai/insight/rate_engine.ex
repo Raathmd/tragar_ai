@@ -250,6 +250,8 @@ defmodule TragarAi.Insight.RateEngine do
                 consignment_type: c["consignment_type_obj"],
                 from_rate_area_obj: c["from_rate_area_obj"],
                 to_rate_area_obj: c["to_rate_area_obj"],
+                from_area_code: c["from_area_code"],
+                to_area_code: c["to_area_code"],
                 product: c["account_product_obj"],
                 bidirectional: c["bidirectional_entity_rate_obj"],
                 effective: c["effective_date"],
@@ -557,7 +559,9 @@ defmodule TragarAi.Insight.RateEngine do
     er.rate_calculation_rule, er.consignment_type_obj, er.default_discount_amount, \
     er.default_discount_percent, er.minimum_discount_amount, er.minimum_discount_percent, \
     wsvc.service_type_code AS wb_service, rsvc.service_type_code AS rate_service, \
-    er.from_rate_area_obj, er.to_rate_area_obj, rt.from_unit, rt.to_unit, rt.base_amount, \
+    er.from_rate_area_obj, er.to_rate_area_obj, \
+    rafrom.rate_area_code AS from_area_code, rato.rate_area_code AS to_area_code, \
+    rt.from_unit, rt.to_unit, rt.base_amount, \
     rt.increment_amount, rt.increment_unit, fc.charge_percent AS fuel_percent, \
     fc.effective_date AS fuel_effective \
     FROM PUB.fwt_waybill w \
@@ -576,6 +580,8 @@ defmodule TragarAi.Insight.RateEngine do
     AND er.effective_date <= w.waybill_date \
     AND (er.cease_date IS NULL OR er.cease_date >= w.waybill_date) \
     LEFT JOIN PUB.fwc_service_type rsvc ON rsvc.service_type_obj = er.service_type_obj \
+    LEFT JOIN PUB.fwm_rate_area rafrom ON rafrom.rate_area_obj = er.from_rate_area_obj \
+    LEFT JOIN PUB.fwm_rate_area rato ON rato.rate_area_obj = er.to_rate_area_obj \
     LEFT JOIN PUB.fwm_rate_table rt ON rt.entity_rate_obj = er.entity_rate_obj \
     AND w.chargable_units >= rt.from_unit AND w.chargable_units < rt.to_unit \
     LEFT JOIN PUB.fwm_charge fc ON fc.owning_entity_mnemonic = 'FWMSC' \
