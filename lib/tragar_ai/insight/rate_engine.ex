@@ -208,7 +208,9 @@ defmodule TragarAi.Insight.RateEngine do
           costed? = row["base_amount"] not in [nil, ""]
 
           expected =
-            if costed?, do: Float.round(waybill_cost(row) * fuel_multiplier(wb_rows), 2), else: nil
+            if costed?,
+              do: Float.round(waybill_cost(row) * fuel_multiplier(wb_rows), 2),
+              else: nil
 
           %{
             waybill_obj: wb,
